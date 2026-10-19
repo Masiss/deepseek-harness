@@ -1,27 +1,40 @@
 //! Tauri shell for the DeepSeek Harness desktop application.
 //!
 //! The shell supervises the Desktop Host as a sidecar and hands its
-//! authenticated Web URL to a system WebView. Closing the window hides it: the
-//! page and the Host keep running, and the next show resumes the same document.
-//! Quitting asks the Host whether work is still running.
+//! authenticated Web URL to a system WebView.
+//!
+//! Closing the window never ends the process: the page and the Host keep
+//! running so the next show resumes the same document. Something must stay
+//! visible to say the application is still running, so the shell prefers the
+//! tray and, where no StatusNotifier host can show it, explains the background
+//! state once before hiding. Relaunching always surfaces the running window.
 
 mod host;
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde_json::Value;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{
-    AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent,
-};
+use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use host::HostClient;
 
+/// Product name used by shell-owned copy: window title, tray tooltip, dialogs.
+const PRODUCT: &str = "DeepSeek Harness";
+
+/// Interface name of the StatusNotifier watcher a tray icon registers with.
+#[cfg(target_os = "linux")]
+const STATUS_NOTIFIER_WATCHER: &str = "org.kde.StatusNotifierWatcher";
+
 /// Set once a quit has been approved, so close requests stop hiding the window.
 static QUITTING: AtomicBool = AtomicBool::new(false);
+
+/// Whether a tray icon is registered and visible for this session.
+static TRAY_VISIBLE: AtomicBool = AtomicBool::new(false);
 
 /// Application state shared by window, tray, and exit handlers.
 struct AppState {
@@ -53,6 +66,146 @@ fn show_main(app: &AppHandle) {
         let _ = window.show();
         let _ = window.set_focus();
     }
+}
+
+/// Hide the main window, leaving the process and the Host running.
+///
+/// @param app - handle that owns the window.
+fn hide_main(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+}
+
+/// Whether a StatusNotifier host can actually display a tray icon.
+///
+/// Tauri's tray builder succeeds even where nothing will render it, so the
+/// shell asks the session bus instead of trusting the build result.
+#[cfg(target_os = "linux")]
+fn status_notifier_host_present() -> bool {
+    use zbus::blocking::Connection;
+    let Ok(connection) = Connection::session() else { return false };
+    let reply = connection.call_method(
+        Some("org.freedesktop.DBus"),
+        "/org/freedesktop/DBus",
+        Some("org.freedesktop.DBus"),
+        "NameHasOwner",
+        &(STATUS_NOTIFIER_WATCHER,),
+    );
+    match reply {
+        Ok(message) => message.body().deserialize::<bool>().unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
+/// Non-Linux desktops render the tray through their own shell notification area.
+#[cfg(not(target_os = "linux"))]
+fn status_notifier_host_present() -> bool {
+    true
+}
+
+/// Create the tray icon and report whether it is a usable way back.
+///
+/// @param app - handle that owns the menu and tray lifetime.
+/// @returns `true` when the icon is expected to be visible.
+fn build_tray(app: &AppHandle) -> bool {
+    if std::env::var("DSH_DESKTOP_TRAY").is_ok_and(|value| value == "0") {
+        return false;
+    }
+    if !status_notifier_host_present() {
+        eprintln!("desktop tray: no StatusNotifier host on this session");
+        return false;
+    }
+
+    let built = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let open = MenuItem::with_id(app, "open", "Open DeepSeek Harness", true, None::<&str>)?;
+        let quit = MenuItem::with_id(app, "quit", format!("Quit {PRODUCT}"), true, None::<&str>)?;
+        let separator = PredefinedMenuItem::separator(app)?;
+        let menu = Menu::with_items(app, &[&open, &separator, &quit])?;
+
+        let mut builder = TrayIconBuilder::with_id("main")
+            .menu(&menu)
+            .tooltip(PRODUCT)
+            .on_menu_event(|app, event| match event.id().as_ref() {
+                "open" => show_main(app),
+                "quit" => request_quit(app),
+                _ => {}
+            })
+            .on_tray_icon_event(|tray, event| {
+                if let TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } = event
+                {
+                    show_main(tray.app_handle());
+                }
+            });
+        if let Some(icon) = app.default_window_icon().cloned() {
+            builder = builder.icon(icon);
+        }
+        builder.build(app)?;
+        Ok(())
+    })();
+    match built {
+        Ok(()) => true,
+        Err(error) => {
+            // A desktop without an appindicator host still runs; only the tray is missing.
+            eprintln!("desktop tray unavailable: {error}");
+            false
+        }
+    }
+}
+
+/// Acknowledgement marker for the background-close explanation.
+///
+/// @param app - handle that owns the per-user configuration directory.
+/// @returns the marker path, or `None` when no writable directory is known.
+fn background_marker(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|directory| directory.join("background-close-confirmed"))
+}
+
+/// Hide the window, explaining the background state first when no tray is visible.
+///
+/// A tray is the standing reminder that the application is still running. Without
+/// one, the first close explains where the window went and how to get it back;
+/// cancelling keeps the window open rather than hiding it unexplained.
+///
+/// @param app - handle that owns the dialog and the window.
+fn close_to_background(app: &AppHandle) {
+    if TRAY_VISIBLE.load(Ordering::SeqCst) {
+        hide_main(app);
+        return;
+    }
+    let marker = background_marker(app);
+    if marker.as_ref().is_some_and(|path| path.exists()) {
+        hide_main(app);
+        return;
+    }
+
+    let handle = app.clone();
+    app.dialog()
+        .message(format!(
+            "{PRODUCT} keeps running in the background so your session stays open. Launch it again to bring the window back."
+        ))
+        .title(PRODUCT)
+        .kind(MessageDialogKind::Info)
+        .buttons(MessageDialogButtons::OkCancelCustom("Continue".to_owned(), "Cancel".to_owned()))
+        .show(move |confirmed| {
+            if !confirmed {
+                return;
+            }
+            if let Some(path) = marker {
+                if let Some(directory) = path.parent() {
+                    let _ = std::fs::create_dir_all(directory);
+                }
+                let _ = std::fs::write(&path, []);
+            }
+            hide_main(&handle);
+        });
 }
 
 /// Whether the Host reports interruptible work.
@@ -91,7 +244,7 @@ fn request_quit(app: &AppHandle) {
     let handle = app.clone();
     app.dialog()
         .message("Tasks are still running. Quit DeepSeek Harness anyway?")
-        .title("Quit DeepSeek Harness")
+        .title(format!("Quit {PRODUCT}"))
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom(
             "Quit".to_owned(),
@@ -107,50 +260,106 @@ fn request_quit(app: &AppHandle) {
         });
 }
 
-/// Create the tray icon, degrading to no tray when the platform rejects it.
+/// Show the About dialog.
 ///
-/// @param app - handle that owns the menu and tray lifetime.
-fn build_tray(app: &AppHandle) {
-    let build = || -> Result<(), Box<dyn std::error::Error>> {
-        let show = MenuItem::with_id(app, "show", "Show DeepSeek Harness", true, None::<&str>)?;
-        let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-        let separator = PredefinedMenuItem::separator(app)?;
-        let menu = Menu::with_items(app, &[&show, &separator, &quit])?;
+/// @param app - handle that owns the dialog and the package metadata.
+fn show_about(app: &AppHandle) {
+    let version = std::env::var("DSH_CLIENT_VERSION")
+        .unwrap_or_else(|_| app.package_info().version.to_string());
+    app.dialog()
+        .message(format!("Version {version}"))
+        .title(PRODUCT)
+        .kind(MessageDialogKind::Info)
+        .show(|_| {});
+}
 
-        let mut builder = TrayIconBuilder::with_id("main")
-            .menu(&menu)
-            .tooltip("DeepSeek Harness")
-            .on_menu_event(|app, event| match event.id().as_ref() {
-                "show" => show_main(app),
-                "quit" => request_quit(app),
-                _ => {}
-            })
-            .on_tray_icon_event(|tray, event| {
-                if let TrayIconEvent::Click {
-                    button: MouseButton::Left,
-                    button_state: MouseButtonState::Up,
-                    ..
-                } = event
-                {
-                    show_main(tray.app_handle());
-                }
-            });
-        if let Some(icon) = app.default_window_icon().cloned() {
-            builder = builder.icon(icon);
-        }
-        builder.build(app)?;
-        Ok(())
+/// Whether this build exposes the development entries (reload, developer tools).
+fn development() -> bool {
+    cfg!(debug_assertions) || std::env::var("DSH_DESKTOP_DEVELOPMENT").is_ok_and(|value| value == "1")
+}
+
+/// Build the window menu bar: the application menu and the edit roles.
+///
+/// @param app - handle the menu belongs to.
+/// @returns the menu, or an error when a predefined item cannot be created.
+fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
+    let about = MenuItem::with_id(app, "about", format!("About {PRODUCT}"), true, None::<&str>)?;
+    let quit = MenuItem::with_id(
+        app,
+        "quit-application",
+        format!("Quit {PRODUCT}"),
+        true,
+        Some("CmdOrCtrl+Q"),
+    )?;
+    let first_break = PredefinedMenuItem::separator(app)?;
+    let application = if development() {
+        let reload = MenuItem::with_id(app, "reload-page", "Reload Page", true, None::<&str>)?;
+        let devtools = MenuItem::with_id(
+            app,
+            "toggle-devtools",
+            "Toggle Developer Tools",
+            true,
+            Some("F12"),
+        )?;
+        let second_break = PredefinedMenuItem::separator(app)?;
+        Submenu::with_items(
+            app,
+            "Application",
+            true,
+            &[&about, &first_break, &reload, &devtools, &second_break, &quit],
+        )?
+    } else {
+        Submenu::with_items(app, "Application", true, &[&about, &first_break, &quit])?
     };
-    if let Err(error) = build() {
-        // A desktop without an appindicator host still runs; only the tray is missing.
-        eprintln!("desktop tray unavailable: {error}");
+
+    let edit = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+
+    Menu::with_items(app, &[&application, &edit])
+}
+
+/// Run one menu command that needs the window.
+///
+/// @param app - handle that owns the window.
+/// @param command - menu item id.
+fn run_menu_command(app: &AppHandle, command: &str) {
+    let Some(window) = app.get_webview_window("main") else { return };
+    match command {
+        // The page owns the session; reloading only re-fetches the shell the Host serves.
+        "reload-page" => {
+            let _ = window.eval("location.reload()");
+        }
+        "toggle-devtools" => {
+            if window.is_devtools_open() {
+                window.close_devtools();
+            } else {
+                window.open_devtools();
+            }
+        }
+        _ => {}
     }
 }
 
 fn main() {
     tauri::Builder::default()
-        // Registered first so a second launch focuses the first instance and exits.
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        // Registered first so a second launch surfaces the first instance and exits.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            if argv.iter().any(|argument| argument.starts_with("dsh://")) {
+                // A `dsh://` launch asks to surface the running application;
+                // packaging registers the scheme and P3 routes the target.
+            }
             show_main(app);
         }))
         .plugin(
@@ -163,6 +372,11 @@ fn main() {
                 .build(),
         )
         .plugin(tauri_plugin_dialog::init())
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "about" => show_about(app),
+            "quit-application" => request_quit(app),
+            command => run_menu_command(app, command),
+        })
         .setup(|app| {
             let (binary, args) = host_command();
             let (host, url) = HostClient::spawn(&binary, &args)?;
@@ -170,8 +384,10 @@ fn main() {
 
             let target = tauri::Url::parse(&url)?;
             let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(target))
-                .title("DeepSeek Harness")
+                .title(PRODUCT)
                 .inner_size(1280.0, 860.0)
+                .min_inner_size(520.0, 600.0)
+                .theme(None)
                 .build()?;
             let hide_target = window.clone();
             window.on_window_event(move |event| {
@@ -179,14 +395,17 @@ fn main() {
                     if QUITTING.load(Ordering::SeqCst) {
                         return;
                     }
-                    // Closing hides: the page and the Host keep running, and the
-                    // next show resumes the same document.
                     api.prevent_close();
-                    let _ = hide_target.hide();
+                    close_to_background(hide_target.app_handle());
                 }
             });
 
-            build_tray(app.handle());
+            // The tray is reported before the menu so the first close already knows
+            // whether something stays visible.
+            TRAY_VISIBLE.store(build_tray(app.handle()), Ordering::SeqCst);
+            if let Ok(menu) = build_app_menu(app.handle()) {
+                let _ = app.set_menu(menu);
+            }
             Ok(())
         })
         .build(tauri::generate_context!())

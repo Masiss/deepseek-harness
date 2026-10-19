@@ -53,9 +53,25 @@ Còn lại của P0: PTY, `dsh plugin`, mở session cũ, transcript diff = 0, M
 | Thoát hỏi khi có task (`quit-inspection`) | xong (mã) | response `{"type":"quit-inspection","requestId":1,"activeTasks":false}` |
 | Degrade khi không có tray | xong | `build_tray` chỉ log, không làm chết app |
 
-Số đo mới: shell release **10,3 MB** (tăng 1,5 MB cho tray + dialog + window-state + single-instance).
+Số đo mới: shell release **10,3 MB** (tăng 1,5 MB cho tray + dialog + window-state + single-instance; `devtools` +39 KB).
 
-**Chưa test được ở máy này (cần phiên desktop thật):** bấm menu tray; menu DBusMenu của ayatana không expose `com.canonical.dbusmenu` cho client ngoài nên không click được bằng `gdbus`; đóng app sạch để kiểm tra file window-state; deep link `dsh://open` (cần đăng ký `.desktop`).
+### Ba đường đóng (đo bằng `close-paths-probe.sh`)
+
+Gửi `WM_DELETE_WINDOW` thật rồi đọc `map_state`:
+
+| Trường hợp | `map_state` | Tiến trình | Host |
+|---|---|---|---|
+| Có tray (`DSH_DESKTOP_TRAY=1`) | 0 (ẩn ngay) | sống | còn 14 kết nối |
+| Không tray, chưa xác nhận | **2 (cửa sổ vẫn hiện)** — dialog giải thích đang chờ | sống | còn kết nối |
+| Không tray, đã xác nhận | 0 (ẩn) | sống | còn kết nối |
+
+Không trường hợp nào giết tiến trình hay Host. Ảnh chụp release xác nhận menu bar **Application / Edit** và UI render đầy đủ.
+
+Menu Application: About, (dev) Reload Page + Toggle Developer Tools `F12`, Quit `Ctrl+Q`. Menu Edit: undo/redo/cut/copy/paste/select-all — ngang Electron trên Linux.
+
+**Chưa test được ở máy này (cần phiên desktop thật):** bấm menu tray (B18); đóng app sạch để kiểm tra file window-state; deep link `dsh://open` (shell đã focus theo argv, còn thiếu đăng ký `.desktop` ở P3).
+
+**Còn thiếu của P1 — bản địa hoá copy của shell.** `apps/desktop/src/locale.ts` là nguồn duy nhất cho chuỗi của shell (menu, tray, dialog) và nó là TypeScript; shell Rust không import được. Chép lại chuỗi sang Rust sẽ tạo **hai nhà** cho cùng một sự thật, đúng thứ `AGENTS.md` cấm. Hiện shell dùng tiếng Anh; muốn ngang Electron phải phát chuỗi đã bản địa hoá từ một nguồn dùng chung (ví dụ Host phục vụ chúng qua HTTP, hoặc sinh một crate từ `locale.ts`).
 
 ### Đầu dò dùng lại được
 
@@ -66,6 +82,7 @@ Số đo mới: shell release **10,3 MB** (tăng 1,5 MB cho tray + dialog + wind
 | `.agents/plan/desktop-tauri/probes/render.mjs` | Playwright headless: render UI, FCP, console error |
 | `.agents/plan/desktop-tauri/probes/shell-probe.sh` | Single instance + cửa sổ + host sống |
 | `.agents/plan/desktop-tauri/probes/quit-flow-probe.sh` | Thử bấm menu tray qua DBusMenu (chưa click được) |
+| `.agents/plan/desktop-tauri/probes/close-paths-probe.sh` | Ba đường đóng: có tray / không tray chưa xác nhận / đã xác nhận |
 
 `render.mjs` cần chạy trong `apps/web` (nơi có `playwright`):
 
@@ -102,6 +119,9 @@ DSH_DESKTOP_PROJECT_DIR=$HOME/.dsh/profiles/web \
 | D10 | "Loại bỏ package Windows" = port lớp koffi sang Rust, **không xoá tính năng** |
 | D11 | Shell P1: single-instance, window-state, **đóng cửa sổ = ẩn** (process + Host sống tiếp), tray, thoát qua `quit-inspection` |
 | D12 | Thoát: Host không trả lời ⇒ coi như **có** task đang chạy và hỏi, không thoát im lặng |
+| D13 | Đóng cửa sổ **không bao giờ** kết thúc tiến trình. Có tray ⇒ ẩn im lặng; không có tray ⇒ **giải thích một lần rồi mới ẩn**, huỷ thì cửa sổ ở lại |
+| D14 | Tray chỉ được coi là "có" khi session bus thật sự có `org.kde.StatusNotifierWatcher`; `TrayIconBuilder::build()` trả Ok kể cả khi không ai render |
+| D15 | Mở lại app luôn là đường về (single instance focus), nên không bao giờ có tiến trình mồ côi không lối vào |
 
 ## Số đo thật
 
@@ -142,7 +162,7 @@ Kết luận: **Bun runtime 67 MB là sàn**. Cờ compile của Bun không gi�
 | Webview → host | **4 kết nối ESTAB** | `WebKitNetworkProcess` → `127.0.0.1:<port>` |
 | `bun build --compile` host (L1, không Office) | 70 MB | Chạy được tới profile load rồi chết vì addon V8 |
 | Host built `lib/tauri.js` → `ready` | 1,0 s / 252 MiB | Xác nhận đường đóng gói thật |
-| Shell P1 release (tray + dialog + window-state) | **10,3 MB** | 10.300.920 byte |
+| Shell P1 release (tray + dialog + window-state + devtools) | **10,3 MB** | 10.339.832 byte |
 | Lần chạy thứ hai (single instance) | thoát sau **254 ms** | Tiến trình 1 vẫn sống |
 | `WM_DELETE_WINDOW` → ẩn cửa sổ | `map_state=0`, process sống | Host còn 14 kết nối |
 
@@ -254,6 +274,14 @@ Entry này **phải nằm trong package `apps/desktop-host`** (không phải `ap
 ### B14 — Cửa sổ Tauri chỉ hiện sau khi Host `ready`
 
 `setup()` đọc frame `ready` đồng bộ rồi mới tạo window, nên app không có cửa sổ trong ~1–2 s đầu (và lâu hơn nếu profile chậm). P1 phải tạo cửa sổ splash trước, rồi điều hướng sang URL Host khi nhận `ready`.
+
+### B19 — `open_devtools` biến mất ở release nếu thiếu feature
+
+`cargo build` (debug) biên dịch được, `cargo build --release` **không**: `WebviewWindow::{open_devtools,close_devtools,is_devtools_open}` chỉ tồn tại khi bật feature `devtools` của crate `tauri`. Debug thấy được vì nhánh `debug_assertions`. Phải khai báo `tauri = { features = ["tray-icon", "devtools"] }`. Electron cũng ship devTools ở bản release nên đây là ngang hàng, không phải nới lỏng.
+
+### B20 — `TrayIconBuilder::build()` trả Ok kể cả khi không ai render icon
+
+Trên Linux, tauri dùng libappindicator; không có StatusNotifier host thì `build()` vẫn Ok nhưng icon vô hình. Phải hỏi session bus (`NameHasOwner("org.kde.StatusNotifierWatcher")`) mới biết chắc — nếu tin vào `build()` thì app sẽ ẩn cửa sổ mà người dùng không có lối về.
 
 ### B16 — Tiến trình cũ còn sống làm mọi lần chạy sau "không có Host"
 

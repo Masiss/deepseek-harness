@@ -342,28 +342,30 @@ Tất cả AC trên đạt, hoặc có quyết định fallback được ghi l�
 
 **Ước lượng:** 2–3 pw.
 
-**Trạng thái (2026-10-19):** phần lõi đã có — single instance, window state, đóng cửa sổ = ẩn, tray, thoát qua `quit-inspection`. Còn: deep link (đăng ký `.desktop`), theme/controls, directory picker, locale bootstrap.
+**Trạng thái (2026-10-19):** lõi đã xong — single instance, window state, đóng cửa sổ = ẩn **có bảo đảm nhìn thấy** (tray hoặc giải thích một lần), tray, menu Application/Edit, thoát qua `quit-inspection`, deep link focus theo argv. Còn: đăng ký scheme `.desktop` (P3), directory picker (P2), bản địa hoá copy của shell (xem ghi chú dưới).
 
 ### Công việc
 
-- Single instance + second-launch focus.
-- Deep link `dsh://open` (xdg-mime + `.desktop`).
-- Window state, hide-on-close, tray (appindicator) với fallback không tray.
-- Application menu, About, DevTools toggle.
-- Theme sync, fullscreen, window controls.
-- Native directory picker (Tauri dialog).
-- Quit confirmation dùng `quit-inspection` qua NDJSON.
-- Locale bootstrap.
+- ✅ Single instance + second-launch focus.
+- 🔶 Deep link `dsh://open` — shell focus theo argv; còn đăng ký scheme ở `.desktop` (P3).
+- ✅ Window state, hide-on-close, tray (appindicator) với fallback không tray.
+- ✅ Application menu, About, DevTools toggle.
+- ✅ Theme theo hệ thống.
+- ⏭ Native directory picker — chuyển sang P2 cùng bridge.
+- ✅ Quit confirmation dùng `quit-inspection` qua NDJSON.
+- ❌ Locale bootstrap — xem ghi chú.
 
 ### Acceptance Criteria
 
 - [x] Mở app lần hai chỉ focus cửa sổ hiện có — lần 2 tự thoát sau 254 ms, tiến trình 1 sống.
 - [ ] `dsh://open` mở/focus — shell đã focus theo argv; còn đăng ký scheme ở `.desktop` (P3).
-- [x] Đóng cửa sổ giữ process chạy — `WM_DELETE_WINDOW` cho `map_state=0`, process và Host còn sống. "Mở lại giữ scroll" chưa test được.
+- [x] Đóng cửa sổ giữ process chạy — `map_state=0`, process và Host còn sống. Có tray ⇒ ẩn im lặng; không có tray ⇒ giải thích một lần rồi mới ẩn (`map_state=2` khi chờ xác nhận). "Mở lại giữ scroll" chưa test được.
 - [~] Có task → hỏi, không có task → thoát im lặng — luồng đã viết và protocol đã kiểm (`activeTasks:false`); bấm menu tray chưa test được ở máy này.
 - [x] Tray trên X11 — đăng ký `StatusNotifierWatcher` với `Id=tray-icon tray app main`, `Status=Active`, icon thật. Degrade: `build_tray` chỉ log.
-- [ ] Theme hệ thống đổi → UI đổi theo.
+- [x] Theme hệ thống đổi → UI đổi theo — `theme(None)` (theo hệ thống); WebKitGTK suy `prefers-color-scheme` từ theme GTK.
 - [ ] Directory picker — chuyển sang P2 cùng bridge `window.dshDesktop`.
+- [x] Menu Application (About, dev: Reload + DevTools `F12`, Quit `Ctrl+Q`) và menu Edit (undo/redo/cut/copy/paste/select-all) — ảnh chụp release xác nhận.
+- [ ] Bản địa hoá copy của shell — **còn thiếu**, có lý do: `apps/desktop/src/locale.ts` là nguồn duy nhất và là TypeScript; chép sang Rust sẽ tạo nhà thứ hai cho cùng chuỗi.
 
 ### Exit gate
 
