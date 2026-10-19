@@ -74,6 +74,27 @@ Số đo mới: shell release **10,3 MB** (tăng 1,5 MB cho tray + dialog + wind
 | Lời gọi cầu đồng thời (trước sửa) | `peak_in_flight=33`, `failed=5`, `console_errors=5` |
 | Lời gọi cầu đồng thời (sau sửa) | `peak_in_flight=1`, `failed=0`, `console_errors=0` |
 
+### B24 — Không có làn đóng gói Linux: `prepare-dsh` bất khả thi trên Linux
+
+Điều kiện M1 ("chạy `prepare-dsh`, đo cây production thật") **không thực hiện được** trên Linux, vì hai lý do độc lập:
+
+1. `apps/desktop/scripts/desktop-build-paths.mjs:7` — `SUPPORTED_TARGETS = { 'mac-arm64', 'mac-x64', 'win-x64' }`. `resolveDesktopBuildTarget()` và `resolveDesktopTargetBuildPaths()` **ném lỗi cho mọi target Linux**; `upload-target.ts` cũng vậy. Toàn bộ làn đóng gói của `apps/desktop` chỉ có macOS và Windows.
+2. `prepare-dsh.ts:46` chạy pnpm bằng **binary Electron** (`BUILD_PATHS.electron`), và `package-target.ts` tải Electron qua `@electron/get`.
+
+**Nhưng phần dùng lại được đã có sẵn và trung lập nền tảng:**
+
+| Thành phần | Hỗ trợ Linux |
+|---|---|
+| `scripts/primary-runtime/prepare.ts` | **có** — `lock.json` đã khoá `linux-x64` và `linux-arm64` (Node archive + bánh xe Python) |
+| `scripts/release/pack.ts` (`release:pack --family …`) | **có** — không có nhánh theo nền tảng |
+| `prepare-package-set.ts` (`prepareDesktopPackageSet`) | logic trung lập; chỉ `main()` gọi `resolveDesktopTargetBuildPaths()` nên CLI mới hỏng |
+| `src/core-package-set.ts`, `src/runtime-tree.ts`, `src/project-manager.ts`, `prepare-runtime-patches.ts` | trung lập (chưa thấy nhánh nền tảng) |
+| `prepare-dsh.ts`, `prepare-runtime.ts`, `package-target.ts` | **không** — gắn Electron và/hoặc mac/win |
+
+**Hệ quả cho M1:** cần một làn đóng gói Linux thuộc sở hữu fork (ví dụ `apps/desktop-tauri/scripts/`), ghép các mảnh trung lập trên với một bản `prepare-dsh` chạy pnpm bằng **Node thật** thay vì Electron, và chốt ba biến `DSH_DESKTOP_PRIMARY_RUNTIME` / `DSH_DESKTOP_PNPM_ENTRY` / `DSH_DESKTOP_NODE_BIN` mà `main.rs` đã đọc (B22).
+
+Không sửa `apps/desktop` cho việc này: thêm target Linux vào làn Electron là thay đổi giao diện đóng gói của upstream, trái tinh thần "không sửa thứ thuộc upstream".
+
 ### Plugin manager qua shell Tauri thật (đo bằng `plugin-probe.sh`)
 
 | Phép đo | Kết quả |
@@ -396,7 +417,7 @@ Item đăng ký đủ (`Id`, `Status`, `IconName`, `Menu` trỏ tới `/org/ayat
 
 | # | Việc | Phase | Trạng thái |
 |---|---|---|---|
-| M1 | Đo `dsh` production tree thật (`prepare-dsh`) | P0 | **một nửa** — argv đã sửa và kiểm chứng; cây production (kèm core package set) chưa dựng |
+| M1 | Đo `dsh` production tree thật (`prepare-dsh`) | P0 | **chặn bởi thiết kế** — `prepare-dsh` không chạy được trên Linux (B24); argv đã sửa và kiểm chứng |
 | M2 | Đo Tauri release binary (Linux) | P0 | đang chạy |
 | M3 | Đo RSS idle + cold start | P0 | **xong** (Host Node: 0,9–1,2 s; 266–268 MiB) |
 | M4 | Xác nhận `node:sqlite` trên Bun | P0 | **xong** — chạy được |
