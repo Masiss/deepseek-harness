@@ -225,6 +225,26 @@ Tốc độ test đến từ kiến trúc client/server, không từ định d�
 
 ---
 
+## ADR-0011 — Cầu `window.dshDesktop` do Host phục vụ
+
+**Bối cảnh.** PLAN P2 ban đầu dự kiến chèn init script từ Rust rồi mở Tauri command cho WebView. Ba dữ kiện lật lại:
+
+- Tauri 2 chặn IPC từ origin từ xa; mở được phải khai capability `remote.urls`, tức thêm một bề mặt quyền cho một trang do HTTP phục vụ.
+- Logic thật của `dshDesktop` là TypeScript dùng chung với Electron main (`ShortcutPersistence` của `@deepseek-ai/dsh-client-shortcuts/protocol`, `readDeviceInfo`). Viết lại bằng Rust tạo **nhà thứ hai** cho cùng thuật toán.
+- Host đã phục vụ chính trang đó qua HTTP có token, và đã có sẵn ba khe: `webServer.register`, `connection.requestRejection`, `webserver/index-inject`.
+
+**Quyết định.** Cầu nằm trong Host, tại `apps/desktop-host/src/desktop-bridge.ts`:
+
+- route `/__dsh-desktop` (prefix) qua `webServer.register`, mỗi request qua `connection.requestRejection` (fence Host/Origin + Peer đã xác thực);
+- một row `<head>` qua `webserver/index-inject` cài `window.dshDesktop` và `<html data-platform>` **trước** mọi module client;
+- `shortcuts` chạy đúng `ShortcutPersistence` như Electron main, ghi `keybindings.json` bằng `writeFileAtomic`.
+
+**Hệ quả.** Shell Rust không thêm dòng nào; không Tauri command, không capability remote. ADR-0007 (nạp thẳng Host URL) là điều kiện tiên quyết. Hợp đồng TS phía client không đổi.
+
+**Giới hạn v1 (có chủ ý).** `browser` vắng mặt (không có tương đương `WebContentsView`). `keyboard.subscribe`, `shortcuts.subscribe`, `updates.subscribe` trả disposer không bao giờ phát: một cửa sổ, chưa có native accelerator, và client tự áp snapshot từ `get`/`edit`. `updates.status()` trả `idle` cho tới P3.
+
+---
+
 # Phần III — Kiến trúc đích
 
 ```
@@ -379,26 +399,28 @@ Không còn regression hành vi desktop so với Electron trong phạm vi trên.
 
 **Ước lượng:** 2–3 pw.
 
+**Trạng thái (2026-10-19):** tầng cầu đã chạy trong app thật (ADR-0011). Còn lại: welcome/onboarding, account/Platform handoff, product analytics, và input menu kiểu native.
+
 ### Công việc
 
-- Init script inject `window.dshDesktop` (`protocolVersion: 1`).
-- `deviceInfo`, `keyboard`, `shortcuts`, `updates` status/open/subscribe.
-- Welcome/onboarding qua asset protocol.
-- Account/Platform session handoff (không gồm embedded view).
-- Product analytics chỉ bật khi có `dshDesktop`.
+- ✅ Init script inject `window.dshDesktop` (`protocolVersion: 1`) — row `<head>` do Host đóng góp.
+- 🔶 `deviceInfo` ✅, `keyboard` ✅ (subscribe rỗng), `shortcuts` ✅, `updates` ✅ (`idle`; updater thật ở P3).
+- ⏭ Welcome/onboarding — chưa làm.
+- ⏭ Account/Platform session handoff (không gồm embedded view) — chưa làm.
+- ⏭ Product analytics chỉ bật khi có `dshDesktop` — chưa làm (đã có điều kiện, chưa kiểm chứng trên Tauri).
 
 ### Acceptance Criteria
 
-- [ ] `'dshDesktop' in globalThis` = true trong app Tauri.
-- [ ] Settings → Shortcuts lưu/khôi phục được.
-- [ ] `updates.status()` trả phase hợp lệ.
-- [ ] Welcome hiển thị khi chưa có API key; vào workspace sau khi cấu hình.
-- [ ] Không có lỗi console "desktop API missing".
-- [ ] Command Tauri từ chối origin/token không hợp lệ.
+- [x] `'dshDesktop' in globalThis` = true trong app Tauri — probe trang: `present=true protocol=1 keyboard=true`.
+- [x] Settings → Shortcuts lưu/khôi phục được — vòng `get`→`edit`→`saved` qua `keybindings.json`, và lần mở sau đọc lại đúng binding. **Chưa điều khiển thao tác trong UI Settings** (đường UI gọi đúng adapter đã kiểm).
+- [x] `updates.status()` trả phase hợp lệ — `{"phase":"idle"}`.
+- [ ] Welcome hiển thị khi chưa có API key; vào workspace sau khi cấu hình — chưa làm.
+- [x] Không có lỗi console "desktop API missing" — `console_errors=0 page_errors=0`.
+- [x] Cầu từ chối origin/token không hợp lệ — không cookie ⇒ 401; GET ⇒ 405; body quá lớn ⇒ 413; method lạ ⇒ 404.
 
 ### Exit gate
 
-Bridge contract TS không đổi; chỉ backend đổi.
+Bridge contract TS không đổi — đã giữ: chỉ thêm backend Host, không sửa `packages/client/*`.
 
 ---
 

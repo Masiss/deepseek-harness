@@ -11,6 +11,7 @@ import { delimiter, join } from 'node:path'
 import { loadLayeredEnv, loadProfileDirectory, reportSkippedBundles } from '@deepseek-ai/dsh-app-boot'
 import { runProfile } from '@deepseek-ai/dsh/profile-boot'
 import { createHostTransport } from './transport.ts'
+import { installDesktopBridge } from './desktop-bridge.ts'
 import { installDesktopUpdateTaskControl } from './update-tasks.ts'
 import { installDesktopQuitInspection } from './quit-inspection.ts'
 import { installPlatformSessionPublisher } from './platform-session.ts'
@@ -45,8 +46,10 @@ async function main(): Promise<void> {
   const control: {
     updateTasks?: ReturnType<typeof installDesktopUpdateTaskControl>
     quitInspection?: ReturnType<typeof installDesktopQuitInspection>
+    desktopBridge?: () => void
   } = {}
   const stop = (): Promise<void> => stopping ??= (async () => {
+    control.desktopBridge?.()
     const running = await application.catch(() => undefined)
     await running?.shutdown.shutdown(0)
     try { await transport.send({ type: 'shutdown-complete' }) } catch (error: unknown) { console.error(error) }
@@ -86,6 +89,7 @@ async function main(): Promise<void> {
   const { ctx } = await application
   control.updateTasks = installDesktopUpdateTaskControl(ctx)
   control.quitInspection = installDesktopQuitInspection(ctx)
+  control.desktopBridge = installDesktopBridge(ctx)
   installPlatformSessionPublisher(ctx, (session) => {
     void transport.send({ type: 'platform-session', session }).catch((error: unknown) => { console.error(error) })
   })

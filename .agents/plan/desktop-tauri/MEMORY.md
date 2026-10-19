@@ -55,6 +55,22 @@ Còn lại của P0: PTY, `dsh plugin`, mở session cũ, transcript diff = 0, M
 
 Số đo mới: shell release **10,3 MB** (tăng 1,5 MB cho tray + dialog + window-state + single-instance; `devtools` +39 KB).
 
+### Cầu desktop (đo bằng `bridge-probe.sh` / `bridge-page-probe.sh`)
+
+| Phép đo | Kết quả |
+|---|---|
+| `POST /__dsh-desktop/*` không cookie | 401 (fence Host/Origin + Peer) |
+| GET / method lạ / body quá lớn | 405 / 404 / 413 |
+| `device-info` | `platform=linux; os=…; app_arch=x64; cpu=…; memory_gib=15.3` |
+| `shortcuts-get` chưa có file | `status=ready` |
+| `shortcuts-edit` | `saved`; `keybindings.json` xuất hiện, chứa `KeyK`; lần cài sau đọc lại đúng |
+| `updates-status` | `{"phase":"idle"}` |
+| Shim trong index phục vụ | `globalThis.dshDesktop` ×1, `dataset.platform` ×1 |
+| Trong trang thật (Chromium) | `present=true protocol=1 keyboard=true platform=linux`, `updates_phase=idle`, `saved=saved`, `keybindings_after_page=present` |
+| Client có **thật sự** dùng cầu | 33 lời gọi `shortcuts-get` + 2 `updates-status` **do trang tự phát** (runtime desktop, không phải localStorage) |
+| Lỗi console / page | 0 / 0 |
+| App Tauri thật (release + WebView) | render bình thường, 10 kết nối Host, menu Application/Edit |
+
 ### Ba đường đóng (đo bằng `close-paths-probe.sh`)
 
 Gửi `WM_DELETE_WINDOW` thật rồi đọc `map_state`:
@@ -83,6 +99,8 @@ Menu Application: About, (dev) Reload Page + Toggle Developer Tools `F12`, Quit 
 | `.agents/plan/desktop-tauri/probes/shell-probe.sh` | Single instance + cửa sổ + host sống |
 | `.agents/plan/desktop-tauri/probes/quit-flow-probe.sh` | Thử bấm menu tray qua DBusMenu (chưa click được) |
 | `.agents/plan/desktop-tauri/probes/close-paths-probe.sh` | Ba đường đóng: có tray / không tray chưa xác nhận / đã xác nhận |
+| `.agents/plan/desktop-tauri/probes/bridge-probe.sh` | Cầu `/__dsh-desktop` trên HTTP thật: fence, device info, shortcut round trip, phase update |
+| `.agents/plan/desktop-tauri/probes/bridge-page.mjs` + `bridge-page-probe.sh` | Quan sát cầu từ trong trang thật bằng Chromium |
 
 `render.mjs` cần chạy trong `apps/web` (nơi có `playwright`):
 
@@ -122,6 +140,10 @@ DSH_DESKTOP_PROJECT_DIR=$HOME/.dsh/profiles/web \
 | D13 | Đóng cửa sổ **không bao giờ** kết thúc tiến trình. Có tray ⇒ ẩn im lặng; không có tray ⇒ **giải thích một lần rồi mới ẩn**, huỷ thì cửa sổ ở lại |
 | D14 | Tray chỉ được coi là "có" khi session bus thật sự có `org.kde.StatusNotifierWatcher`; `TrayIconBuilder::build()` trả Ok kể cả khi không ai render |
 | D15 | Mở lại app luôn là đường về (single instance focus), nên không bao giờ có tiến trình mồ côi không lối vào |
+| D16 | Cầu `window.dshDesktop` **do Host phục vụ**, không phải init script + Tauri command (ADR-0011) |
+| D17 | `shortcuts` chạy đúng `ShortcutPersistence` của client package trong Host — một thuật toán, hai shell |
+| D18 | `keyboard`/`shortcuts`/`updates.subscribe` trả disposer rỗng: một cửa sổ, client tự áp snapshot từ `get`/`edit` |
+| D19 | `data-platform` do chính shim đặt (thay `markDocumentPlatform` của preload Electron) |
 
 ## Số đo thật
 
@@ -282,6 +304,10 @@ Entry này **phải nằm trong package `apps/desktop-host`** (không phải `ap
 ### B20 — `TrayIconBuilder::build()` trả Ok kể cả khi không ai render icon
 
 Trên Linux, tauri dùng libappindicator; không có StatusNotifier host thì `build()` vẫn Ok nhưng icon vô hình. Phải hỏi session bus (`NameHasOwner("org.kde.StatusNotifierWatcher")`) mới biết chắc — nếu tin vào `build()` thì app sẽ ẩn cửa sổ mà người dùng không có lối về.
+
+### B21 — Typecheck fail vẫn emit rác vào `src/`
+
+Khi `tsc` báo TS6059/TS6307 (file ngoài `rootDir`), nó **vẫn ghi** `.js`/`.d.ts`/`.map` cạnh source: `packages/client/shortcuts/src/{binding,configuration,native,persistence,protocol}.*` xuất hiện và làm `lint` đỏ ở file không ai sửa. `git clean -f -- packages/client/shortcuts/src/` là cách dọn; đừng commit chúng.
 
 ### B16 — Tiến trình cũ còn sống làm mọi lần chạy sau "không có Host"
 

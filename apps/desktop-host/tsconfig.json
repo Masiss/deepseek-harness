@@ -26,6 +26,12 @@
       "path": "../../packages/client/connection/tsconfig.host.json"
     },
     {
+      "path": "../../packages/client/shortcuts/tsconfig.host.json"
+    },
+    {
+      "path": "../../packages/util/atomic-write"
+    },
+    {
       "path": "../../packages/host/webserver"
     },
     {
