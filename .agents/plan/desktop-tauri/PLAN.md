@@ -343,7 +343,7 @@ Mỗi phase có **Acceptance Criteria (AC)** dạng checkbox. Không chuyển ph
 - [x] `/` trả 200 sau token; `__DSH_BOOT__` có mặt — frame `ready` mang 13 injection, gồm `__DSH_BOOT__`.
 - [x] `/api/remote.mux` trả `101 Switching Protocols` — đo thật bằng `curl` upgrade, trả `HTTP/1.1 101`.
 - [ ] PTY spawn được (`/dev/pts/N`), gõ lệnh trong terminal.
-- [ ] `dsh plugin` cài và chạy được một plugin thật.
+- [ ] `dsh plugin` cài và chạy được một plugin thật — **chưa kiểm được**: `main.rs` mới đẩy 2/5 tham số vị trí nên Host Tauri khởi động không có `packageManager` (B22). Sửa cùng M1 khi `prepare-dsh` chốt đường dẫn pnpm/node. Đây là điều kiện dừng số 1 của `AGENTS.md` §7, phải kiểm trước khi coi Linux production là xong.
 - [x] Mở được session ghi bản cũ — đo bằng `session-read-probe.sh` trên đúng 7 file đang có trên đĩa: `session/list` trả `ok=true`, 7/7 item, `format_status={"current":5,"migration-required":2}`. Host Tauri đọc được cả hai thế hệ và báo đúng thế hệ cũ là cần migration thay vì đọc nhầm.
 - [ ] Transcript cùng prompt khớp bản cũ (diff = 0) — **chặn**: máy này không có `DEEPSEEK_API_KEY`.
 - [x] `node:sqlite` hoạt động dưới Bun — có, nhưng không còn cần cho quyết định runtime.

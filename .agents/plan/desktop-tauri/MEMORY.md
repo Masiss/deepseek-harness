@@ -322,6 +322,19 @@ Entry này **phải nằm trong package `apps/desktop-host`** (không phải `ap
 
 Trên Linux, tauri dùng libappindicator; không có StatusNotifier host thì `build()` vẫn Ok nhưng icon vô hình. Phải hỏi session bus (`NameHasOwner("org.kde.StatusNotifierWatcher")`) mới biết chắc — nếu tin vào `build()` thì app sẽ ẩn cửa sổ mà người dùng không có lối về.
 
+### B22 — Shell Tauri truyền thiếu argv ⇒ `dsh plugin` bị tắt **im lặng**
+
+`DesktopHostProcess` của Electron truyền 5 tham số vị trí:
+
+```
+argv[2] runtimeDir   argv[3] projectDir   argv[4] primaryRuntime
+argv[5] pnpm.mjs     argv[6] nodeBin
+```
+
+`tauri.ts` đọc đúng argv[5]/argv[6] để dựng `packageManager`, nhưng `host_command()` trong `main.rs` **chỉ đẩy argv[2] và argv[3]**. Hệ quả: Host Tauri khởi động với `packageManager = undefined`, nên `dsh plugin` không cài được plugin — và nó hỏng **im lặng**, không phải lỗi to. Đây đúng điều kiện dừng số 1 của `AGENTS.md` §7.
+
+Chưa sửa vì ba đường dẫn kia chỉ tồn tại sau khi chạy `prepare-dsh` (M1); truyền env cho thứ chưa có chủ là suy diễn. Khi M1 chốt đường dẫn, `host_command()` phải đẩy đủ 5 tham số theo đúng thứ tự trên (argv[4] bắt buộc phải có mặt dù `tauri.ts` chưa đọc, nếu không argv[5] sẽ lệch vị trí).
+
 ### B21 — Typecheck fail vẫn emit rác vào `src/`
 
 Khi `tsc` báo TS6059/TS6307 (file ngoài `rootDir`), nó **vẫn ghi** `.js`/`.d.ts`/`.map` cạnh source: `packages/client/shortcuts/src/{binding,configuration,native,persistence,protocol}.*` xuất hiện và làm `lint` đỏ ở file không ai sửa. `git clean -f -- packages/client/shortcuts/src/` là cách dọn; đừng commit chúng.
