@@ -14,7 +14,29 @@
     "native/system",
     "native/system/packages/*",
     "apps/*",
-    "website"
+    "benchmarks",
+    "website",
+    "python/sdk-runtime"
+  ],
+  "overrides": {
+    "extract-zip>yauzl": "3.4.0"
+  },
+  "patchedDependencies": {
+    "@earendil-works/pi-ai@1.1.0": "patches/@earendil-works__pi-ai@1.1.0.patch",
+    "@electron/osx-sign@1.3.3": "patches/@electron__osx-sign@1.3.3.patch",
+    "@fortune-sheet/core@1.0.4": "patches/@fortune-sheet__core@1.0.4.patch",
+    "@fortune-sheet/react@1.0.4": "patches/@fortune-sheet__react@1.0.4.patch",
+    "@yao-pkg/pkg@6.21.0": "patches/@yao-pkg__pkg@6.21.0.patch",
+    "app-builder-lib@26.17.0": "patches/app-builder-lib@26.17.0.patch",
+    "exceljs@4.4.0": "patches/exceljs@4.4.0.patch",
+    "node-pty@1.2.0-beta.15": "patches/node-pty@1.2.0-beta.15.patch"
+  },
+  "trustedDependencies": [
+    "esbuild",
+    "lefthook",
+    "node-pty",
+    "koffi",
+    "@deepseek-ai/dsh-subprocess-local"
   ],
   "scripts": {
     "prepare:primary-runtime": "tsx scripts/primary-runtime/prepare.ts",
@@ -23,10 +45,10 @@
     "build:check": "tsx scripts/build.ts --scope check",
     "build:bench": "npm run build:native-system && npm run build:lib && tsdown --config-loader native --config benchmarks/tsdown.config.ts",
     "build:official": "tsx scripts/build.ts --profile official",
-    "build:lib": "pnpm run build:lib:host && pnpm run build:lib:client",
-    "build:lib:host": "node --max-old-space-size=4096 ./node_modules/typescript/bin/tsc -b tsconfig.host.json && tsdown --config-loader native --env.DSH_BUILD_FACE host && pnpm --filter @deepseek-ai/dsh-desktop run bundle",
+    "build:lib": "bun run build:lib:host && bun run build:lib:client",
+    "build:lib:host": "node --max-old-space-size=4096 ./node_modules/typescript/bin/tsc -b tsconfig.host.json && tsdown --config-loader native --env.DSH_BUILD_FACE host && bun run --filter @deepseek-ai/dsh-desktop bundle",
     "build:lib:client": "tsc -b tsconfig.client.json && tsdown --config-loader native --env.DSH_BUILD_FACE client",
-    "build:web": "pnpm --filter @deepseek-ai/dsh-web-frontend run build",
+    "build:web": "bun run --filter @deepseek-ai/dsh-web-frontend build",
     "build:desktop": "pnpm --filter @deepseek-ai/dsh-desktop run build",
     "dev:desktop": "pnpm --filter @deepseek-ai/dsh-desktop run dev",
     "start:desktop": "pnpm --filter @deepseek-ai/dsh-desktop run start",

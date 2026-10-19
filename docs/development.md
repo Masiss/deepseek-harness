@@ -9,8 +9,8 @@ The setup tutorial takes a new contributor from prerequisites to a checked check
 ### Prerequisites
 
 - Node.js supports 22.19+ and 24+. CI covers 22.19, 24, and 26; see the [Node engine floor Agent Note](../.agents/notes/implemented/process/2026-07-06-node-engine-floor.md).
-- Node.js TypeScript type stripping enabled. The repository build scripts load `tsdown.config.ts` with tsdown's native config loader, so they fail when `--no-experimental-strip-types` is in `NODE_OPTIONS` or the Node.js build lacks TypeScript support; `pnpm run build` checks this first and names the cause.
-- Corepack-enabled pnpm. The repo pins `pnpm@11.28.5` in `package.json`; run `corepack enable` if `pnpm --version` does not resolve through Corepack.
+- Node.js TypeScript type stripping enabled. The repository build scripts load `tsdown.config.ts` with tsdown's native config loader, so they fail when `--no-experimental-strip-types` is in `NODE_OPTIONS` or the Node.js build lacks TypeScript support; `bun run build` checks this first and names the cause.
+- Corepack-enabled pnpm, and Bun for the Web lane. The repo pins `pnpm@11.28.5` in `package.json`; run `corepack enable` if `pnpm --version` does not resolve through Corepack. `bun.lock` is committed beside `pnpm-lock.yaml`: `bun install --frozen-lockfile` installs the Web lane, while Desktop, release, CI, and the test and documentation lanes install with pnpm.
 - Git 2.26 or newer; hook setup enables Git's worktree-specific configuration extension.
 - Optional: a DeepSeek API key for the Web, headless, and ACP automation demos and real-API e2e tests.
 
@@ -24,12 +24,13 @@ Install dependencies separately in each environment because native binaries and 
 
 ### First-time setup
 
-pnpm uses its strict symlinked linker so undeclared dependencies fail instead of relying on hoisting. Keep dependency build scripts explicitly allowlisted in `pnpm-workspace.yaml`.
+pnpm uses its strict symlinked linker so undeclared dependencies fail instead of relying on hoisting. Keep dependency build scripts explicitly allowlisted in `pnpm-workspace.yaml`; Bun reads the same allowlist through the `trustedDependencies` entries `package.json` carries beside the overrides and patches it needs.
 
 Install dependencies from the repo root:
 
 ```sh
-pnpm install
+bun install --frozen-lockfile   # Web lane
+pnpm install                    # Desktop, release, CI, and test/documentation lanes
 ```
 
 The install also configures worktree-local Lefthook hooks through `scripts/install-lefthook.mjs`. The [worktree-local hooks Agent Note](../.agents/notes/implemented/process/2026-07-27-worktree-local-lefthook.md) owns the hook-path safety contract.
@@ -74,28 +75,28 @@ Host and Client stay two aggregate programs because both sides declaration-merge
 
 Six packages split Host and Client tsconfigs: `api/remotes`, `api/gateway`, `api/session-controller`, `api/workspace-controller`, `client/connection`, and `session-query/session-log-export`. `api/remotes`' Host entry participates in the Host Typert graph while its Client entry imports generated `/remote` declarations; `session-log-export` keeps Node archive production out of its browser controller. Each split package-root `tsconfig.json` is therefore only a solution, and the two aggregates and direct consumers reference `tsconfig.host.json` or `tsconfig.client.json` respectively. The workspace `constraints` gate walks the reachable Project Reference graph and checks each referencing project's own compiler face: a single-config target remains valid from either face, while a split target must name the matching leaf rather than its solution root or opposite leaf; it discovers split packages from the presence of both leaf configs, so a new split joins the gate automatically. The [`api-remotes` README](../packages/api/remotes/README.md) and [`session-log-export` README](../packages/session-query/session-log-export/README.md) explain their splits.
 
-`pnpm run build:artifacts` emits every artifact in the generated dependency order, checking and compiling only the package references of each compiler face:
+`bun run build:artifacts` emits every artifact in the generated dependency order, checking and compiling only the package references of each compiler face:
 
 ```sh
-pnpm run build:native-system
+bun run build:native-system
 tsc -b <tsconfig.host.json references>
 tsdown --env.DSH_BUILD_FACE host
-pnpm --filter @deepseek-ai/dsh-desktop run bundle
+bun run --filter @deepseek-ai/dsh-desktop bundle
 tsc -b <tsconfig.client.json references>
 tsdown --env.DSH_BUILD_FACE client
-pnpm run build:web
+bun run build:web
 ```
 
-`pnpm run build:check` runs only `tsc -p tsconfig.host.json` and `tsc -p tsconfig.client.json` concurrently. Project mode checks each aggregate's repository-wide test and script program against the package declarations already on disk and never compiles a reference, so `build:check` neither detects nor rebuilds missing or stale `build:artifacts` output; missing output surfaces as compiler errors. `pnpm run build` runs both step sets as one [scheduled](../scripts/run-gates.ts) dependency graph: each aggregate check starts once its own face's package compilation finishes and overlaps the remaining artifact steps. In all three commands `DSH_GATE_CONCURRENCY` bounds concurrent steps (`1` runs them in dependency order) and `DSH_GATE_FAIL_FAST=1` stops the remaining steps at the first failure; otherwise a failure skips only its dependents, so independent errors are all reported. A failed step prints its own output, and any failure exits non-zero without writing the client build record.
+`bun run build:check` runs only `tsc -p tsconfig.host.json` and `tsc -p tsconfig.client.json` concurrently. Project mode checks each aggregate's repository-wide test and script program against the package declarations already on disk and never compiles a reference, so `build:check` neither detects nor rebuilds missing or stale `build:artifacts` output; missing output surfaces as compiler errors. `bun run build` runs both step sets as one [scheduled](../scripts/run-gates.ts) dependency graph: each aggregate check starts once its own face's package compilation finishes and overlaps the remaining artifact steps. In all three commands `DSH_GATE_CONCURRENCY` bounds concurrent steps (`1` runs them in dependency order) and `DSH_GATE_FAIL_FAST=1` stops the remaining steps at the first failure; otherwise a failure skips only its dependents, so independent errors are all reported. A failed step prints its own output, and any failure exits non-zero without writing the client build record.
 
 Choose the command by what the change needs:
 
 | Situation | Command |
 |---|---|
-| Iterating on package sources and needing runnable artifacts | `pnpm run build:artifacts`; `dev:web` and `dev:desktop` run it before launching |
-| Type-checking tests, scripts, benchmarks, or website code | `pnpm run build:check` after the latest `build:artifacts`; rerun `build:artifacts` first when package sources changed |
-| Before declaring TypeScript work complete | `pnpm run build:check` after the latest `build:artifacts`, or `pnpm run build` |
-| Complete verification, as the required CI build lanes run it | `pnpm run build` |
+| Iterating on package sources and needing runnable artifacts | `bun run build:artifacts`; `dev:web` and `dev:desktop` run it before launching |
+| Type-checking tests, scripts, benchmarks, or website code | `bun run build:check` after the latest `build:artifacts`; rerun `build:artifacts` first when package sources changed |
+| Before declaring TypeScript work complete | `bun run build:check` after the latest `build:artifacts`, or `bun run build` |
+| Complete verification, as the required CI build lanes run it | `bun run build` |
 | Type checks without the Web and Desktop artifacts | `pnpm run typecheck` |
 | Lint or documentation code-block checks | `pnpm run lint` or `pnpm run doc-typecheck`; each prepares `host-contracts` itself |
 
@@ -105,7 +106,7 @@ Both tsdown passes match `vendor/*`, `packages/*/*`, and `apps/cli`; the Host pa
 
 Typert analyzes Host types, seeded by `tsconfig.host.json`, and generates both Host reflection artifacts and the Host-for-Client Remote projection; Client tsdown does not start Typert. Host tsdown runs it as a plugin, and [`generate-typert.ts`](../scripts/generate-typert.ts) runs the same generation without bundling and writes byte-identical files. The bundle-free pass reads workspace packages only from source and fails when the Host program would load a package's `lib/` output, naming the import and the `paths` alias to add, so it can run beside Host package compilation. Client package compilation always follows one of the two passes because Client sources import the generated Remote declarations. `pnpm run typecheck` runs the `build.ts --scope typecheck` graph: Host package compilation beside the bundle-free Typert pass, then Client package compilation, with each aggregate checked in build mode (`tsc -b`) once its own face's packages compile; it skips the native addon, every bundle, Web, and the client build record. `lint`, `lint:fix`, and `doc-typecheck` read the generated declarations but not the Host aggregate check, so they prepare only Host package compilation and the bundle-free Typert pass (`compile-referenced-projects.ts host-contracts`). None of these commands writes bundles: the runnable `lib/` output stays as the last `build:artifacts` left it, so run `build:artifacts` before launching or testing built output.
 
-`pnpm run build` and `build:artifacts` embed the root package version, the seven-character source commit, and a dirty marker when Git reports local changes; they also inherit other caller-supplied `DSH_CLIENT_*` values. `pnpm run build:official` is the cross-platform local equivalent of the CI and release artifact build and omits the local dirty marker. Each successful `build` or `build:artifacts` writes a gitignored record that binds the exact public values to the Vite output and dynamic client bundles; release packing and built Web tests reject a missing record or artifacts changed by a later partial build. `pnpm run dev:web` runs `build:artifacts` first (`--skip-build` reuses an existing artifact tree instead), then samples the current version and Git state once and shares that environment across every watcher stage for the session; it does not validate the complete-build record because the watcher stages rewrite its recorded artifacts.
+`bun run build` and `build:artifacts` embed the root package version, the seven-character source commit, and a dirty marker when Git reports local changes; they also inherit other caller-supplied `DSH_CLIENT_*` values. `bun run build:official` is the cross-platform local equivalent of the CI and release artifact build and omits the local dirty marker. Each successful `build` or `build:artifacts` writes a gitignored record that binds the exact public values to the Vite output and dynamic client bundles; release packing and built Web tests reject a missing record or artifacts changed by a later partial build. `bun run dev:web` runs `build:artifacts` first (`--skip-build` reuses an existing artifact tree instead), then samples the current version and Git state once and shares that environment across every watcher stage for the session; it does not validate the complete-build record because the watcher stages rewrite its recorded artifacts.
 
 Static analysis and tests resolve workspace imports through the base `paths` map to `src` and must pass on a clean tree; gates that consume built `lib/` output declare that dependency explicitly. Generated Host-for-Client Remote declarations are the deliberate exception: the public `typecheck`, `lint`, and `doc-typecheck` commands generate them first, while internal `*:contracts-ready` scripts assume that an invoking public command or scheduler gate already depends on the Typert contract-generation pass or the complete build. See the [Typert Remote note](../.agents/notes/implemented/architecture/2026-08-02-typert-remote-method-calls.md) for the gate-preparation contract.
 
@@ -114,10 +115,10 @@ Business services declare callable methods on the Host with `@Remote` or `@Remot
 If a relevant local check consumes built package output, build once first:
 
 ```sh
-pnpm run build
+bun run build
 ```
 
-`pnpm run hygiene` includes `publint`, which validates package entrypoints against the built `lib/*.js` files, and `verify-node-next-types`, which validates built declarations against a temporary NodeNext consumer. A fresh worktree has no bundled JS or declarations until `pnpm run build` runs; ordinary commits and pushes do not require that build unless their selected checks consume it.
+`pnpm run hygiene` includes `publint`, which validates package entrypoints against the built `lib/*.js` files, and `verify-node-next-types`, which validates built declarations against a temporary NodeNext consumer. A fresh worktree has no bundled JS or declarations until `bun run build` runs; ordinary commits and pushes do not require that build unless their selected checks consume it.
 
 ### Environment variables
 
@@ -158,14 +159,14 @@ The credential-free dsh dependency-layout and dsh/vendor pack rehearsals use the
 
 ### Daily commands
 
-The root [contributor instructions](../AGENTS.md#commands) summarize common commands, while [`package.json`](../package.json) and [scripts/run-gates.ts](../scripts/run-gates.ts) own the current script and gate inventories. Select the smallest checks that cover the changed surface. Documentation changes use `pnpm run doc-sync`; package-public behavior changes also update the owning README or JSDoc, and built-artifact checks require `pnpm run build` first.
+The root [contributor instructions](../AGENTS.md#commands) summarize common commands, while [`package.json`](../package.json) and [scripts/run-gates.ts](../scripts/run-gates.ts) own the current script and gate inventories. Select the smallest checks that cover the changed surface. Documentation changes use `pnpm run doc-sync`; package-public behavior changes also update the owning README or JSDoc, and built-artifact checks require `bun run build` first.
 
 ### Profile runs
 
 Run the repository build separately before using these source-checkout demos:
 
 ```sh
-pnpm run build
+bun run build
 ```
 
 The one-shot Headless coding agent needs `DEEPSEEK_API_KEY` in the environment or repo-root `.env`:
@@ -182,16 +183,16 @@ pnpm run demo:ptc -- "summarize this workspace"
 
 ### Application commands
 
-Web and Desktop share one command pair. `start:*` launches the artifacts of a prior `pnpm run build` or `build:artifacts`; `dev:*` runs `build:artifacts` first and then launches. Web additionally keeps client bundles rebuilt on source edits, because its Host runs from source while the browser loads built bundles:
+Web and Desktop share one command pair. `start:*` launches the artifacts of a prior `bun run build` or `build:artifacts`; `dev:*` runs `build:artifacts` first and then launches. Web additionally keeps client bundles rebuilt on source edits, because its Host runs from source while the browser loads built bundles:
 
 ```sh
-pnpm run start:web       # serve built Web artifacts through the source launcher (the same launch as pnpm dsh web)
-pnpm run dev:web         # build, serve, and rebuild Web client bundles on source edits
+bun run start:web        # serve built Web artifacts through the source launcher
+bun run dev:web          # build, serve, and rebuild Web client bundles on source edits
 pnpm run start:desktop   # launch built Desktop artifacts
 pnpm run dev:desktop     # build, then launch Desktop
 ```
 
-Arguments after a Web command reach `dsh web`, for example `pnpm run dev:web --no-open --port 3081`; `dev:web` also accepts `--skip-build` to reuse the existing artifact tree and `--no-serve` to run only the rebuild watchers beside a server started elsewhere. Both Web commands use the normal Harness home, while the Desktop commands use the isolated development home described in the [Desktop README](../apps/desktop/README.md). The root `Makefile` names the same commands as `make web`, `make dev-web`, `make desktop`, `make dev-desktop`, and `make build`; `ARGS='--no-open'` forwards options.
+Arguments after a Web command reach `dsh web`, for example `bun run dev:web -- --no-open --port 3081`; `dev:web` also accepts `--skip-build` to reuse the existing artifact tree and `--no-serve` to run only the rebuild watchers beside a server started elsewhere. Both Web commands use the normal Harness home, while the Desktop commands use the isolated development home described in the [Desktop README](../apps/desktop/README.md). The root `Makefile` names the same commands as `make web`, `make dev-web`, `make desktop`, `make dev-desktop`, and `make build`; it drives the Web pair through Bun, and `ARGS='--no-open'` forwards options.
 
 ### TODO markers
 

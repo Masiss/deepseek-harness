@@ -2,7 +2,7 @@
  * The Web development loop: build once, serve through `dsh web`, and keep every
  * browser-side artifact rebuilt on source edits, in one terminal.
  *
- * Stages, in order: `pnpm run build:artifacts` (skipped by `--skip-build`), three
+ * Stages, in order: `bun run build:artifacts` (skipped by `--skip-build`), three
  * long-lived watchers, then `dsh web` (skipped by `--no-serve`). The watchers
  * exist because the compile shell links built lib products rather than
  * sources: `tsc -b tsconfig.client.json --watch` emits `lib/types` (the tsdown
@@ -16,10 +16,10 @@
  * stat-polls the bundles it serves and broadcasts `rebuilt` frames itself, so
  * any process that rewrites `lib/client.js` files triggers reloads.
  *
- * MUST NOT run beside `pnpm run build` or `build:artifacts`: they write the same `lib/` and
+ * MUST NOT run beside `bun run build` or `build:artifacts`: they write the same `lib/` and
  * `apps/web/dist/` trees. The build stage here finishes before any watcher starts.
  *
- * Usage: `pnpm run dev:web [--skip-build] [--no-serve] [--poll[=ms]] [dsh web arguments]`.
+ * Usage: `bun run dev:web [--skip-build] [--no-serve] [--poll[=ms]] [dsh web arguments]`.
  * `--skip-build` requires the artifact tree from a prior `build` or `build:artifacts`: every
  * watcher is incremental over the previous stage's output and none of them
  * bootstraps a missing tree. `--no-serve` keeps only the watchers, for a
@@ -49,7 +49,7 @@ import {
   clientBuildProcessEnvironment,
   repositoryClientBuildEnvironment,
 } from './client-build-environment.ts'
-import { pnpmInvocation } from './pnpm-invocation.ts'
+import { bunInvocation } from './bun-command.ts'
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 
@@ -80,7 +80,7 @@ export function devWebBuildEnvironment(
 
 /** Resolved `dev-web` command line: the script's own flags plus the arguments forwarded to `dsh web`. */
 export interface DevWebArguments {
-  /** Skip the `pnpm run build:artifacts` that otherwise precedes the watchers. */
+  /** Skip the `bun run build:artifacts` that otherwise precedes the watchers. */
   readonly skipBuild: boolean
   /** Start `dsh web`; false keeps only the rebuild watchers beside an already running server. */
   readonly serve: boolean
@@ -108,7 +108,7 @@ export function parseDevWebArguments(argv: readonly string[]): DevWebArguments {
   let pollInterval: number | undefined
   const appArgs: string[] = []
   for (const arg of argv) {
-    // `pnpm run` forwards a `--` separator verbatim; it carries no meaning here.
+    // `bun run` forwards a `--` separator verbatim; it carries no meaning here.
     if (arg === '--') continue
     if (arg === '--skip-build') skipBuild = true
     else if (arg === '--no-serve') serve = false
@@ -169,7 +169,7 @@ export function discoverLibraryDirs(root = repoRoot): string[] {
 }
 
 /**
- * Start the tsdown watch build used by `pnpm run dev:web`.
+ * Start the tsdown watch build used by `bun run dev:web`.
  * @param root - repository or fixture root passed to tsdown.
  * @param pluginDirs - workspace-relative package directories to watch.
  * @param pollInterval - optional source-watcher polling interval in milliseconds.
@@ -324,7 +324,7 @@ function spawnStage(
  * @returns the build's exit code, or null when a signal ended it.
  */
 async function runBuild(): Promise<number | null> {
-  const invocation = pnpmInvocation(['run', 'build:artifacts'])
+  const invocation = bunInvocation(['run', 'build:artifacts'])
   const result = await execa(invocation.command, invocation.args, { cwd: repoRoot, stdio: 'inherit', reject: false })
   return result.exitCode ?? null
 }
@@ -337,7 +337,7 @@ if (isMain) {
     options = parseDevWebArguments(process.argv.slice(2))
   } catch (error) {
     console.error(error instanceof Error ? error.message : error)
-    console.error('dev-web: usage: pnpm run dev:web [--skip-build] [--no-serve] [--poll[=ms]] [dsh web arguments]')
+    console.error('dev-web: usage: bun run dev:web [--skip-build] [--no-serve] [--poll[=ms]] [dsh web arguments]')
     process.exit(1)
   }
 
@@ -366,7 +366,7 @@ if (isMain) {
   const buildExit = options.skipBuild ? 0 : await runBuild()
   if (shutdownRequested()) process.exit(await shutdown.promise)
   if (buildExit !== 0) {
-    console.error(`dev-web: pnpm run build:artifacts exited (code ${String(buildExit)})`)
+    console.error(`dev-web: bun run build:artifacts exited (code ${String(buildExit)})`)
     process.exit(1)
   }
 
@@ -414,9 +414,9 @@ if (isMain) {
     // working directory — `resolve.dedupe` resolves react from that root, so
     // running vite from anywhere but apps/web silently switches which react copy
     // the bundle gets.
-    spawnStage(supervisor, 'vite build --watch', 'pnpm', ['--filter', SHELL_PACKAGE, 'run', 'watch'], false)
+    spawnStage(supervisor, 'vite build --watch', 'bun', ['run', '--filter', SHELL_PACKAGE, 'watch'], false)
     // The same launch vector as the root `dsh` script, so the served Host runs
-    // from source exactly as `pnpm dsh web` would.
+    // from source exactly as `bun dsh web` would.
     if (options.serve) {
       spawnStage(supervisor, 'dsh web', process.execPath, [
         '--import', 'tsx/esm', 'apps/cli/src/bin.ts', 'web', ...options.appArgs,

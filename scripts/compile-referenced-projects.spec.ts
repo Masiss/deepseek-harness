@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, globSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, globSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
+import { bunCommand, bunInvocation } from './bun-command.ts'
 import { aggregateCheckArgs, buildHostContracts, buildLibraryArtifacts, compileReferencedProjects } from './compile-referenced-projects.ts'
 import { runCiBench } from './run-ci-bench.ts'
 import { removeFixtureSafely } from './test-fixture-cleanup.ts'
@@ -57,41 +58,63 @@ function artifacts(leaf: string): Record<string, string> {
     .map(path => [path.replaceAll('\\', '/'), readFileSync(join(output, path)).toString('base64')]))
 }
 
-function recordedCommands(root: string, failHostBundle = false): () => { args: string[]; title: string }[] {
+/** Write an executable stub named `bun`, because Bun is a native binary the build spawns directly. */
+function stubBun(root: string, failHostBundle = false): string {
   const log = join(root, 'commands.jsonl')
-  const entrypoint = join(root, 'pnpm', 'bin', 'pnpm.cjs')
-  mkdirSync(join(root, 'pnpm', 'bin'), { recursive: true })
+  const entrypoint = join(root, 'stub', 'bun')
+  mkdirSync(join(root, 'stub'), { recursive: true })
+  // The fixture declares `type: module`, and Bun's name carries no extension, so
+  // the stub directory pins the module system its CommonJS body needs.
+  writeFileSync(join(root, 'stub', 'package.json'), JSON.stringify({ type: 'commonjs' }))
   writeFileSync(entrypoint, [
+    '#!/usr/bin/env node',
     'const { appendFileSync } = require("node:fs")',
     'const args = process.argv.slice(2)',
-    `appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, title: process.env.DSH_CLIENT_TITLE }) + "\\n")`,
+    `appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, title: process.env.DSH_CLIENT_TITLE, command: process.env.DSH_STUB_COMMAND }) + "\\n")`,
     ...failHostBundle ? ['if (args.includes("host")) process.exit(7)'] : [],
   ].join('\n') + '\n')
-  vi.stubEnv('npm_execpath', entrypoint)
+  chmodSync(entrypoint, 0o755)
+  return entrypoint
+}
+
+function recordedCommands(root: string, failHostBundle = false): () => { args: string[]; title: string }[] {
+  vi.stubEnv('npm_execpath', stubBun(root, failHostBundle))
   vi.stubEnv('DSH_CLIENT_TITLE', 'Inherited Build Title')
   onTestFinished(() => { vi.unstubAllEnvs() })
-  return () => readFileSync(log, 'utf8').trim().split('\n')
+  return () => readFileSync(join(root, 'commands.jsonl'), 'utf8').trim().split('\n')
     .map(line => JSON.parse(line) as { args: string[]; title: string })
 }
 
 describe('internal artifact build order', () => {
-  it('resolves pnpm for a direct CLI without npm_execpath and preserves its environment', () => {
+  it('falls back to bun on PATH when no bun run lifecycle variable is set', () => {
+    expect(bunCommand({})).toEqual(['bun'])
+    expect(bunCommand({ npm_execpath: '/usr/lib/node_modules/npm/bin/npm-cli.js' })).toEqual(['bun'])
+  })
+
+  it('passes Bun its arguments through the resolved lifecycle variable', () => {
+    const entrypoint = join(tmpdir(), 'bun')
+    expect(bunCommand({ npm_execpath: entrypoint })).toEqual([entrypoint])
+    expect(bunInvocation(['run', 'build:web'], { npm_execpath: entrypoint })).toEqual({
+      command: entrypoint,
+      args: ['run', 'build:web'],
+    })
+  })
+
+  it('resolves bun for a direct CLI and preserves its environment', () => {
     const { root } = fixture()
-    const marker = join(root, 'direct-cli-title.txt')
     const environment: NodeJS.ProcessEnv = { ...process.env, DSH_CLIENT_TITLE: 'Direct CLI Title' }
-    delete environment.npm_execpath
+    environment.npm_execpath = stubBun(root)
+    const forwarded = ['x', process.execPath, '-e', 'void 0']
     const helper = pathToFileURL(resolve(import.meta.dirname, 'compile-referenced-projects.ts')).href
-    const code = `import { runPnpmCommand } from ${JSON.stringify(helper)}; runPnpmCommand(${JSON.stringify(root)}, ${JSON.stringify([
-      'exec', process.execPath, '-e',
-      `require('node:fs').writeFileSync(${JSON.stringify(marker)}, process.env.DSH_CLIENT_TITLE)`,
-    ])})`
+    const code = `import { runBunCommand } from ${JSON.stringify(helper)}; runBunCommand(${JSON.stringify(root)}, ${JSON.stringify(forwarded)})`
     const result = spawnSync(process.execPath, [
       '--import', import.meta.resolve('tsx/esm'),
       '--input-type=module', '-e', code,
     ], { cwd: root, env: environment, encoding: 'utf8' })
 
     expect(result.status, result.stdout + result.stderr).toBe(0)
-    expect(readFileSync(marker, 'utf8')).toBe('Direct CLI Title')
+    const recorded = readFileSync(join(root, 'commands.jsonl'), 'utf8').trim()
+    expect(JSON.parse(recorded)).toEqual({ args: forwarded, title: 'Direct CLI Title', command: undefined })
   })
 
   it.each([true, false])('preserves bundler order and the public environment with hostOnly=%s', (hostOnly) => {
@@ -101,10 +124,10 @@ describe('internal artifact build order', () => {
     buildLibraryArtifacts(root, hostOnly)
 
     const expected = [
-      ['exec', 'tsdown', '--config-loader', 'native', '--env.DSH_BUILD_FACE', 'host'],
+      ['x', 'tsdown', '--config-loader', 'native', '--env.DSH_BUILD_FACE', 'host'],
       ...hostOnly ? [] : [
-        ['--filter', '@deepseek-ai/dsh-desktop', 'run', 'bundle'],
-        ['exec', 'tsdown', '--config-loader', 'native', '--env.DSH_BUILD_FACE', 'client'],
+        ['run', '--filter', '@deepseek-ai/dsh-desktop', 'bundle'],
+        ['x', 'tsdown', '--config-loader', 'native', '--env.DSH_BUILD_FACE', 'client'],
       ],
     ]
     expect(commands()).toEqual(expected.map(args => ({ args, title: 'Inherited Build Title' })))
@@ -127,10 +150,10 @@ describe('internal artifact build order', () => {
 
     expect(commands()).toEqual([
       ['run', 'build:native-system'],
-      ['exec', 'tsdown', '--config-loader', 'native', '--env.DSH_BUILD_FACE', 'host'],
-      ['--filter', '@deepseek-ai/dsh-desktop', 'run', 'bundle'],
-      ['exec', 'tsdown', '--config-loader', 'native', '--env.DSH_BUILD_FACE', 'client'],
-      ['exec', 'tsdown', '--config-loader', 'native', '--config', 'benchmarks/tsdown.config.ts'],
+      ['x', 'tsdown', '--config-loader', 'native', '--env.DSH_BUILD_FACE', 'host'],
+      ['run', '--filter', '@deepseek-ai/dsh-desktop', 'bundle'],
+      ['x', 'tsdown', '--config-loader', 'native', '--env.DSH_BUILD_FACE', 'client'],
+      ['x', 'tsdown', '--config-loader', 'native', '--config', 'benchmarks/tsdown.config.ts'],
       ['run', 'build:web'],
       ['run', 'test:bench:built'],
     ].map(args => ({ args, title: 'Inherited Build Title' })))

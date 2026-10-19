@@ -98,7 +98,7 @@ describe('parseDevWebArguments', () => {
     expect(parseDevWebArguments(['--no-serve', '--skip-build'])).toMatchObject({ serve: false, skipBuild: true })
   })
 
-  it('ignores the separator pnpm run forwards verbatim', () => {
+  it('ignores the separator bun run forwards verbatim', () => {
     expect(parseDevWebArguments(['--', '--no-open']).appArgs).toEqual(['--no-open'])
     expect(parseDevWebArguments(['--no-serve', '--'])).toMatchObject({ serve: false, appArgs: [] })
   })

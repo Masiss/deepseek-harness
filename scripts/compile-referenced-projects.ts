@@ -9,7 +9,7 @@ import { relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import ts from 'typescript'
-import { pnpmCommand } from './release/process.ts'
+import { bunCommand } from './bun-command.ts'
 
 type CompilationMode = 'checked' | 'benchmark-emit'
 
@@ -32,15 +32,15 @@ export interface LibraryStep {
 /**
  * Run one package-manager command serially with the inherited build environment.
  * @param root - Repository root supplying the command's working directory.
- * @param args - Package-manager arguments, without shell quoting.
+ * @param args - Bun arguments, without shell quoting.
  * @throws If the command cannot start or exits unsuccessfully.
  */
-export function runPnpmCommand(root: string, args: readonly string[]): void {
-  const [command, ...prefix] = pnpmCommand()
+export function runBunCommand(root: string, args: readonly string[]): void {
+  const [command, ...prefix] = bunCommand()
   const result = spawnSync(command, [...prefix, ...args], { cwd: root, stdio: 'inherit' })
   if (result.error !== undefined) throw result.error
   if (result.status !== 0) {
-    throw new Error(`compile-referenced-projects: pnpm ${args.join(' ')} exited with ${String(result.status ?? result.signal)}`)
+    throw new Error(`compile-referenced-projects: bun ${args.join(' ')} exited with ${String(result.status ?? result.signal)}`)
   }
 }
 
@@ -146,7 +146,7 @@ function compilerStep(
 
 // Typert reads workspace packages only from source (generate-typert.ts
 // rejects build outputs), so it needs no compiled package. It runs under tsx's
-// ESM hook rather than through `pnpm exec`, whose startup would lengthen the
+// ESM hook rather than through `bun x`, whose startup would lengthen the
 // critical path before Client compilation.
 function typertStep(): LibraryStep {
   return {
@@ -159,9 +159,9 @@ function typertStep(): LibraryStep {
   }
 }
 
-function pnpmStep(id: LibraryStepId, label: string, args: readonly string[], needs: readonly LibraryStepId[]): LibraryStep {
-  const [command, ...prefix] = pnpmCommand()
-  return { id, label, displayCommand: `pnpm ${args.join(' ')}`, command, args: [...prefix, ...args], needs }
+function bunStep(id: LibraryStepId, label: string, args: readonly string[], needs: readonly LibraryStepId[]): LibraryStep {
+  const [command, ...prefix] = bunCommand()
+  return { id, label, displayCommand: `bun ${args.join(' ')}`, command, args: [...prefix, ...args], needs }
 }
 
 /**
@@ -176,14 +176,14 @@ function pnpmStep(id: LibraryStepId, label: string, args: readonly string[], nee
 export function libraryBuildSteps(root: string, faces: 'host' | 'all', mode: CompilationMode = 'checked'): LibraryStep[] {
   const host: LibraryStep[] = [
     compilerStep(root, 'host', mode, []),
-    pnpmStep('host-bundle', 'Host bundle', ['exec', 'tsdown', '--config-loader', 'native', '--env.DSH_BUILD_FACE', 'host'], ['host-src']),
+    bunStep('host-bundle', 'Host bundle', ['x', 'tsdown', '--config-loader', 'native', '--env.DSH_BUILD_FACE', 'host'], ['host-src']),
   ]
   if (faces === 'host') return host
   return [
     ...host,
-    pnpmStep('desktop-bundle', 'Desktop bundle', ['--filter', '@deepseek-ai/dsh-desktop', 'run', 'bundle'], ['host-bundle']),
+    bunStep('desktop-bundle', 'Desktop bundle', ['run', '--filter', '@deepseek-ai/dsh-desktop', 'bundle'], ['host-bundle']),
     compilerStep(root, 'client', mode, ['desktop-bundle']),
-    pnpmStep('client-bundle', 'Client bundle', ['exec', 'tsdown', '--config-loader', 'native', '--env.DSH_BUILD_FACE', 'client'], ['client-src']),
+    bunStep('client-bundle', 'Client bundle', ['x', 'tsdown', '--config-loader', 'native', '--env.DSH_BUILD_FACE', 'client'], ['client-src']),
   ]
 }
 

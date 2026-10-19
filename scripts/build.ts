@@ -4,7 +4,7 @@
  * `--scope artifacts` emits every artifact and binds the client outputs to their public environment;
  * `--scope check` type-checks only the Host and Client aggregate programs against the package
  * declarations already on disk; the default runs both step sets as one dependency graph, so the
- * aggregate checks overlap the remaining artifact steps. `--scope typecheck` (`pnpm run typecheck`)
+ * aggregate checks overlap the remaining artifact steps. `--scope typecheck` (`bun run typecheck`)
  * type-checks every package project and both aggregate programs; beside Host compilation it writes
  * the Typert declarations that Client compilation imports, without bundling.
  */
@@ -20,9 +20,9 @@ import {
   resolveClientBuildEnvironment,
   writeClientBuildRecord,
 } from './client-build-environment.ts'
+import { bunCommand } from './bun-command.ts'
 import { aggregateBuildArgs, aggregateCheckArgs, contractSteps, libraryBuildSteps } from './compile-referenced-projects.ts'
 import type { LibraryStep } from './compile-referenced-projects.ts'
-import { pnpmCommand } from './release/process.ts'
 import { defaultParallelism, describeDefaultParallelism } from './parallelism.ts'
 import { runAggregate } from './run-gates.ts'
 import type { Gate } from './run-gates.ts'
@@ -90,11 +90,11 @@ export function buildGates(
   const env = { ...environment }
   const gates: Gate[] = []
   if (scope === 'complete' || scope === 'artifacts') {
-    gates.push(pnpmGate('native', 'native addon', ['run', 'build:native-system'], [], env))
+    gates.push(bunGate('native', 'native addon', ['run', 'build:native-system'], [], env))
     for (const step of libraryBuildSteps(root, 'all')) {
       gates.push(libraryGate(step, step.id === 'host-src' ? ['native'] : step.needs, env))
     }
-    gates.push(pnpmGate('web', 'Web build', ['run', 'build:web'], ['client-bundle'], env))
+    gates.push(bunGate('web', 'Web build', ['run', 'build:web'], ['client-bundle'], env))
   }
   if (scope === 'typecheck') {
     for (const step of contractSteps(root, 'all')) gates.push(libraryGate(step, step.needs, env))
@@ -129,15 +129,15 @@ function libraryGate(step: LibraryStep, needs: readonly string[], env: Record<st
   }
 }
 
-function pnpmGate(
+function bunGate(
   id: string,
   label: string,
   args: readonly string[],
   needs: readonly string[],
   env: Record<string, string | undefined>,
 ): Gate {
-  const [command, ...prefix] = pnpmCommand()
-  return { id, label, displayCommand: `pnpm ${args.join(' ')}`, command, args: [...prefix, ...args], needs: [...needs], env }
+  const [command, ...prefix] = bunCommand()
+  return { id, label, displayCommand: `bun ${args.join(' ')}`, command, args: [...prefix, ...args], needs: [...needs], env }
 }
 
 /**

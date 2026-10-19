@@ -16,8 +16,12 @@ packages:
 
 overrides:
   'extract-zip>yauzl': '3.4.0'
-  '@deepseek-ai/cosmokit': 'link:vendor/cosmokit'
-  '@deepseek-ai/schemastery': 'link:vendor/schemastery'
+# `@deepseek-ai/cosmokit` and `@deepseek-ai/schemastery` were previously
+# redirected here with `link:vendor/*`. Both are workspace members under
+# `vendor/*` and every consumer already declares `workspace:*` or `workspace:~`,
+# so the workspace linker resolves them to the vendored source without an
+# override. The `link:` protocol is what the Bun install path cannot express, and
+# no registry package in the dependency closure depends on either name.
 
 peerDependencyRules:
   allowedVersions:
