@@ -1,0 +1,13 @@
+{
+  "name": "@deepseek-ai/dsh-desktop-tauri",
+  "description": "Tauri (Rust) desktop shell for a bundled dsh runtime",
+  "version": "0.2.1-rc.2",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build:shell": "cargo build --manifest-path src-tauri/Cargo.toml",
+    "build:release": "cargo build --release --manifest-path src-tauri/Cargo.toml",
+    "dev:host": "scripts/dev-host.sh"
+  }
+}

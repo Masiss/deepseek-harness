@@ -1,0 +1,20 @@
+[package]
+name = "dsh-desktop-tauri"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Tauri desktop shell for the DeepSeek Harness"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde_json = "1"
+
+[profile.release]
+strip = true
+lto = "thin"
+opt-level = "s"
+codegen-units = 1
+panic = "abort"

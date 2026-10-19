@@ -298,6 +298,10 @@
         "@deepseek-ai/dsh-skill": "workspace:*",
       },
     },
+    "apps/desktop-tauri": {
+      "name": "@deepseek-ai/dsh-desktop-tauri",
+      "version": "0.2.1-rc.2",
+    },
     "apps/plugin-market-generator": {
       "name": "@deepseek-ai/dsh-plugin-market-generator",
       "version": "0.2.1-rc.2",
@@ -10201,6 +10205,8 @@
     "@deepseek-ai/dsh-desktop": ["@deepseek-ai/dsh-desktop@workspace:apps/desktop"],
 
     "@deepseek-ai/dsh-desktop-host": ["@deepseek-ai/dsh-desktop-host@workspace:apps/desktop-host"],
+
+    "@deepseek-ai/dsh-desktop-tauri": ["@deepseek-ai/dsh-desktop-tauri@workspace:apps/desktop-tauri"],
 
     "@deepseek-ai/dsh-experimental-agent-team": ["@deepseek-ai/dsh-experimental-agent-team@workspace:packages/experimental/agent-team"],
 
