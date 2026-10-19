@@ -74,6 +74,15 @@ Số đo mới: shell release **10,3 MB** (tăng 1,5 MB cho tray + dialog + wind
 | Lời gọi cầu đồng thời (trước sửa) | `peak_in_flight=33`, `failed=5`, `console_errors=5` |
 | Lời gọi cầu đồng thời (sau sửa) | `peak_in_flight=1`, `failed=0`, `console_errors=0` |
 
+### Plugin manager qua shell Tauri thật (đo bằng `plugin-probe.sh`)
+
+| Phép đo | Kết quả |
+|---|---|
+| `pluginManager/listPlugins` | `ok=true`, các row `fiberPhase: "active"` — plugin đang chạy |
+| `pluginManager/listBundles` | `ok=true`, `@deepseek-ai/dsh-base` v0.2.1-rc.2 … |
+| `inspect` spec chưa cài, **có** bộ ba argv | `ERR_PNPM_FETCH_404 GET https://registry.npmmirror.com/…` — pnpm đi kèm chạy thật |
+| `inspect` spec chưa cài, **không** có bộ ba | `problem: "unknown"`, `reason: "PROBE_PNPM_SHIM_REFUSED"` — rơi về `pnpm` trên PATH |
+
 ### Session trên đĩa (đo bằng `session-read-probe.sh`)
 
 Đây là bất biến số 1 của kế hoạch: format session log và reader của nó.
@@ -340,7 +349,7 @@ Trên Linux, tauri dùng libappindicator; không có StatusNotifier host thì `b
 
 Client gọi `shortcuts.get` **một lần cho mỗi command đăng ký và không await** (`syncDefinitions`). Đo được `peak_in_flight=33` lời gọi cầu cùng lúc; Chromium (và WebKitGTK) chỉ cho ~6 kết nối mỗi host, nên 5 request chết với `ERR_INSUFFICIENT_RESOURCES` → `console_errors=5`, và phía client mỗi lần lỗi rơi vào `failRead()` (shortcut bị đánh dấu `unreadable`). Sửa bằng cách **nối tiếp** trong shim (`let queue = Promise.resolve()`), giữ nguyên thứ tự nên revision cũng nhất quán hơn. Sau khi sửa: `peak_in_flight=1`, `failed=0`, `console_errors=0`.
 
-### B22 — Shell Tauri truyền thiếu argv ⇒ `dsh plugin` bị tắt **im lặng**
+### B22 — Shell Tauri truyền thiếu argv ⇒ thao tác gói rơi về `pnpm` trên PATH
 
 `DesktopHostProcess` của Electron truyền 5 tham số vị trí:
 
@@ -349,9 +358,13 @@ argv[2] runtimeDir   argv[3] projectDir   argv[4] primaryRuntime
 argv[5] pnpm.mjs     argv[6] nodeBin
 ```
 
-`tauri.ts` đọc đúng argv[5]/argv[6] để dựng `packageManager`, nhưng `host_command()` trong `main.rs` **chỉ đẩy argv[2] và argv[3]**. Hệ quả: Host Tauri khởi động với `packageManager = undefined`, nên `dsh plugin` không cài được plugin — và nó hỏng **im lặng**, không phải lỗi to. Đây đúng điều kiện dừng số 1 của `AGENTS.md` §7.
+`tauri.ts` đọc đúng argv[5]/argv[6] để dựng `packageManager`, nhưng `host_command()` trong `main.rs` **chỉ đẩy argv[2] và argv[3]**.
 
-Chưa sửa vì ba đường dẫn kia chỉ tồn tại sau khi chạy `prepare-dsh` (M1); truyền env cho thứ chưa có chủ là suy diễn. Khi M1 chốt đường dẫn, `host_command()` phải đẩy đủ 5 tham số theo đúng thứ tự trên (argv[4] bắt buộc phải có mặt dù `tauri.ts` chưa đọc, nếu không argv[5] sẽ lệch vị trí).
+**Đính chính quan trọng:** đây *không* phải "tắt im lặng". `PluginManager` có `pnpmCommand: z.string().default('pnpm')` và dùng `profile.packageManager ?? { command: this.pnpmCommand }` (index.ts:451, 762), nên thiếu bộ ba thì Host rơi về **`pnpm` bất kỳ trên PATH**. Với app đóng gói, đó là phụ thuộc ngoài không kiểm soát được — hỏng khi máy người dùng không có pnpm, và chạy sai phiên bản khi có.
+
+Đã sửa: `host_command()` đẩy đủ 5 slot, bộ ba package-manager là all-or-nothing (thiếu một cái là lỗi to, không suy diễn). Kiểm chứng bằng shim `pnpm` từ chối trong `$PATH` — xem bảng M1.
+
+Vẫn cần cho M1: *core package set* (`DESKTOP_PACKAGE_SET_FILE`) để pnpm không kéo gói core từ registry khi cài plugin.
 
 ### B21 — Typecheck fail vẫn emit rác vào `src/`
 
@@ -383,7 +396,7 @@ Item đăng ký đủ (`Id`, `Status`, `IconName`, `Menu` trỏ tới `/org/ayat
 
 | # | Việc | Phase | Trạng thái |
 |---|---|---|---|
-| M1 | Đo `dsh` production tree thật (`prepare-dsh`) | P0 | chưa |
+| M1 | Đo `dsh` production tree thật (`prepare-dsh`) | P0 | **một nửa** — argv đã sửa và kiểm chứng; cây production (kèm core package set) chưa dựng |
 | M2 | Đo Tauri release binary (Linux) | P0 | đang chạy |
 | M3 | Đo RSS idle + cold start | P0 | **xong** (Host Node: 0,9–1,2 s; 266–268 MiB) |
 | M4 | Xác nhận `node:sqlite` trên Bun | P0 | **xong** — chạy được |

@@ -43,8 +43,19 @@ struct AppState {
 
 /// Resolve the Host command from the environment.
 ///
+/// The positional contract is shared with the Electron shell: runtime
+/// directory, project directory, primary runtime, pnpm entry, Node launcher
+/// directory. The package manager occupies the last two slots, so the primary
+/// runtime slot stays positional even though this entry does not read it.
+///
+/// The runtime and project directories are optional together — a development
+/// shell may run the Host with none. The package-manager triple is
+/// all-or-nothing: a partial triple would silently leave `dsh plugin` unable to
+/// install anything, which is the failure this contract exists to prevent.
+///
 /// @returns the executable and its positional arguments.
-fn host_command() -> (String, Vec<String>) {
+/// @throws when the package-manager variables are only partly set.
+fn host_command() -> Result<(String, Vec<String>), String> {
     let binary = std::env::var("DSH_DESKTOP_HOST_BIN").unwrap_or_else(|_| "dsh-host".to_owned());
     let mut args = Vec::new();
     if let (Ok(runtime), Ok(project)) = (
@@ -54,7 +65,25 @@ fn host_command() -> (String, Vec<String>) {
         args.push(runtime);
         args.push(project);
     }
-    (binary, args)
+
+    let primary = std::env::var("DSH_DESKTOP_PRIMARY_RUNTIME").ok();
+    let pnpm = std::env::var("DSH_DESKTOP_PNPM_ENTRY").ok();
+    let node_bin = std::env::var("DSH_DESKTOP_NODE_BIN").ok();
+    match (primary, pnpm, node_bin) {
+        (None, None, None) => {}
+        (Some(primary), Some(pnpm), Some(node_bin)) => {
+            args.push(primary);
+            args.push(pnpm);
+            args.push(node_bin);
+        }
+        _ => {
+            return Err(
+                "set DSH_DESKTOP_PRIMARY_RUNTIME, DSH_DESKTOP_PNPM_ENTRY and DSH_DESKTOP_NODE_BIN together or not at all"
+                    .to_owned(),
+            )
+        }
+    }
+    Ok((binary, args))
 }
 
 /// Reveal and focus the main window.
@@ -378,7 +407,7 @@ fn main() {
             command => run_menu_command(app, command),
         })
         .setup(|app| {
-            let (binary, args) = host_command();
+            let (binary, args) = host_command()?;
             let (host, url) = HostClient::spawn(&binary, &args)?;
             app.manage(AppState { host });
 
