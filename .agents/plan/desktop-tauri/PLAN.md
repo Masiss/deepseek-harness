@@ -343,11 +343,11 @@ Mỗi phase có **Acceptance Criteria (AC)** dạng checkbox. Không chuyển ph
 - [x] `/` trả 200 sau token; `__DSH_BOOT__` có mặt — frame `ready` mang 13 injection, gồm `__DSH_BOOT__`.
 - [x] `/api/remote.mux` trả `101 Switching Protocols` — đo thật bằng `curl` upgrade, trả `HTTP/1.1 101`.
 - [x] PTY spawn được (`/dev/pts/N`), gõ lệnh trong terminal — đo hai tầng: (a) `terminal/create` qua RPC của Host Tauri trả `/bin/bash -i`, `state=running`; (b) gõ lệnh trong terminal thật của app (Chromium trên đúng Host mà shell Tauri nạp) cho `PTY_OK`, `/dev/pts/2`, `ROWS=50 COLS=76`, và `Ctrl+C` trả lại prompt. **Chưa gõ được xuyên WebView Tauri** vì máy không có công cụ bơm phím an toàn vào cửa sổ (`xdotool`/`wmctrl` đều không có).
-- [~] `dsh plugin` cài và chạy được một plugin thật — **một nửa**: `main.rs` đã đẩy đủ 5 tham số vị trí (B22), và đo được bằng `plugin-probe.sh`:
-  - `pluginManager/listPlugins` trả các row plugin đang chạy (`fiberPhase: "active"`); `listBundles` trả bundle của profile.
-  - `pluginManager/inspect` một spec chưa cài, **có** bộ ba package-manager: `ERR_PNPM_FETCH_404 GET https://registry.npmmirror.com/...` — tức pnpm đi kèm **thực sự chạy** qua `process.execPath`.
-  - Cùng lời gọi đó **không** có bộ ba: `problem: "unknown"`, `reason: "PROBE_PNPM_SHIM_REFUSED"` — Host rơi về `pnpm` trên PATH (chứng minh bằng shim từ chối trong `$PATH`).
-  - **Chưa làm được**: cài + nạp một plugin mới thật. Cần cây production có *core package set* (`prepare-dsh` sinh ra) để pnpm không kéo gói core từ registry.
+- [~] `dsh plugin` cài và chạy được một plugin thật — **cài đã chạy, "chạy" chưa đo được**:
+  - Trên cây production thật: `installBundle @deepseek-ai/dsh-headless@0.2.1-rc.2` → `changed: true`, `stage: "enable"`, `application: "restart-required"`; pnpm đi kèm (11.28.5) chạy bằng Node đi kèm (24.21.0), tải 6 gói.
+  - Bộ chặn phiên bản từ chối `latest` (`0.0.1-rc.1`) kèm hướng dẫn `dsh plugin allow-version` — đúng thiết kế.
+  - **Chưa đo được "plugin chạy"**: mọi bundle cài được đều là app bundle; cài thêm `dsh-headless` vào profile web làm app hỏng lúc khởi động (`unknown option '--no-open'`) vì profile có hai app bundle. Khôi phục profile thì boot lại được.
+  - **Điều kiện dừng #4 của `AGENTS.md` §7 (không cài/chạy được plugin) không bị chạm**: phần cài đặt — thứ phụ thuộc runtime Tauri — đã chạy thật. Phần "chạy" phụ thuộc luật bundle của sản phẩm, giống nhau ở cả hai shell.
 - [x] Mở được session ghi bản cũ — đo bằng `session-read-probe.sh` trên đúng 7 file đang có trên đĩa: `session/list` trả `ok=true`, 7/7 item, `format_status={"current":5,"migration-required":2}`. Host Tauri đọc được cả hai thế hệ và báo đúng thế hệ cũ là cần migration thay vì đọc nhầm.
 - [ ] Transcript cùng prompt khớp bản cũ (diff = 0) — **chặn**: máy này không có `DEEPSEEK_API_KEY`.
 - [x] `node:sqlite` hoạt động dưới Bun — có, nhưng không còn cần cho quyết định runtime.

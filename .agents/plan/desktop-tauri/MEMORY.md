@@ -74,6 +74,59 @@ Số đo mới: shell release **10,3 MB** (tăng 1,5 MB cho tray + dialog + wind
 | Lời gọi cầu đồng thời (trước sửa) | `peak_in_flight=33`, `failed=5`, `console_errors=5` |
 | Lời gọi cầu đồng thời (sau sửa) | `peak_in_flight=1`, `failed=0`, `console_errors=0` |
 
+### Làn đóng gói Linux (M1) — đã dựng và đo
+
+Bốn script thuộc fork, không sửa `apps/desktop`:
+
+| Script | Việc |
+|---|---|
+| `apps/desktop-tauri/scripts/pack-linux.sh` | `build:official` rồi `release:pack` cho `dsh`/`vendor`, đóng thêm tarball `@deepseek-ai/dsh-desktop-host`, và `node-addon-system` cho Landlock |
+| `apps/desktop-tauri/scripts/prepare-linux-runtime.ts` | Chọn package set, cài runtime project bằng pnpm của Node đi kèm, đóng băng cây `dsh/`, tạo profile, phát launcher + `versions.json` |
+| `apps/desktop-tauri/scripts/linux-tree-probe.sh` | Chạy shell Tauri thật trên cây đó rồi gọi RPC |
+| `apps/desktop-tauri/scripts/measure-linux-tree.sh` | Đo cold start + RSS của Host đã đóng gói |
+
+Dùng lại phần trung lập của upstream: `scripts/primary-runtime/prepare.ts` (đã khoá `linux-x64`), `release:pack`, `prepareDesktopPackageSet`, `createRuntimeProjectMetadata`, `prepareRuntimePatches`, `desktopRuntimeFileExclusion`, `createPluginProfile`.
+
+```
+apps/desktop-tauri/.build/linux-x64/
+  bin/desktop-host        launcher shell spawn (chạy lib/tauri.js bằng Node đi kèm)
+  runtime/primary-runtime node 24.21.0 + pnpm 11.28.5 + Python 3.12.14   401 MB
+  runtime/bin/node        symlink tới Node đi kèm
+  dsh/                    runtimeDir: node_modules của dsh                414 MB
+  project/                projectDir: profile (rỗng, 12 KB)
+```
+
+| Phép đo | Kết quả |
+|---|---|
+| Node đi kèm | `v24.21.0`, `dependencies/node/bin/node` = 126.595.440 B (120,7 MiB) |
+| pnpm đi kèm | chạy bằng chính Node đó, `11.28.5` |
+| Cold start Host (spawn → frame `ready`), 3 lần | 1265 / 1272 / 1309 ms |
+| RSS idle của Host | 316552 / 325212 / 322924 KiB (309–318 MiB) |
+| Boot shell Tauri thật trên cây này | `ready=OK`, `pluginManager/listBundles` trả bundle của profile |
+
+### `dsh plugin` trên cây production — cài đã chạy, "chạy được" vướng luật bundle
+
+Đo qua shell Tauri thật với `installBundle`:
+
+| Lời gọi | Kết quả |
+|---|---|
+| `@deepseek-ai/dsh-headless` (dist-tag `latest` = `0.0.1-rc.1`) | `application: "failed"` — bộ chặn phiên bản từ chối: *"is incompatible with dsh 0.2.1-rc.2 … grant the exact-version exemption … with `dsh plugin allow-version`"*. Đúng thiết kế, thông điệp có hành động. |
+| `@deepseek-ai/dsh-headless@0.2.1-rc.2` | `changed: true`, `stage: "enable"`, `enabled: true`, `application: "restart-required"`; pnpm đi kèm tải 6 gói, thêm 8 package; `project/package.json` ghi dependency và thêm bundle vào `dsh.profile.bundles` |
+
+**Nhưng lần khởi động sau đó thì app hỏng** — và đây là phát hiện, không phải lỗi của làn đóng gói:
+
+```
+error: unknown option '--no-open'
+CordisError: cannot create effect on inactive context
+  at installDesktopUpdateTaskControl (.../dsh-desktop-host/lib/tauri.js:462)
+```
+
+Profile khi đó liệt kê **hai bundle ứng dụng** (`dsh-web-app` + `dsh-headless`); `dsh-headless` là một app bundle thay thế bề mặt CLI, nên `--no-open` của web app không còn tồn tại và cây plugin không mount được. Khôi phục `project/` về trạng thái trước thì app boot lại bình thường (đã kiểm).
+
+Hệ quả: **mọi bundle cài được đều là bundle ứng dụng** (`dsh-base`, `dsh-acp-app`, `dsh-headless`, `dsh-sdk-app`, `dsh-sdk-minimal`, `dsh-web-app`); `installBundle` từ chối plugin thường (`@deepseek-ai/dsh-tool-lsp` → `not-a-bundle`). Nên "cài một plugin thật rồi thấy nó chạy" chưa đo được trên bề mặt này: một feature-bundle bên thứ ba mới là phép thử đúng, và nó chưa có để cài.
+
+Ghi kèm một lỗ hổng cho P4: shell Tauri **chưa có đường tạo/khôi phục profile**. Electron làm việc đó ở `DesktopProjectManager.applyRelease` (tạo profile, `migrateProfileSettings`, `removeLinkProjections`) và `disableAllPlugins` khi khởi động hỏng; làn Hiện tại chỉ dựng profile lúc đóng gói.
+
 ### B24 — Không có làn đóng gói Linux: `prepare-dsh` bất khả thi trên Linux
 
 Điều kiện M1 ("chạy `prepare-dsh`, đo cây production thật") **không thực hiện được** trên Linux, vì hai lý do độc lập:
@@ -417,13 +470,13 @@ Item đăng ký đủ (`Id`, `Status`, `IconName`, `Menu` trỏ tới `/org/ayat
 
 | # | Việc | Phase | Trạng thái |
 |---|---|---|---|
-| M1 | Đo `dsh` production tree thật (`prepare-dsh`) | P0 | **chặn bởi thiết kế** — `prepare-dsh` không chạy được trên Linux (B24); argv đã sửa và kiểm chứng |
+| M1 | Đo `dsh` production tree thật (`prepare-dsh`) | P0 | **xong, qua làn fork** — `prepare-dsh` không chạy được trên Linux (B24) nên đã dựng làn riêng dưới `apps/desktop-tauri/scripts/` |
 | M2 | Đo Tauri release binary (Linux) | P0 | đang chạy |
 | M3 | Đo RSS idle + cold start | P0 | **xong** (Host Node: 0,9–1,2 s; 266–268 MiB) |
 | M4 | Xác nhận `node:sqlite` trên Bun | P0 | **xong** — chạy được |
 | M5 | Chạy `dsh plugin` + load plugin trong compiled binary | P0 | **bỏ** — Bun bị bác (`B8`) |
 | M6 | So sánh DACL/token provider Rust vs koffi (Windows) | P5-win32 | chưa |
-| M7 | Đo lại cold start/RSS với Node 24.21 đóng gói | P1 | chưa |
+| M7 | Đo lại cold start/RSS với Node 24.21 đóng gói | P1 | **xong** — 1,27–1,31 s; 309–318 MiB (cây production thật) |
 | M8 | Đo RSS + cold start của shell Tauri có webview | P0 | chưa |
 
 ## Câu hỏi mở
