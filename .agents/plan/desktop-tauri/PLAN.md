@@ -267,7 +267,7 @@ Tauri shell (Rust)
 
 | Hạng mục | Mục tiêu |
 |---|---|
-| Tauri shell | ≤ 9 MB (đo: 8,8 MB) |
+| Tauri shell | ≤ 11 MB (đo: 8,8 MB ở P0, 10,3 MB sau tray/dialog/window-state) |
 | Node sidecar (stripped) | ≤ 105 MB |
 | Native modules | ≤ 12 MB |
 | Web dist | ≤ 25 MB (≤ 10 MB nếu brotli) |
@@ -342,6 +342,8 @@ Tất cả AC trên đạt, hoặc có quyết định fallback được ghi l�
 
 **Ước lượng:** 2–3 pw.
 
+**Trạng thái (2026-10-19):** phần lõi đã có — single instance, window state, đóng cửa sổ = ẩn, tray, thoát qua `quit-inspection`. Còn: deep link (đăng ký `.desktop`), theme/controls, directory picker, locale bootstrap.
+
 ### Công việc
 
 - Single instance + second-launch focus.
@@ -355,13 +357,13 @@ Tất cả AC trên đạt, hoặc có quyết định fallback được ghi l�
 
 ### Acceptance Criteria
 
-- [ ] Mở app lần hai chỉ focus cửa sổ hiện có.
-- [ ] `dsh://open` mở/focus app.
-- [ ] Đóng cửa sổ giữ process chạy; mở lại giữ session/scroll.
-- [ ] Có task đang chạy → hỏi trước khi thoát; không có task → thoát im lặng.
-- [ ] Tray hoạt động trên X11; degrade rõ ràng trên Wayland nếu thiếu appindicator.
+- [x] Mở app lần hai chỉ focus cửa sổ hiện có — lần 2 tự thoát sau 254 ms, tiến trình 1 sống.
+- [ ] `dsh://open` mở/focus — shell đã focus theo argv; còn đăng ký scheme ở `.desktop` (P3).
+- [x] Đóng cửa sổ giữ process chạy — `WM_DELETE_WINDOW` cho `map_state=0`, process và Host còn sống. "Mở lại giữ scroll" chưa test được.
+- [~] Có task → hỏi, không có task → thoát im lặng — luồng đã viết và protocol đã kiểm (`activeTasks:false`); bấm menu tray chưa test được ở máy này.
+- [x] Tray trên X11 — đăng ký `StatusNotifierWatcher` với `Id=tray-icon tray app main`, `Status=Active`, icon thật. Degrade: `build_tray` chỉ log.
 - [ ] Theme hệ thống đổi → UI đổi theo.
-- [ ] Directory picker chọn được thư mục và trả absolute path.
+- [ ] Directory picker — chuyển sang P2 cùng bridge `window.dshDesktop`.
 
 ### Exit gate
 

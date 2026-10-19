@@ -6,7 +6,7 @@ Bộ nhớ dài hạn của nhánh desktop. Cập nhật file này khi có quy�
 
 | Mục | Giá trị |
 |---|---|
-| Giai đoạn | **P0 đang làm — đã có bằng chứng kiến trúc, đã bác D2** |
+| Giai đoạn | **P1 đang làm — P0 xong (bác D2), P1 phần shell essentials đã có** |
 | Nhánh | `chore/web-bun-migration` (đã push lên `fork`) |
 | Remote `origin` | `deepseek-ai/deepseek-harness` (upstream) |
 | Remote `fork` | `Masiss/deepseek-harness` |
@@ -39,6 +39,24 @@ Còn lại của P0: PTY, `dsh plugin`, mở session cũ, transcript diff = 0, M
 
 **Chặn:** AC "transcript diff = 0" không chạy được ở máy này — không có `DEEPSEEK_API_KEY` (không có `.env`, env trống). Cần key hoặc chạy trên CI có key.
 
+## P1 — kết quả đã có (2026-10-19)
+
+Đã implement trong `apps/desktop-tauri/src-tauri/`:
+
+| Việc | Trạng thái | Bằng chứng |
+|---|---|---|
+| `host.rs` — supervisor NDJSON + request/response theo `requestId` | xong | `cargo test` 1/1; probe trả `activeTasks:false` |
+| Single instance → focus cửa sổ cũ | **xong** | lần chạy 2 tự thoát sau **254 ms**, tiến trình 1 sống, Host vẫn phục vụ |
+| Window state (size/position/maximized) | xong | plugin `tauri-plugin-window-state`; file ghi lúc thoát sạch (chưa test được) |
+| Đóng cửa sổ = ẩn | **xong** | gửi `WM_DELETE_WINDOW`: `map_state=0`, tiến trình sống, 14 kết nối Host còn nguyên |
+| Tray + menu Show/Quit | **xong** | đăng ký với StatusNotifierWatcher: `Id=tray-icon tray app main`, `Status=Active`, icon `/run/user/1000/tray-icon/tray-icon-main-0.png` |
+| Thoát hỏi khi có task (`quit-inspection`) | xong (mã) | response `{"type":"quit-inspection","requestId":1,"activeTasks":false}` |
+| Degrade khi không có tray | xong | `build_tray` chỉ log, không làm chết app |
+
+Số đo mới: shell release **10,3 MB** (tăng 1,5 MB cho tray + dialog + window-state + single-instance).
+
+**Chưa test được ở máy này (cần phiên desktop thật):** bấm menu tray; menu DBusMenu của ayatana không expose `com.canonical.dbusmenu` cho client ngoài nên không click được bằng `gdbus`; đóng app sạch để kiểm tra file window-state; deep link `dsh://open` (cần đăng ký `.desktop`).
+
 ### Đầu dò dùng lại được
 
 | Đường dẫn | Việc |
@@ -46,6 +64,8 @@ Còn lại của P0: PTY, `dsh plugin`, mở session cũ, transcript diff = 0, M
 | `.agents/plan/desktop-tauri/probes/measure-host.mjs` | Đo cold start → `ready`, RSS, shutdown |
 | `.agents/plan/desktop-tauri/probes/headless-probe.sh` | Boot headless, kiểm tra 401/303/200, `__DSH_BOOT__`, mux 101 |
 | `.agents/plan/desktop-tauri/probes/render.mjs` | Playwright headless: render UI, FCP, console error |
+| `.agents/plan/desktop-tauri/probes/shell-probe.sh` | Single instance + cửa sổ + host sống |
+| `.agents/plan/desktop-tauri/probes/quit-flow-probe.sh` | Thử bấm menu tray qua DBusMenu (chưa click được) |
 
 `render.mjs` cần chạy trong `apps/web` (nơi có `playwright`):
 
@@ -80,6 +100,8 @@ DSH_DESKTOP_PROJECT_DIR=$HOME/.dsh/profiles/web \
 | D8 | Office + Python tách thành component tải theo nhu cầu |
 | D9 | Giữ policy engine updater, chỉ thay driver cài đặt |
 | D10 | "Loại bỏ package Windows" = port lớp koffi sang Rust, **không xoá tính năng** |
+| D11 | Shell P1: single-instance, window-state, **đóng cửa sổ = ẩn** (process + Host sống tiếp), tray, thoát qua `quit-inspection` |
+| D12 | Thoát: Host không trả lời ⇒ coi như **có** task đang chạy và hỏi, không thoát im lặng |
 
 ## Số đo thật
 
@@ -120,6 +142,9 @@ Kết luận: **Bun runtime 67 MB là sàn**. Cờ compile của Bun không gi�
 | Webview → host | **4 kết nối ESTAB** | `WebKitNetworkProcess` → `127.0.0.1:<port>` |
 | `bun build --compile` host (L1, không Office) | 70 MB | Chạy được tới profile load rồi chết vì addon V8 |
 | Host built `lib/tauri.js` → `ready` | 1,0 s / 252 MiB | Xác nhận đường đóng gói thật |
+| Shell P1 release (tray + dialog + window-state) | **10,3 MB** | 10.300.920 byte |
+| Lần chạy thứ hai (single instance) | thoát sau **254 ms** | Tiến trình 1 vẫn sống |
+| `WM_DELETE_WINDOW` → ẩn cửa sổ | `map_state=0`, process sống | Host còn 14 kết nối |
 
 Các số đo trên là với **Node 26.8.2 của máy dev**, chưa phải Node 24.21 đóng gói. Đo lại ở P1.
 
@@ -229,6 +254,24 @@ Entry này **phải nằm trong package `apps/desktop-host`** (không phải `ap
 ### B14 — Cửa sổ Tauri chỉ hiện sau khi Host `ready`
 
 `setup()` đọc frame `ready` đồng bộ rồi mới tạo window, nên app không có cửa sổ trong ~1–2 s đầu (và lâu hơn nếu profile chậm). P1 phải tạo cửa sổ splash trước, rồi điều hướng sang URL Host khi nhận `ready`.
+
+### B16 — Tiến trình cũ còn sống làm mọi lần chạy sau "không có Host"
+
+Single instance khiến lần chạy thứ hai thoát ngay. Nếu một tiến trình từ lần thí nghiệm trước còn sống (ví dụ bị `kill` không ăn), mọi lần chạy mới sẽ **im lặng thoát** và probe báo `host_port=none`. Luôn dọn trước khi đo:
+
+```sh
+ps -eo pid,args --no-headers | grep -F "target/release/dsh-desktop-tauri" | grep -v grep | awk '{print $1}' | xargs -r kill -9
+```
+
+Đừng dùng `pkill -f "release/dsh-desktop-tauri"` trong chính lệnh đang chạy — mẫu đó khớp cả dòng lệnh của shell và tự giết mình.
+
+### B17 — Đo "đóng cửa sổ" cần `GDK_BACKEND=x11`
+
+Phiên là Wayland, nên cửa sổ GTK không phải cửa sổ X11. Ép `GDK_BACKEND=x11` rồi dùng `XSendEvent` với `WM_DELETE_WINDOW` mới đo được `map_state` (2 = hiện, 0 = ẩn).
+
+### B18 — Menu tray ayatana không click được bằng `gdbus`
+
+Item đăng ký đủ (`Id`, `Status`, `IconName`, `Menu` trỏ tới `/org/ayatana/NotificationItem/tray_icon_tray_app_main/Menu`), nhưng object đó chỉ expose `Properties`/`Introspectable`/`Peer` — không có `com.canonical.dbusmenu`. Muốn test bấm menu phải làm tay trên phiên desktop thật.
 
 ### B15 — Không chụp được cửa sổ Tauri bằng `import` trên phiên Wayland
 
