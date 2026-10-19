@@ -826,6 +826,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/skill/skill
 
+  apps/desktop-tauri: {}
+
   apps/plugin-market-generator:
     dependencies:
       '@deepseek-ai/dsh-plugin-market-index':
