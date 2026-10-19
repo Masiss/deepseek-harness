@@ -154,6 +154,8 @@ describe('desktop bridge', () => {
     expect(row.text).toContain('globalThis.dshDesktop')
     expect(row.text).toContain('protocolVersion: 1')
     expect(row.text).toContain('dataset.platform = "linux"')
+    // Reads arrive unawaited; the shim must keep them to one connection at a time.
+    expect(row.text).toContain('let queue = Promise.resolve()')
     expect(row.text).not.toContain('</script')
   })
 

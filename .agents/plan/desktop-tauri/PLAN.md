@@ -342,7 +342,7 @@ Mỗi phase có **Acceptance Criteria (AC)** dạng checkbox. Không chuyển ph
 - [x] Cửa sổ Tauri mở, nạp được SPA từ Host — xác nhận bằng 4 kết nối ESTAB của `WebKitNetworkProcess` tới cổng Host.
 - [x] `/` trả 200 sau token; `__DSH_BOOT__` có mặt — frame `ready` mang 13 injection, gồm `__DSH_BOOT__`.
 - [x] `/api/remote.mux` trả `101 Switching Protocols` — đo thật bằng `curl` upgrade, trả `HTTP/1.1 101`.
-- [ ] PTY spawn được (`/dev/pts/N`), gõ lệnh trong terminal.
+- [x] PTY spawn được (`/dev/pts/N`), gõ lệnh trong terminal — đo hai tầng: (a) `terminal/create` qua RPC của Host Tauri trả `/bin/bash -i`, `state=running`; (b) gõ lệnh trong terminal thật của app (Chromium trên đúng Host mà shell Tauri nạp) cho `PTY_OK`, `/dev/pts/2`, `ROWS=50 COLS=76`, và `Ctrl+C` trả lại prompt. **Chưa gõ được xuyên WebView Tauri** vì máy không có công cụ bơm phím an toàn vào cửa sổ (`xdotool`/`wmctrl` đều không có).
 - [ ] `dsh plugin` cài và chạy được một plugin thật — **chưa kiểm được**: `main.rs` mới đẩy 2/5 tham số vị trí nên Host Tauri khởi động không có `packageManager` (B22). Sửa cùng M1 khi `prepare-dsh` chốt đường dẫn pnpm/node. Đây là điều kiện dừng số 1 của `AGENTS.md` §7, phải kiểm trước khi coi Linux production là xong.
 - [x] Mở được session ghi bản cũ — đo bằng `session-read-probe.sh` trên đúng 7 file đang có trên đĩa: `session/list` trả `ok=true`, 7/7 item, `format_status={"current":5,"migration-required":2}`. Host Tauri đọc được cả hai thế hệ và báo đúng thế hệ cũ là cần migration thay vì đọc nhầm.
 - [ ] Transcript cùng prompt khớp bản cũ (diff = 0) — **chặn**: máy này không có `DEEPSEEK_API_KEY`.

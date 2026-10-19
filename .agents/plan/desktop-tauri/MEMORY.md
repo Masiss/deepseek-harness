@@ -71,6 +71,8 @@ Số đo mới: shell release **10,3 MB** (tăng 1,5 MB cho tray + dialog + wind
 | Client có **thật sự** dùng cầu | 33 lời gọi `shortcuts-get` + 2 `updates-status` **do trang tự phát** (runtime desktop, không phải localStorage) |
 | Lỗi console / page | 0 / 0 |
 | App Tauri thật (release + WebView) | render bình thường, 10 kết nối Host, menu Application/Edit |
+| Lời gọi cầu đồng thời (trước sửa) | `peak_in_flight=33`, `failed=5`, `console_errors=5` |
+| Lời gọi cầu đồng thời (sau sửa) | `peak_in_flight=1`, `failed=0`, `console_errors=0` |
 
 ### Session trên đĩa (đo bằng `session-read-probe.sh`)
 
@@ -83,6 +85,17 @@ Số đo mới: shell release **10,3 MB** (tăng 1,5 MB cho tray + dialog + wind
 | `formatStatus` | `{"current": 5, "migration-required": 2}` |
 
 Host đọc được cả hai thế hệ và báo thế hệ cũ là `migration-required` thay vì đọc nhầm — đúng chính sách released-session-format.
+
+### PTY (đo bằng `pty-probe.sh` và `terminal-page-probe.sh`)
+
+| Phép đo | Kết quả |
+|---|---|
+| `terminal/list` | `ok=true, []` — controller có mặt trong profile desktop |
+| `terminal/environment` | `cwd=/home/masis/deepseek-harness`, `maxCols=500`, `maxRows=200`, `scrollback=1000` |
+| `terminal/create` | `{"shell":{"path":"/bin/bash","args":["-i"]},"state":"running"}` |
+| Con của Host | `/bin/bash --rcfile /tmp/dsh-shell-XXXX/bashrc -i` |
+| Gõ trong terminal của app | `PTY_OK`, `/dev/pts/2`, `ROWS=50 COLS=76` — tức resize đúng theo cỡ pane |
+| Tín hiệu | `sleep 30` → `Ctrl+C` → `^C` + prompt trở lại → `echo AFTER_SIGNAL` chạy |
 
 ### Ba đường đóng (đo bằng `close-paths-probe.sh`)
 
@@ -160,6 +173,7 @@ DSH_DESKTOP_PROJECT_DIR=$HOME/.dsh/profiles/web \
 | D19 | `data-platform` do chính shim đặt (thay `markDocumentPlatform` của preload Electron) |
 | D20 | Directory picker **không cần Tauri dialog**: `directory-picker-auto` trong web bundle đã tự chọn chooser native của Host |
 | D21 | Product analytics đã cổng sẵn ở client bằng `'dshDesktop' in globalThis`; cầu của ta thoả cổng, không cần thêm gì |
+| D23 | Shim của cầu **nối tiếp** mọi lời gọi (một request một lúc): client đọc shortcut một lần cho mỗi command đăng ký, không await |
 | D22 | Welcome/onboarding v1 = **không tới được**: cửa sổ welcome là tài liệu native riêng cần copy của `locale.ts` (TS) và luồng đăng nhập Platform. Không chép choreography `hasApiKey` của `welcome-backend.ts` sang Host (sẽ là nhà thứ hai) |
 
 ## Số đo thật
@@ -321,6 +335,10 @@ Entry này **phải nằm trong package `apps/desktop-host`** (không phải `ap
 ### B20 — `TrayIconBuilder::build()` trả Ok kể cả khi không ai render icon
 
 Trên Linux, tauri dùng libappindicator; không có StatusNotifier host thì `build()` vẫn Ok nhưng icon vô hình. Phải hỏi session bus (`NameHasOwner("org.kde.StatusNotifierWatcher")`) mới biết chắc — nếu tin vào `build()` thì app sẽ ẩn cửa sổ mà người dùng không có lối về.
+
+### B23 — Đọc cầu đồng thời làm cạn ngân sách kết nối của trình duyệt
+
+Client gọi `shortcuts.get` **một lần cho mỗi command đăng ký và không await** (`syncDefinitions`). Đo được `peak_in_flight=33` lời gọi cầu cùng lúc; Chromium (và WebKitGTK) chỉ cho ~6 kết nối mỗi host, nên 5 request chết với `ERR_INSUFFICIENT_RESOURCES` → `console_errors=5`, và phía client mỗi lần lỗi rơi vào `failRead()` (shortcut bị đánh dấu `unreadable`). Sửa bằng cách **nối tiếp** trong shim (`let queue = Promise.resolve()`), giữ nguyên thứ tự nên revision cũng nhất quán hơn. Sau khi sửa: `peak_in_flight=1`, `failed=0`, `console_errors=0`.
 
 ### B22 — Shell Tauri truyền thiếu argv ⇒ `dsh plugin` bị tắt **im lặng**
 

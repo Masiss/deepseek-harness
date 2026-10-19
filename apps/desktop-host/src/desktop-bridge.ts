@@ -269,15 +269,24 @@ function collect(fields: string[], name: string, read: () => string | undefined)
 function renderShim(platform: ShortcutPlatform): string {
   return `(() => {
   const base = ${JSON.stringify(BRIDGE_PATH)}
-  const post = async (method, body) => {
-    const response = await fetch(base + '/' + method, {
+  // The client reads the shortcut document once per command registration without
+  // awaiting, so a request per call would open one connection per read and
+  // exhaust the host's connection budget. One request at a time keeps the
+  // replies ordered — which the revision checks want anyway — and stays inside it.
+  let queue = Promise.resolve()
+  const post = (method, body) => {
+    const send = () => fetch(base + '/' + method, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body === undefined ? null : body),
       credentials: 'same-origin',
+    }).then((response) => {
+      if (!response.ok) throw new Error('desktop bridge ' + method + ' failed: ' + String(response.status))
+      return response.status === 204 ? undefined : response.json()
     })
-    if (!response.ok) throw new Error('desktop bridge ' + method + ' failed: ' + String(response.status))
-    return response.status === 204 ? undefined : await response.json()
+    const reply = queue.then(send, send)
+    queue = reply.then(() => undefined, () => undefined)
+    return reply
   }
   const never = () => () => {}
   globalThis.dshDesktop = {
