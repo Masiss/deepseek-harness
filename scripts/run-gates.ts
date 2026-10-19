@@ -13,7 +13,8 @@ import { CLIENT_BUILD_PROFILE_SELECTOR } from './client-build-environment.ts'
 import { COVERAGE_EXEMPT_ENV, coverageExemptHeavySuites } from './coverage-exempt.ts'
 import { COVERAGE_PARTITIONS_ENV, parseCoveragePartitionCount } from './coverage-partitions.ts'
 import { LOCAL_TEST_PARALLELISM_CAP, defaultParallelism, describeDefaultParallelism } from './parallelism.ts'
-import { pnpmInvocation } from './pnpm-invocation.ts'
+import { bunInvocation } from './bun-command.ts'
+import { pnpmCommand } from './release/process.ts'
 
 /** A named aggregate exposed by the gate runner. */
 export type Mode =
@@ -221,7 +222,7 @@ export function ciWorkerEnvironment(
   // reads the same variables (run-gates.spec.ts builds coverage gates from
   // DSH_COVERAGE_PARTITIONS; the oxlint contract spawns run-oxlint, which
   // reads DSH_OXLINT_THREADS), so the aggregate leaves the environment as
-  // `pnpm run test` finds it.
+  // `bun run test` finds it.
   if (!mode.startsWith('ci-') || mode === 'ci-unit') return {}
   const budget = defaultParallelism(env, cpus)
   const testBudget = defaultParallelism(env, cpus, LOCAL_TEST_PARALLELISM_CAP)
@@ -256,30 +257,30 @@ function concurrencyFromEnv(name: string, fallback: number): number {
   return parsed
 }
 
-function pnpmScript(id: string, script: string, options: Partial<Gate> = {}): Gate {
+function bunScript(id: string, script: string, options: Partial<Gate> = {}): Gate {
   return {
     id,
     label: options.label ?? script,
-    displayCommand: `pnpm run ${script}`,
-    ...pnpmInvocation(['run', script]),
+    displayCommand: `bun run ${script}`,
+    ...bunInvocation(['run', script]),
     ...options,
   }
 }
 
 /** Build official client artifacts inside a CI aggregate without changing sibling gate environments. */
 function ciBuildGate(id = 'build', options: Partial<Gate> = {}): Gate {
-  return pnpmScript(id, 'build', {
+  return bunScript(id, 'build', {
     ...options,
     env: { ...options.env, [CLIENT_BUILD_PROFILE_SELECTOR]: 'official' },
   })
 }
 
-function pnpmExec(id: string, args: string[], options: Partial<Gate> = {}): Gate {
+function bunExec(id: string, args: string[], options: Partial<Gate> = {}): Gate {
   return {
     id,
-    label: options.label ?? `pnpm exec ${args.join(' ')}`,
-    displayCommand: `pnpm exec ${args.join(' ')}`,
-    ...pnpmInvocation(['exec', ...args]),
+    label: options.label ?? `bun x ${args.join(' ')}`,
+    displayCommand: `bun x ${args.join(' ')}`,
+    ...bunInvocation(['x', ...args]),
     ...options,
   }
 }
@@ -300,14 +301,14 @@ export function gatesForMode(selected: Mode): Gate[] {
     case 'ci-lint-contracts-ready':
       return [
         lintGate(),
-        pnpmScript('duplication', 'duplication'),
+        bunScript('duplication', 'duplication'),
       ]
     case 'ci-coverage':
       return coverageGates()
     case 'ci-unit':
       return ciUnitGates()
     case 'ci-bench':
-      return [pnpmExec('bench', ['tsx', 'scripts/run-ci-bench.ts'], { label: 'performance benchmarks' })]
+      return [bunExec('bench', ['tsx', 'scripts/run-ci-bench.ts'], { label: 'performance benchmarks' })]
     case 'ci-snapshot':
       return [ciBuildGate(), snapshotGate()]
     case 'ci-artifacts':
@@ -331,30 +332,30 @@ export function gatesForMode(selected: Mode): Gate[] {
       return nodeCompatGates()
     case 'check-all':
       return [
-        pnpmScript('runtime-closure', 'verify-runtime-closure', { label: 'runtime closure' }),
-        pnpmScript('cordis-config', 'verify-cordis-config', { label: 'Cordis config' }),
-        pnpmScript('client-domain-graph', 'verify-client-domain-graph', { label: 'client domain graph' }),
-        pnpmScript('test', 'test'),
-        pnpmScript('approval-policy', 'test:approval-policy', { label: 'Weighted approval policy' }),
-        pnpmScript('issue-management', 'test:issue-management', { label: 'Issue management policy' }),
-        pnpmScript('duplication', 'duplication'),
+        bunScript('runtime-closure', 'verify-runtime-closure', { label: 'runtime closure' }),
+        bunScript('cordis-config', 'verify-cordis-config', { label: 'Cordis config' }),
+        bunScript('client-domain-graph', 'verify-client-domain-graph', { label: 'client domain graph' }),
+        bunScript('test', 'test'),
+        bunScript('approval-policy', 'test:approval-policy', { label: 'Weighted approval policy' }),
+        bunScript('issue-management', 'test:issue-management', { label: 'Issue management policy' }),
+        bunScript('duplication', 'duplication'),
         snapshotGate(),
         expectedOutputGate(),
-        pnpmScript('build', 'build'),
-        pnpmScript('build:web', 'build:web'),
+        bunScript('build', 'build'),
+        bunScript('build:web', 'build:web'),
         ...hygieneLeafGates({ artifactNeeds: ['build'] }),
         ...docSyncLeafGates({
           docTypecheckNeeds: ['build'],
           docTypecheckEnv: { DSH_DOC_TYPECHECK_USE_BUILD_OUTPUT: '1' },
           docTypecheckScript: 'doc-typecheck:contracts-ready',
         }),
-        pnpmScript('module-graph', 'verify-module-graph', { label: 'module graph' }),
+        bunScript('module-graph', 'verify-module-graph', { label: 'module graph' }),
       ]
     case 'hygiene':
       return [
         ...hygieneLeafGates(),
-        pnpmScript('cordis-config', 'verify-cordis-config', { label: 'Cordis config' }),
-        pnpmScript('runtime-closure', 'verify-runtime-closure', { label: 'runtime closure' }),
+        bunScript('cordis-config', 'verify-cordis-config', { label: 'Cordis config' }),
+        bunScript('runtime-closure', 'verify-runtime-closure', { label: 'runtime closure' }),
       ]
     case 'doc-sync':
       return docSyncLeafGates()
@@ -365,35 +366,35 @@ export function gatesForMode(selected: Mode): Gate[] {
 
 function ciSharedStaticGates(): Gate[] {
   return [
-    pnpmScript('runtime-closure', 'verify-runtime-closure', { label: 'runtime closure' }),
-    pnpmScript('default-product-isolation', 'verify-default-product-isolation', { label: 'default product isolation' }),
-    pnpmScript('product-use', 'verify-product-use', { label: 'product package classification' }),
-    pnpmScript('official-bundle-catalog', 'verify-official-bundle-catalog', { label: 'Official bundle catalog' }),
-    pnpmScript('provider-data', 'verify-provider-data', { label: 'pi-ai provider metadata' }),
-    pnpmScript('application-entrypoints', 'verify-application-entrypoints', { label: 'application entrypoints' }),
-    pnpmScript('constraints', 'constraints'),
-    pnpmScript('package-dependencies', 'verify-package-dependencies', { label: 'package dependencies' }),
-    pnpmScript('dsh-package-licenses', 'verify-dsh-package-licenses', { label: 'DSH package licenses' }),
-    pnpmScript('package-meta', 'verify-package-meta', { label: 'package metadata' }),
-    pnpmScript('cordis-config', 'verify-cordis-config', { label: 'Cordis config' }),
+    bunScript('runtime-closure', 'verify-runtime-closure', { label: 'runtime closure' }),
+    bunScript('default-product-isolation', 'verify-default-product-isolation', { label: 'default product isolation' }),
+    bunScript('product-use', 'verify-product-use', { label: 'product package classification' }),
+    bunScript('official-bundle-catalog', 'verify-official-bundle-catalog', { label: 'Official bundle catalog' }),
+    bunScript('provider-data', 'verify-provider-data', { label: 'pi-ai provider metadata' }),
+    bunScript('application-entrypoints', 'verify-application-entrypoints', { label: 'application entrypoints' }),
+    bunScript('constraints', 'constraints'),
+    bunScript('package-dependencies', 'verify-package-dependencies', { label: 'package dependencies' }),
+    bunScript('dsh-package-licenses', 'verify-dsh-package-licenses', { label: 'DSH package licenses' }),
+    bunScript('package-meta', 'verify-package-meta', { label: 'package metadata' }),
+    bunScript('cordis-config', 'verify-cordis-config', { label: 'Cordis config' }),
     ...sharedHygieneGates(),
-    pnpmScript('approval-policy', 'test:approval-policy', { label: 'Weighted approval policy' }),
-    pnpmScript('issue-management', 'test:issue-management', { label: 'Issue management policy' }),
+    bunScript('approval-policy', 'test:approval-policy', { label: 'Weighted approval policy' }),
+    bunScript('issue-management', 'test:issue-management', { label: 'Issue management policy' }),
   ]
 }
 
 function sharedHygieneGates(): Gate[] {
   return [
-    pnpmScript('optional-dependency-imports', 'verify-optional-dependency-imports', {
+    bunScript('optional-dependency-imports', 'verify-optional-dependency-imports', {
       label: 'optional dependency imports',
     }),
-    pnpmScript('client-packages', 'verify-client-packages', { label: 'client packages' }),
-    pnpmScript('client-ui-i18n', 'verify-client-ui-i18n', { label: 'client UI i18n' }),
-    pnpmScript('client-route-resolution', 'verify-client-route-resolution', { label: 'client route resolution' }),
-    pnpmScript('no-bare-dispatcher', 'verify-no-bare-dispatcher', { label: 'proxy-aware dispatchers' }),
-    pnpmScript('plugin-record-callers', 'verify-plugin-record-callers', { label: 'plugin record callers' }),
-    pnpmScript('no-unknown-casts', 'verify-no-unknown-casts', { label: 'no new unknown casts' }),
-    pnpmScript('no-top-level-await', 'verify-no-top-level-await', { label: 'no module-scope await' }),
+    bunScript('client-packages', 'verify-client-packages', { label: 'client packages' }),
+    bunScript('client-ui-i18n', 'verify-client-ui-i18n', { label: 'client UI i18n' }),
+    bunScript('client-route-resolution', 'verify-client-route-resolution', { label: 'client route resolution' }),
+    bunScript('no-bare-dispatcher', 'verify-no-bare-dispatcher', { label: 'proxy-aware dispatchers' }),
+    bunScript('plugin-record-callers', 'verify-plugin-record-callers', { label: 'plugin record callers' }),
+    bunScript('no-unknown-casts', 'verify-no-unknown-casts', { label: 'no new unknown casts' }),
+    bunScript('no-top-level-await', 'verify-no-top-level-await', { label: 'no module-scope await' }),
   ]
 }
 
@@ -401,9 +402,9 @@ function ciPrimaryGates(): Gate[] {
   return [
     ...ciSharedStaticGates(),
     typertContractsGate(),
-    pnpmScript('typecheck', 'typecheck:contracts-ready', { needs: ['typert-contracts'] }),
+    bunScript('typecheck', 'typecheck:contracts-ready', { needs: ['typert-contracts'] }),
     lintGate({ needs: ['typert-contracts'] }),
-    pnpmScript('duplication', 'duplication'),
+    bunScript('duplication', 'duplication'),
     ...coverageGates(),
     ...nodeCompatSmokeGates(),
     snapshotGate(),
@@ -411,13 +412,13 @@ function ciPrimaryGates(): Gate[] {
       docTypecheckNeeds: ['typert-contracts'],
       docTypecheckScript: 'doc-typecheck:contracts-ready',
     }),
-    pnpmScript('module-graph', 'verify-module-graph', { label: 'module graph' }),
+    bunScript('module-graph', 'verify-module-graph', { label: 'module graph' }),
     // The prepared typecheck and build both drive Client tsc, while build also
     // repeats the Host contract pass. Wait for all three consumers so build
     // neither races tsbuildinfo nor replaces declarations while they are read.
     ciBuildGate('build', { needs: ['typecheck', 'lint', 'doc-typecheck'] }),
-    pnpmScript('publint', 'publint', { needs: ['build'] }),
-    pnpmScript('node-next-types', 'verify-node-next-types', {
+    bunScript('publint', 'publint', { needs: ['build'] }),
+    bunScript('node-next-types', 'verify-node-next-types', {
       label: 'node-next types',
       needs: ['build'],
     }),
@@ -428,13 +429,13 @@ function ciPrimaryGates(): Gate[] {
 function nodeCompatGates(): Gate[] {
   const typecheck = flagEnabled('DSH_NODE_COMPAT_SKIP_TYPECHECK')
     ? []
-    : [pnpmScript('typecheck', 'typecheck')]
+    : [bunScript('typecheck', 'typecheck')]
   if (runningNodeMajor() !== 22) {
     return [...typecheck, ...nodeCompatSmokeGates()]
   }
   return [
     ...typecheck,
-    pnpmScript('build', 'build:artifacts', {
+    bunScript('build', 'build:artifacts', {
       ...typecheck.length === 0 ? {} : { needs: ['typecheck'] },
     }),
     ...nodeCompatSmokeGates({ cliSmoke: true }),
@@ -445,7 +446,7 @@ function nodeCompatSmokeGates(options: { cliSmoke?: boolean } = {}): Gate[] {
   const gates: Gate[] = [
     // Serial files keep CLI and PTC children from overlapping. Vitest's
     // environment worker override takes precedence over its CLI flags.
-    pnpmExec('source-compat-smokes', [
+    bunExec('source-compat-smokes', [
       'vitest',
       'run',
       'packages/workflow/workflow-ptc/tests/source-runtime.compat.spec.ts',
@@ -461,7 +462,7 @@ function nodeCompatSmokeGates(options: { cliSmoke?: boolean } = {}): Gate[] {
   ]
   if (options.cliSmoke) {
     gates.push(
-      pnpmExec('cli-lazy-search-startup-smoke', [
+      bunExec('cli-lazy-search-startup-smoke', [
         'vitest',
         'run',
         'apps/cli/tests/lazy-search-startup.compat.spec.ts',
@@ -499,15 +500,15 @@ function ciStaticGates(options: { ownsBuild: boolean }): Gate[] {
         : {},
       docsBuildScript: 'docs:build:mpa',
     }),
-    pnpmScript('module-graph', 'verify-module-graph', { label: 'module graph' }),
+    bunScript('module-graph', 'verify-module-graph', { label: 'module graph' }),
   ]
 }
 
 function ciArtifactGates(): Gate[] {
   return [
     ciBuildGate(),
-    pnpmScript('publint', 'publint', { needs: ['build'] }),
-    pnpmScript('node-next-types', 'verify-node-next-types', {
+    bunScript('publint', 'publint', { needs: ['build'] }),
+    bunScript('node-next-types', 'verify-node-next-types', {
       label: 'node-next types',
       needs: ['build'],
     }),
@@ -531,23 +532,23 @@ function ciConsumerGates(): Gate[] {
   ]
   return [
     ciBuildGate(),
-    pnpmScript('node-compat', 'check:node-compat', {
+    bunScript('node-compat', 'check:node-compat', {
       label: 'Node compatibility',
       env: { [CLIENT_BUILD_PROFILE_SELECTOR]: 'official' },
     }),
-    pnpmScript('publint', 'publint', { needs: builtTree }),
-    pnpmScript('lint-and-duplication', 'check:ci:lint:contracts-ready', {
+    bunScript('publint', 'publint', { needs: builtTree }),
+    bunScript('lint-and-duplication', 'check:ci:lint:contracts-ready', {
       label: 'lint and duplication',
       needs: builtTree,
     }),
     snapshotGate(builtTree),
     expectedOutputGate(builtTree),
     webSnapshotGate(builtTree, buildArtifactReaders),
-    pnpmScript('doc-typecheck', 'doc-typecheck:contracts-ready', {
+    bunScript('doc-typecheck', 'doc-typecheck:contracts-ready', {
       needs: builtTree,
       env: { DSH_DOC_TYPECHECK_USE_BUILD_OUTPUT: '1' },
     }),
-    pnpmScript('node-next-types', 'verify-node-next-types', {
+    bunScript('node-next-types', 'verify-node-next-types', {
       label: 'node-next types',
       needs: builtTree,
     }),
@@ -563,17 +564,17 @@ function webSnapshotGate(needs: string[], after?: string[]): Gate {
     if (!Number.isSafeInteger(workers) || workers < 1 || String(workers) !== workerRaw) {
       throw new Error(`run-gates: DSH_WEB_SNAPSHOT_WORKERS must be a positive integer, got ${JSON.stringify(workerRaw)}.`)
     }
-    return pnpmScript('web-snapshot', 'test:web:ci', {
+    return bunScript('web-snapshot', 'test:web:ci', {
       label: 'web browser snapshot',
-      displayCommand: `DSH_SNAPSHOT=replay DSH_WEB_SNAPSHOT_WORKERS=${workers} pnpm run test:web:ci`,
+      displayCommand: `DSH_SNAPSHOT=replay DSH_WEB_SNAPSHOT_WORKERS=${workers} bun run test:web:ci`,
       env: { DSH_SNAPSHOT: 'replay' },
       ...order,
       streamOutput: true,
     })
   }
-  return pnpmScript('web-snapshot', 'test:web:built', {
+  return bunScript('web-snapshot', 'test:web:built', {
     label: 'web browser snapshot',
-    displayCommand: 'DSH_SNAPSHOT=replay pnpm run test:web:built',
+    displayCommand: 'DSH_SNAPSHOT=replay bun run test:web:built',
     env: { DSH_SNAPSHOT: 'replay' },
     ...order,
   })
@@ -582,7 +583,7 @@ function webSnapshotGate(needs: string[], after?: string[]): Gate {
 function ciWindowsBlockingGates(): Gate[] {
   return [
     ciBuildGate('windows-build', { label: 'build' }),
-    pnpmScript('windows-site', 'docs:build', { label: 'production site' }),
+    bunScript('windows-site', 'docs:build', { label: 'production site' }),
   ]
 }
 
@@ -606,19 +607,23 @@ function ciWindowsCompleteGates(): Gate[] {
     }))
   return [
     ciBuildGate(),
-    pnpmScript('windows-site', 'docs:build', { label: 'production site' }),
+    bunScript('windows-site', 'docs:build', { label: 'production site' }),
     ...coverage,
     ...observational,
   ]
 }
 
 // Native Electron fixtures need the locked binary before Vitest removes ambient proxies.
+// Bun has no `--filter … exec` form, so this gate resolves pnpm explicitly instead of
+// inheriting the launching package manager.
 function electronInstallGate(): Gate {
+  const [pnpm, ...prefix] = pnpmCommand()
   return {
     id: 'electron-install',
     label: 'Electron binary',
     displayCommand: 'pnpm --filter @deepseek-ai/dsh-desktop exec install-electron',
-    ...pnpmInvocation(['--filter', '@deepseek-ai/dsh-desktop', 'exec', 'install-electron']),
+    command: pnpm,
+    args: [...prefix, '--filter', '@deepseek-ai/dsh-desktop', 'exec', 'install-electron'],
     env: { ELECTRON_GET_USE_PROXY: '1' },
   }
 }
@@ -628,9 +633,9 @@ function ciWindowsObservationalGates(): Gate[] {
     ...ciStaticGates({ ownsBuild: true }),
     electronInstallGate(),
     // Linux owns required lint and snapshots; Windows omits those duplicates.
-    pnpmScript('duplication', 'duplication'),
-    pnpmScript('publint', 'publint', { needs: ['build'] }),
-    pnpmScript('node-next-types', 'verify-node-next-types', {
+    bunScript('duplication', 'duplication'),
+    bunScript('publint', 'publint', { needs: ['build'] }),
+    bunScript('node-next-types', 'verify-node-next-types', {
       label: 'node-next types',
       needs: ['build'],
     }),
@@ -651,7 +656,7 @@ function ciWindowsObservationalGates(): Gate[] {
 // them reads a bundle or the Host aggregate program's noEmit check, which
 // `build` owns.
 function typertContractsGate(): Gate {
-  return pnpmExec('typert-contracts', ['tsx', 'scripts/compile-referenced-projects.ts', 'host-contracts'], {
+  return bunExec('typert-contracts', ['tsx', 'scripts/compile-referenced-projects.ts', 'host-contracts'], {
     label: 'Typert contracts',
   })
 }
@@ -659,10 +664,10 @@ function typertContractsGate(): Gate {
 function lintGate(options: { needs?: string[] } = {}): Gate {
   const raw = process.env.DSH_OXLINT_THREADS
   const script = 'lint:contracts-ready'
-  return pnpmScript('lint', script, {
+  return bunScript('lint', script, {
     ...raw === undefined || raw === ''
       ? {}
-      : { displayCommand: `DSH_OXLINT_THREADS=${raw} pnpm run ${script}` },
+      : { displayCommand: `DSH_OXLINT_THREADS=${raw} bun run ${script}` },
     ...options.needs === undefined ? {} : { needs: options.needs },
   })
 }
@@ -698,7 +703,7 @@ function coverageGates(platform: NodeJS.Platform = process.platform): Gate[] {
   const workers = coverageWorkerArgs()
   const partitions = parseCoveragePartitionCount(process.env[COVERAGE_PARTITIONS_ENV])
   const instrumented = partitions === undefined
-    ? pnpmExec('coverage', [
+    ? bunExec('coverage', [
       'vitest',
       'run',
       '--coverage',
@@ -707,17 +712,17 @@ function coverageGates(platform: NodeJS.Platform = process.platform): Gate[] {
       label: 'test:coverage',
       env: { [COVERAGE_EXEMPT_ENV]: '1' },
     })
-    : pnpmScript('coverage', 'test:coverage:partitioned', {
+    : bunScript('coverage', 'test:coverage:partitioned', {
       label: 'test:coverage',
-      displayCommand: `${COVERAGE_PARTITIONS_ENV}=${partitions} pnpm run test:coverage:partitioned`,
+      displayCommand: `${COVERAGE_PARTITIONS_ENV}=${partitions} bun run test:coverage:partitioned`,
       env: { [COVERAGE_EXEMPT_ENV]: '1' },
       streamOutput: true,
     })
   return [
-    pnpmScript('native-system', 'build:native-system'),
+    bunScript('native-system', 'build:native-system'),
     ...electron,
     { ...instrumented, needs: ['native-system', ...electron.map(gate => gate.id)] },
-    pnpmExec('coverage-exempt-heavy', [
+    bunExec('coverage-exempt-heavy', [
       'vitest',
       'run',
       ...coverageExemptHeavySuites.map(suite => suite.filter),
@@ -730,15 +735,15 @@ function coverageGates(platform: NodeJS.Platform = process.platform): Gate[] {
 }
 
 // The uninstrumented unit inventory for a whole-inventory reference lane
-// (the Sandbox workflow's darwin parity job). It is `pnpm run test`; the lane
+// (the Sandbox workflow's darwin parity job). It is `bun run test`; the lane
 // sets DSH_COVERAGE_TEST_TIMEOUT_MS, which vitest.config.ts reads from the
 // inherited environment, because a shared hosted runner delays cases that
 // inherit Vitest's defaults past them. Output streams so the job log keeps
 // per-file timestamps for a 15–30 minute run.
 function ciUnitGates(): Gate[] {
   return [
-    pnpmScript('native-system', 'build:native-system'),
-    pnpmExec('unit', ['vitest', 'run'], {
+    bunScript('native-system', 'build:native-system'),
+    bunExec('unit', ['vitest', 'run'], {
       label: 'test',
       needs: ['native-system'],
       streamOutput: true,
@@ -749,7 +754,7 @@ function ciUnitGates(): Gate[] {
 // Recorded-session adapters boot process scenarios in `lib` mode. Callers wait
 // either on `build` or on a validation gate that transitively owns that build.
 function snapshotGate(needs: string[] = ['build']): Gate {
-  return pnpmScript('snapshot', 'test:snapshot', {
+  return bunScript('snapshot', 'test:snapshot', {
     env: { DSH_EXAMPLE_MODE: 'lib' },
     needs,
   })
@@ -758,7 +763,7 @@ function snapshotGate(needs: string[] = ['build']): Gate {
 // Owner-local process expectations consume built package exports without entering
 // the recorded-session corpus or the credentialed provider lane.
 function expectedOutputGate(needs: string[] = ['build']): Gate {
-  return pnpmScript('expected-output', 'test:expected', {
+  return bunScript('expected-output', 'test:expected', {
     env: { DSH_EXAMPLE_MODE: 'lib' },
     needs,
   })
@@ -784,17 +789,17 @@ function flagEnabled(envName: string): boolean {
 function hygieneLeafGates(options: { artifactNeeds?: string[] } = {}): Gate[] {
   const artifactOptions = options.artifactNeeds === undefined ? {} : { needs: options.artifactNeeds }
   return [
-    pnpmScript('rescope-vendor', 'rescope-vendor:check', { label: 'vendor rescope' }),
-    pnpmScript('publint', 'publint', artifactOptions),
-    pnpmScript('constraints', 'constraints'),
-    pnpmScript('default-product-isolation', 'verify-default-product-isolation', { label: 'default product isolation' }),
-    pnpmScript('product-use', 'verify-product-use', { label: 'product package classification' }),
-    pnpmScript('official-bundle-catalog', 'verify-official-bundle-catalog', { label: 'Official bundle catalog' }),
-    pnpmScript('provider-data', 'verify-provider-data', { label: 'pi-ai provider metadata' }),
-    pnpmScript('package-dependencies', 'verify-package-dependencies', { label: 'package dependencies' }),
-    pnpmScript('application-entrypoints', 'verify-application-entrypoints', { label: 'application entrypoints' }),
-    pnpmScript('dsh-package-licenses', 'verify-dsh-package-licenses', { label: 'DSH package licenses' }),
-    pnpmScript('node-next-types', 'verify-node-next-types', {
+    bunScript('rescope-vendor', 'rescope-vendor:check', { label: 'vendor rescope' }),
+    bunScript('publint', 'publint', artifactOptions),
+    bunScript('constraints', 'constraints'),
+    bunScript('default-product-isolation', 'verify-default-product-isolation', { label: 'default product isolation' }),
+    bunScript('product-use', 'verify-product-use', { label: 'product package classification' }),
+    bunScript('official-bundle-catalog', 'verify-official-bundle-catalog', { label: 'Official bundle catalog' }),
+    bunScript('provider-data', 'verify-provider-data', { label: 'pi-ai provider metadata' }),
+    bunScript('package-dependencies', 'verify-package-dependencies', { label: 'package dependencies' }),
+    bunScript('application-entrypoints', 'verify-application-entrypoints', { label: 'application entrypoints' }),
+    bunScript('dsh-package-licenses', 'verify-dsh-package-licenses', { label: 'DSH package licenses' }),
+    bunScript('node-next-types', 'verify-node-next-types', {
       label: 'node-next types',
       ...artifactOptions,
     }),
@@ -816,51 +821,51 @@ function docSyncLeafGates(options: {
     // Stable FIFO starts the longest leaves first; only docs-site-build writes website/.generated.
     ...options.includeDocTypecheck === false
       ? []
-      : [pnpmScript('doc-typecheck', options.docTypecheckScript ?? 'doc-typecheck', docTypecheckOptions)],
-    pnpmScript('docs-site-build', options.docsBuildScript ?? 'docs:build', { label: 'documentation build' }),
-    pnpmScript('doc-graphs', 'verify-doc-graphs', { label: 'doc graphs' }),
-    pnpmScript('cli-help', 'verify-cli-help', { label: 'CLI help reference' }),
-    pnpmScript('markdown-links', 'verify-md-links', { label: 'markdown links', quick: true }),
-    pnpmScript('type-equivalence', 'verify-type-equiv', { label: 'type equivalence', quick: true }),
-    pnpmScript('cordis-catalog', 'verify-cordis-catalog', { label: 'cordis catalog' }),
-    pnpmScript('cordis-inspect-catalog', 'verify-cordis-inspect-catalog', { label: 'Cordis inspect catalog' }),
-    pnpmScript('workflow-guest', 'verify-workflow-guest', { label: 'workflow guest source' }),
-    pnpmScript('mermaid', 'verify-mermaid'),
-    pnpmScript('translation-pairing', 'verify-translation-pairing', { label: 'translation pairing', quick: true }),
-    pnpmScript('markdown-wrap', 'verify-md-wrap', { label: 'markdown wrap', quick: true }),
-    pnpmScript('client-catalog', 'verify-client-catalog', { label: 'client catalog' }),
-    pnpmScript('export-jsdoc', 'verify-export-jsdoc', { label: 'export jsdoc' }),
-    pnpmScript('tool-catalog', 'verify-tool-catalog', { label: 'tool catalog' }),
-    pnpmScript('config-catalog', 'verify-config-catalog', { label: 'config catalog' }),
-    pnpmScript('plugin-packages', 'verify-plugin-packages', { label: 'skill plugin package list' }),
-    pnpmScript('dependency-catalog', 'verify-dependency-catalog', { label: 'npm dependency catalog', quick: true }),
-    pnpmScript('persistence-catalog', 'verify-persistence-catalog', { label: 'persistence catalog' }),
-    pnpmScript('persistence-changes', 'verify-persistence-changes', { label: 'persistence type history' }),
-    pnpmScript('persistence-releases', 'verify-persistence-releases', { label: 'released persistence history' }),
-    pnpmScript('persistence-formats', 'verify-persistence-formats', { label: 'Session format references', quick: true }),
-    pnpmScript('session-format-catalog', 'verify-session-format-catalog', { label: 'Session format catalog' }),
-    pnpmScript('public-repository-links', 'verify-public-repository-links', { label: 'public repository links', quick: true }),
-    pnpmScript('repository-references', 'verify-repository-references', { label: 'repository references', quick: true }),
-    pnpmScript('concrete-terms', 'verify-concrete-terms', { label: 'concrete terms', quick: true }),
-    pnpmScript('doc-refs', 'verify-doc-refs', { label: 'doc refs', quick: true }),
-    pnpmScript('subsystem-pages', 'verify-subsystem-pages', { label: 'subsystem pages' }),
-    pnpmScript('package-paths', 'verify-package-paths', { label: 'package paths' }),
-    pnpmScript('tsconfig-paths', 'verify-tsconfig-paths', { label: 'tsconfig paths' }),
-    pnpmScript('config-source-ownership', 'verify-config-source-ownership', { label: 'config source ownership' }),
-    pnpmScript('package-readme-summaries', 'verify-package-readme-summaries', { label: 'package README Summaries', quick: true }),
-    pnpmScript('package-readme-model-experience', 'verify-package-readme-model-experience', { label: 'package README model experience', quick: true }),
-    pnpmScript('agent-note-classification', 'verify-agent-note-classification', { label: 'agent note classification', quick: true }),
-    pnpmScript('agent-note-format', 'verify-agent-note-format', { label: 'agent note format', quick: true }),
-    pnpmScript('archived-agent-notes', 'verify-archived-agent-notes', { label: 'archived agent notes', quick: true }),
-    pnpmScript('skill-invocation-metadata', 'verify-skill-invocation-metadata', { label: 'skill invocation metadata', quick: true }),
-    pnpmScript('translation-prompt', 'verify-translation-prompt', { label: 'translation prompt', quick: true }),
-    pnpmScript('doc-budgets', 'verify-doc-budgets', { label: 'doc budgets', quick: true }),
-    pnpmScript('upgrade-guides', 'verify-upgrade-guides', { label: 'upgrade guides', quick: true }),
-    pnpmExec('doc-standard-tests', ['vitest', 'run', 'scripts/doc-standard.spec.ts'], {
+      : [bunScript('doc-typecheck', options.docTypecheckScript ?? 'doc-typecheck', docTypecheckOptions)],
+    bunScript('docs-site-build', options.docsBuildScript ?? 'docs:build', { label: 'documentation build' }),
+    bunScript('doc-graphs', 'verify-doc-graphs', { label: 'doc graphs' }),
+    bunScript('cli-help', 'verify-cli-help', { label: 'CLI help reference' }),
+    bunScript('markdown-links', 'verify-md-links', { label: 'markdown links', quick: true }),
+    bunScript('type-equivalence', 'verify-type-equiv', { label: 'type equivalence', quick: true }),
+    bunScript('cordis-catalog', 'verify-cordis-catalog', { label: 'cordis catalog' }),
+    bunScript('cordis-inspect-catalog', 'verify-cordis-inspect-catalog', { label: 'Cordis inspect catalog' }),
+    bunScript('workflow-guest', 'verify-workflow-guest', { label: 'workflow guest source' }),
+    bunScript('mermaid', 'verify-mermaid'),
+    bunScript('translation-pairing', 'verify-translation-pairing', { label: 'translation pairing', quick: true }),
+    bunScript('markdown-wrap', 'verify-md-wrap', { label: 'markdown wrap', quick: true }),
+    bunScript('client-catalog', 'verify-client-catalog', { label: 'client catalog' }),
+    bunScript('export-jsdoc', 'verify-export-jsdoc', { label: 'export jsdoc' }),
+    bunScript('tool-catalog', 'verify-tool-catalog', { label: 'tool catalog' }),
+    bunScript('config-catalog', 'verify-config-catalog', { label: 'config catalog' }),
+    bunScript('plugin-packages', 'verify-plugin-packages', { label: 'skill plugin package list' }),
+    bunScript('dependency-catalog', 'verify-dependency-catalog', { label: 'npm dependency catalog', quick: true }),
+    bunScript('persistence-catalog', 'verify-persistence-catalog', { label: 'persistence catalog' }),
+    bunScript('persistence-changes', 'verify-persistence-changes', { label: 'persistence type history' }),
+    bunScript('persistence-releases', 'verify-persistence-releases', { label: 'released persistence history' }),
+    bunScript('persistence-formats', 'verify-persistence-formats', { label: 'Session format references', quick: true }),
+    bunScript('session-format-catalog', 'verify-session-format-catalog', { label: 'Session format catalog' }),
+    bunScript('public-repository-links', 'verify-public-repository-links', { label: 'public repository links', quick: true }),
+    bunScript('repository-references', 'verify-repository-references', { label: 'repository references', quick: true }),
+    bunScript('concrete-terms', 'verify-concrete-terms', { label: 'concrete terms', quick: true }),
+    bunScript('doc-refs', 'verify-doc-refs', { label: 'doc refs', quick: true }),
+    bunScript('subsystem-pages', 'verify-subsystem-pages', { label: 'subsystem pages' }),
+    bunScript('package-paths', 'verify-package-paths', { label: 'package paths' }),
+    bunScript('tsconfig-paths', 'verify-tsconfig-paths', { label: 'tsconfig paths' }),
+    bunScript('config-source-ownership', 'verify-config-source-ownership', { label: 'config source ownership' }),
+    bunScript('package-readme-summaries', 'verify-package-readme-summaries', { label: 'package README Summaries', quick: true }),
+    bunScript('package-readme-model-experience', 'verify-package-readme-model-experience', { label: 'package README model experience', quick: true }),
+    bunScript('agent-note-classification', 'verify-agent-note-classification', { label: 'agent note classification', quick: true }),
+    bunScript('agent-note-format', 'verify-agent-note-format', { label: 'agent note format', quick: true }),
+    bunScript('archived-agent-notes', 'verify-archived-agent-notes', { label: 'archived agent notes', quick: true }),
+    bunScript('skill-invocation-metadata', 'verify-skill-invocation-metadata', { label: 'skill invocation metadata', quick: true }),
+    bunScript('translation-prompt', 'verify-translation-prompt', { label: 'translation prompt', quick: true }),
+    bunScript('doc-budgets', 'verify-doc-budgets', { label: 'doc budgets', quick: true }),
+    bunScript('upgrade-guides', 'verify-upgrade-guides', { label: 'upgrade guides', quick: true }),
+    bunExec('doc-standard-tests', ['vitest', 'run', 'scripts/doc-standard.spec.ts'], {
       label: 'documentation standard tests',
       quick: true,
     }),
-    pnpmExec('docs-site-projection', [
+    bunExec('docs-site-projection', [
       'vitest', 'run', 'scripts/project-doc-site.spec.ts', 'scripts/verify-doc-site-fragments.spec.ts',
       'website/tests/mermaid-viewer.spec.ts',
       'website/tests/image-viewer.spec.ts',
@@ -869,7 +874,7 @@ function docSyncLeafGates(options: {
     ], {
       label: 'documentation site checks',
     }),
-    pnpmScript('package-readme-limitations', 'verify-package-readme-limitations', { label: 'package README limitations', quick: true }),
+    bunScript('package-readme-limitations', 'verify-package-readme-limitations', { label: 'package README limitations', quick: true }),
   ]
 }
 
@@ -883,7 +888,7 @@ function docQuickLeafGates(): Gate[] {
 }
 
 function builtBinSmokeGate(needs: string[] = ['build']): Gate {
-  return pnpmExec('built-bin-smoke', [
+  return bunExec('built-bin-smoke', [
     'vitest',
     'run',
     '--config',
