@@ -67,6 +67,7 @@ Số đo mới: shell release **10,3 MB** (tăng 1,5 MB cho tray + dialog + wind
 | `updates-status` | `{"phase":"idle"}` |
 | Shim trong index phục vụ | `globalThis.dshDesktop` ×1, `dataset.platform` ×1 |
 | Trong trang thật (Chromium) | `present=true protocol=1 keyboard=true platform=linux`, `updates_phase=idle`, `saved=saved`, `keybindings_after_page=present` |
+| Home mới, không key, chưa đăng nhập | `onboarding_visible=false`, `composer=true`, `console_errors=0` — vào thẳng workspace |
 | Client có **thật sự** dùng cầu | 33 lời gọi `shortcuts-get` + 2 `updates-status` **do trang tự phát** (runtime desktop, không phải localStorage) |
 | Lỗi console / page | 0 / 0 |
 | App Tauri thật (release + WebView) | render bình thường, 10 kết nối Host, menu Application/Edit |
@@ -144,6 +145,9 @@ DSH_DESKTOP_PROJECT_DIR=$HOME/.dsh/profiles/web \
 | D17 | `shortcuts` chạy đúng `ShortcutPersistence` của client package trong Host — một thuật toán, hai shell |
 | D18 | `keyboard`/`shortcuts`/`updates.subscribe` trả disposer rỗng: một cửa sổ, client tự áp snapshot từ `get`/`edit` |
 | D19 | `data-platform` do chính shim đặt (thay `markDocumentPlatform` của preload Electron) |
+| D20 | Directory picker **không cần Tauri dialog**: `directory-picker-auto` trong web bundle đã tự chọn chooser native của Host |
+| D21 | Product analytics đã cổng sẵn ở client bằng `'dshDesktop' in globalThis`; cầu của ta thoả cổng, không cần thêm gì |
+| D22 | Welcome/onboarding v1 = **không tới được**: cửa sổ welcome là tài liệu native riêng cần copy của `locale.ts` (TS) và luồng đăng nhập Platform. Không chép choreography `hasApiKey` của `welcome-backend.ts` sang Host (sẽ là nhà thứ hai) |
 
 ## Số đo thật
 

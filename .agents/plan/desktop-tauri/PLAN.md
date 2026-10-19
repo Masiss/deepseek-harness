@@ -383,7 +383,7 @@ Tất cả AC trên đạt, hoặc có quyết định fallback được ghi l�
 - [~] Có task → hỏi, không có task → thoát im lặng — luồng đã viết và protocol đã kiểm (`activeTasks:false`); bấm menu tray chưa test được ở máy này.
 - [x] Tray trên X11 — đăng ký `StatusNotifierWatcher` với `Id=tray-icon tray app main`, `Status=Active`, icon thật. Degrade: `build_tray` chỉ log.
 - [x] Theme hệ thống đổi → UI đổi theo — `theme(None)` (theo hệ thống); WebKitGTK suy `prefers-color-scheme` từ theme GTK.
-- [ ] Directory picker — chuyển sang P2 cùng bridge `window.dshDesktop`.
+- [x] Directory picker — **không cần Tauri dialog**: `packages/bundle/web-app` đã compose `dsh-host-directory-picker-auto`, tự chọn backend `native` (zenity/kdialog trên Linux có display) và cả hai mặt Host/client được mount như entry thường. Xem mục P2.
 - [x] Menu Application (About, dev: Reload + DevTools `F12`, Quit `Ctrl+Q`) và menu Edit (undo/redo/cut/copy/paste/select-all) — ảnh chụp release xác nhận.
 - [ ] Bản địa hoá copy của shell — **còn thiếu**, có lý do: `apps/desktop/src/locale.ts` là nguồn duy nhất và là TypeScript; chép sang Rust sẽ tạo nhà thứ hai cho cùng chuỗi.
 
@@ -405,16 +405,26 @@ Không còn regression hành vi desktop so với Electron trong phạm vi trên.
 
 - ✅ Init script inject `window.dshDesktop` (`protocolVersion: 1`) — row `<head>` do Host đóng góp.
 - 🔶 `deviceInfo` ✅, `keyboard` ✅ (subscribe rỗng), `shortcuts` ✅, `updates` ✅ (`idle`; updater thật ở P3).
-- ⏭ Welcome/onboarding — chưa làm.
-- ⏭ Account/Platform session handoff (không gồm embedded view) — chưa làm.
-- ⏭ Product analytics chỉ bật khi có `dshDesktop` — chưa làm (đã có điều kiện, chưa kiểm chứng trên Tauri).
+- ❌ Welcome/onboarding — **không tới được ở v1**, xem ghi chú dưới.
+- ✅ Account/Platform session handoff — đã chạy trong Host (`installPlatformSessionPublisher`); consumer duy nhất là Platform view nhúng, thứ đã bị loại.
+- ✅ Product analytics chỉ bật khi có `dshDesktop` — cổng nằm sẵn ở client (`'dshDesktop' in globalThis`), cầu của ta thoả nó.
+
+### Welcome/onboarding — vì sao chưa làm được
+
+Cửa sổ welcome của Electron **không phải** trang app: `welcome-window.ts` mở một tài liệu riêng (`renderer/welcome.html`, preload riêng `preload-welcome.cjs`, kênh `WELCOME_IPC` riêng), với `WelcomeOperations` gồm `startSignIn`/`cancelSignIn`/`copySignInLink` (luồng đăng nhập Platform) và `saveApiKey`. Dựng lại ở Tauri cần: một cửa sổ thứ hai + asset welcome, một bộ operations mới, và **copy welcome do `apps/desktop/src/locale.ts` sở hữu** — TypeScript, shell Rust không import được (cùng lý do đã ghi cho bản địa hoá ở P1).
+
+Overlay onboarding *trong app* thì có, nhưng điều kiện hiển thị là `signedIn && !done` với `signedIn = account.status === 'credential-stored'` — tức phải đăng nhập Platform trước. Nó cần `dshOnboarding.hasApiKey()`, và fact đó (được upstream tính trong `welcome-backend.ts` bằng ba lượt RPC `settings/describe` + `llm/listConfigurableProviders` + `credentials/describe`) chép sang Host sẽ là **nhà thứ hai** cho cùng thuật toán. Chưa chép.
+
+**Hành vi thực tế ở v1 (đã đo):** home mới, không API key, chưa đăng nhập ⇒ **không** overlay, composer hiện ra, `console_errors=0` — người dùng vào thẳng workspace và cấu hình ở Settings → Models. Đây đúng bằng hành vi của `dsh web`. Khác biệt duy nhất so với Electron: người đã có key từ nguồn khác nhưng chưa từng hoàn tất onboarding sẽ thấy một màn hình giới thiệu **một lần**, bỏ qua được (dấu hoàn tất được lưu).
+
+**Hướng đúng nếu làm tiếp:** đừng chép choreography. Cho client tự trả lời — một provider `dshOnboarding` do client dựng từ `ctx.remote` (chỗ `ui-settings-models` đã làm đúng việc này), hoặc phát chuỗi đã bản địa hoá từ một nguồn dùng chung.
 
 ### Acceptance Criteria
 
 - [x] `'dshDesktop' in globalThis` = true trong app Tauri — probe trang: `present=true protocol=1 keyboard=true`.
 - [x] Settings → Shortcuts lưu/khôi phục được — vòng `get`→`edit`→`saved` qua `keybindings.json`, và lần mở sau đọc lại đúng binding. **Chưa điều khiển thao tác trong UI Settings** (đường UI gọi đúng adapter đã kiểm).
 - [x] `updates.status()` trả phase hợp lệ — `{"phase":"idle"}`.
-- [ ] Welcome hiển thị khi chưa có API key; vào workspace sau khi cấu hình — chưa làm.
+- [ ] Welcome hiển thị khi chưa có API key; vào workspace sau khi cấu hình — **không tới được ở v1** (cửa sổ welcome là tài liệu native riêng, cần copy do TS sở hữu và luồng đăng nhập Platform). Hành vi thay thế đã đo: vào thẳng workspace, cấu hình ở Settings, ngang `dsh web`.
 - [x] Không có lỗi console "desktop API missing" — `console_errors=0 page_errors=0`.
 - [x] Cầu từ chối origin/token không hợp lệ — không cookie ⇒ 401; GET ⇒ 405; body quá lớn ⇒ 413; method lạ ⇒ 404.
 

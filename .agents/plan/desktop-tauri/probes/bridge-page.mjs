@@ -21,11 +21,14 @@ const page = await browser.newPage()
 const consoleMessages = []
 const pageErrors = []
 const bridgeCalls = []
+const analyticsCalls = []
 page.on('console', (message) => { consoleMessages.push(`${message.type()}: ${message.text()}`) })
 page.on('pageerror', (error) => { pageErrors.push(String(error)) })
 page.on('request', (request) => {
   const path = new URL(request.url()).pathname
   if (path.startsWith('/__dsh-desktop')) bridgeCalls.push(`${request.method()} ${path}`)
+  // Product analytics opens its policy stream only when `dshDesktop` exists.
+  if (path.includes('productAnalytics')) analyticsCalls.push(`${request.method()} ${path}`)
 })
 
 await page.goto(url, { waitUntil: 'load' })
@@ -55,6 +58,10 @@ const observed = await page.evaluate(async () => {
     shortcutsStatus: shortcuts?.status ?? null,
     shortcutsSequence: shortcuts?.sequence ?? null,
     savedStatus: saved?.status ?? null,
+    // What the user actually meets on a home with no configured credential.
+    onboardingStep: document.querySelector('[data-desktop-onboarding]')?.getAttribute('data-desktop-onboarding') ?? null,
+    onboardingVisible: document.querySelector('[data-desktop-onboarding]') !== null,
+    workspaceComposer: document.querySelector('[data-composer-textarea], textarea, [contenteditable="true"]') !== null,
   }
 })
 
@@ -63,7 +70,12 @@ console.log(`present=${String(observed.present)} protocol=${String(observed.prot
 console.log(`platform=${String(observed.platform)} updates_phase=${String(observed.updatesPhase)}`)
 console.log(`device_info=${String(observed.deviceInfo)}`)
 console.log(`shortcuts_status=${String(observed.shortcutsStatus)} sequence=${String(observed.shortcutsSequence)} saved=${String(observed.savedStatus)}`)
-console.log(`client_bridge_calls=${JSON.stringify(bridgeCalls)}`)
+console.log(`onboarding_visible=${String(observed.onboardingVisible)} step=${String(observed.onboardingStep)} composer=${String(observed.workspaceComposer)}`)
+console.log(`client_bridge_get_calls=${String(bridgeCalls.filter(entry => entry.includes('shortcuts-get')).length)} client_bridge_calls=${String(bridgeCalls.length)}`)
+// The policy stream multiplexes over /api/remote.mux, so a zero here proves
+// nothing; the gate itself is the literal `'dshDesktop' in globalThis` at
+// packages/client/product-analytics/src/client/index.ts:26.
+console.log(`analytics_http_calls=${String(analyticsCalls.length)}`)
 console.log(`console_errors=${errors.length} ${JSON.stringify(errors.slice(0, 5))}`)
 console.log(`page_errors=${pageErrors.length} ${JSON.stringify(pageErrors.slice(0, 5))}`)
 
