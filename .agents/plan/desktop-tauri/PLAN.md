@@ -344,7 +344,7 @@ Mỗi phase có **Acceptance Criteria (AC)** dạng checkbox. Không chuyển ph
 - [x] `/api/remote.mux` trả `101 Switching Protocols` — đo thật bằng `curl` upgrade, trả `HTTP/1.1 101`.
 - [ ] PTY spawn được (`/dev/pts/N`), gõ lệnh trong terminal.
 - [ ] `dsh plugin` cài và chạy được một plugin thật.
-- [ ] Mở được session ghi bản cũ — trên đĩa có 6 file (`session.jsonl.zstd` bản hiện tại và `session.v4.jsonl.zstd`).
+- [x] Mở được session ghi bản cũ — đo bằng `session-read-probe.sh` trên đúng 7 file đang có trên đĩa: `session/list` trả `ok=true`, 7/7 item, `format_status={"current":5,"migration-required":2}`. Host Tauri đọc được cả hai thế hệ và báo đúng thế hệ cũ là cần migration thay vì đọc nhầm.
 - [ ] Transcript cùng prompt khớp bản cũ (diff = 0) — **chặn**: máy này không có `DEEPSEEK_API_KEY`.
 - [x] `node:sqlite` hoạt động dưới Bun — có, nhưng không còn cần cho quyết định runtime.
 - [x] Bảng số đo thật được ghi vào `MEMORY.md`.

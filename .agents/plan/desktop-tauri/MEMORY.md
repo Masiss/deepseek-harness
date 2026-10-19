@@ -72,6 +72,18 @@ Số đo mới: shell release **10,3 MB** (tăng 1,5 MB cho tray + dialog + wind
 | Lỗi console / page | 0 / 0 |
 | App Tauri thật (release + WebView) | render bình thường, 10 kết nối Host, menu Application/Edit |
 
+### Session trên đĩa (đo bằng `session-read-probe.sh`)
+
+Đây là bất biến số 1 của kế hoạch: format session log và reader của nó.
+
+| Phép đo | Kết quả |
+|---|---|
+| File trên đĩa | 7 (`session.jsonl.zstd` hiện tại: 2, `session.v4.jsonl.zstd`: 5) |
+| `session/list` trên Host Tauri | `ok=true`, **7/7 item** |
+| `formatStatus` | `{"current": 5, "migration-required": 2}` |
+
+Host đọc được cả hai thế hệ và báo thế hệ cũ là `migration-required` thay vì đọc nhầm — đúng chính sách released-session-format.
+
 ### Ba đường đóng (đo bằng `close-paths-probe.sh`)
 
 Gửi `WM_DELETE_WINDOW` thật rồi đọc `map_state`:
@@ -102,6 +114,7 @@ Menu Application: About, (dev) Reload Page + Toggle Developer Tools `F12`, Quit 
 | `.agents/plan/desktop-tauri/probes/close-paths-probe.sh` | Ba đường đóng: có tray / không tray chưa xác nhận / đã xác nhận |
 | `.agents/plan/desktop-tauri/probes/bridge-probe.sh` | Cầu `/__dsh-desktop` trên HTTP thật: fence, device info, shortcut round trip, phase update |
 | `.agents/plan/desktop-tauri/probes/bridge-page.mjs` + `bridge-page-probe.sh` | Quan sát cầu từ trong trang thật bằng Chromium |
+| `.agents/plan/desktop-tauri/probes/session-read-probe.sh` | Host Tauri đọc session trên đĩa qua RPC `session/list` (đọc thật, không sửa) |
 
 `render.mjs` cần chạy trong `apps/web` (nơi có `playwright`):
 
