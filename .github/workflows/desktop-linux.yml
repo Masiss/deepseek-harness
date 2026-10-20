@@ -69,6 +69,10 @@ jobs:
           --pool=forks
 
       - name: Keyless recorded-session replay
+        env:
+          # The replay spawns child processes; the hosted runner has two cores,
+          # and the subagent replays need one to themselves.
+          DSH_SNAPSHOT_MAX_CONCURRENCY: '2'
         run: bun run test:snapshot
 
       - name: Build the desktop shell
