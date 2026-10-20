@@ -694,6 +694,10 @@ Harness snapshot chạy agent trong một thư mục tạm; nếu thư mục t�
 
 Trên máy phát triển có `bwrap` nên lane snapshot xanh. Runner `ubuntu-latest` của GitHub **không** có `bwrap`, và package npm `@deepseek-ai/node-addon-system-<platform>` **không** chứa binary `landlock-run` (chỉ có `system.node`) ⇒ backend sandbox không khả dụng ⇒ `sandbox-local` từ chối chạy lệnh ⇒ các ca snapshot gọi tool (SDK, PTC) khác transcript đã ghi. Lane CI phải cài `bubblewrap` (hoặc dựng launcher Landlock của lane Tauri).
 
+### B46 — Hai ca replay subagent SDK chỉ đỏ trên runner 2 vCPU của CI
+
+`replays subagent-dsh-sdk-diagnostic` và `replays subagent-dsh-sdk-dynamic-route` (snapshots/sdk) đỏ trên runner `ubuntu-latest` (2 vCPU) với `ENOENT .../.child-dsh/sessions` ⇒ tiến trình con (một `dsh` lồng nhau) không khởi động được. **Cùng hai ca xanh trên máy phát triển** (2/2 pass) và toàn lane xanh 211/211 tại đó. CI của upstream chạy lane này trên runner 4 vCPU/16 core ⇒ khả năng cao là thiếu CPU cho tiến trình con. Việc cần cho lane của fork: runner nhiều hơn, hoặc chấp nhận hai ca này là ngoại lệ của lane.
+
 ### B45 — Decoder PNG của crate `image` quá chậm cho đường ảnh sản phẩm
 
 `image` (dựa trên crate `png`) giải mã ảnh 12 MP mất ~2,1 s, còn libspng của sharp ~27 ms ⇒ ảnh đính kèm sẽ "treo" UI. Dùng `zune-png` (SIMD) cho PNG và `fast_image_resize` cho resize: còn 171 ms cho resize+encode 4000×3000 (sharp 97 ms).
