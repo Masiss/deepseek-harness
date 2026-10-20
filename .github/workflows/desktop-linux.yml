@@ -45,8 +45,19 @@ jobs:
       - name: Lint
         run: bun run lint
 
-      - name: Unit tests
-        run: bun run test
+      # The repository-wide suite belongs to the upstream CI, which shards it
+      # across runners; this lane covers the packages the desktop fork touches
+      # and the desktop shell itself.
+      - name: Build the native system addon
+        run: bun run build:native-system
+
+      - name: Unit tests of the touched packages
+        run: >
+          bunx vitest run
+          packages/subprocess/subprocess-local
+          packages/session/session-persistence-jsonl
+          packages/attachment/attachment-local
+          --pool=forks
 
       - name: Keyless recorded-session replay
         run: bun run test:snapshot
