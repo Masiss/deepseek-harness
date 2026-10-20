@@ -13,7 +13,8 @@ mod host;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
+use std::time::Instant;
 
 use serde_json::Value;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
@@ -32,6 +33,19 @@ const STATUS_NOTIFIER_WATCHER: &str = "org.kde.StatusNotifierWatcher";
 
 /// Set once a quit has been approved, so close requests stop hiding the window.
 static QUITTING: AtomicBool = AtomicBool::new(false);
+
+/// Start of the shell's own run, the reference every startup milestone reports.
+static STARTED: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+/// Report one startup milestone as a structured line.
+///
+/// The shell has no session log of its own, so the startup timings travel as
+/// NDJSON on stderr: a probe reads the fields instead of parsing prose.
+/// @param event - Milestone name.
+fn report_startup(event: &str) {
+    let payload = serde_json::json!({ "event": event, "ms": STARTED.elapsed().as_millis() });
+    eprintln!("{payload}");
+}
 
 /// Whether a tray icon is registered and visible for this session.
 static TRAY_VISIBLE: AtomicBool = AtomicBool::new(false);
@@ -382,6 +396,9 @@ fn run_menu_command(app: &AppHandle, command: &str) {
 }
 
 fn main() {
+    // The startup milestones measure the shell's own run, so the reference
+    // starts here rather than at the first report.
+    LazyLock::force(&STARTED);
     tauri::Builder::default()
         // Registered first so a second launch surfaces the first instance and exits.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
@@ -409,16 +426,23 @@ fn main() {
         .setup(|app| {
             let (binary, args) = host_command()?;
             let (host, url) = HostClient::spawn(&binary, &args)?;
+            report_startup("host-url");
             host.attach(app.handle().clone());
             app.manage(AppState { host });
 
             let target = tauri::Url::parse(&url)?;
             let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(target))
+                .on_page_load(|_, payload| {
+                    if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                        report_startup("page-load-finished");
+                    }
+                })
                 .title(PRODUCT)
                 .inner_size(1280.0, 860.0)
                 .min_inner_size(520.0, 600.0)
                 .theme(None)
                 .build()?;
+            report_startup("window-created");
             let hide_target = window.clone();
             window.on_window_event(move |event| {
                 if let WindowEvent::CloseRequested { api, .. } = event {

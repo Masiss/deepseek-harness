@@ -628,7 +628,7 @@ Chỉ coi là hoàn thành khi **tất cả** đạt:
 | A2 | Không sửa `packages/` upstream | `git diff upstream/master...HEAD -- packages/` rỗng |
 | A3 | Artifact ≤ 105 MB (A3′) | `size-gate.sh` — **đạt**: AppImage 86,7 MiB · .deb 66,9 MiB · .rpm 72,9 MiB · cài đặt 337 MiB |
 | A4 | RSS idle ≤ 250 MB | **đạt**: 170–179 MiB (`rss-probe.sh`, Host headless) |
-| A5 | Cold start → first paint ≤ 1,5 s | benchmark |
+| A5 | Cold start → first paint ≤ 1,5 s | **chưa đạt**: 4,4–5,1 s (`cold-start-probe.sh`, weston headless trong sandbox) — Host boot 1,5–2,3 s + cửa sổ +0,2 s + webview tải trang 2,5–2,8 s |
 | A6 | Update N→N+1 pass trên 3 nền tảng | e2e máy sạch |
 | A7 | Plugin thật cài + chạy | e2e |
 | A8 | Session cũ mở được | e2e |
@@ -656,7 +656,7 @@ Audit trạng thái migration sau P5-posix + A3. Mỗi điều kiện nghiệm t
 | A2 | Không sửa `packages/` upstream | **đạt theo lớp L0, có 1 ngoại lệ L2 đã ghi** | `git diff --name-only origin/master...HEAD -- packages/core packages/llm packages/session packages/bundle apps/desktop/src` **rỗng**. Ngoại lệ L2: `packages/client/ui-settings-general` (thẻ cài Office trong Settings) + `packages/extensions/cordis-client-runner/src/client/slot-catalog.ts` (sinh tự động). Ngoài đó fork chỉ thêm `apps/desktop-tauri/`, `apps/desktop-host/native/`, `native/dsh-native/` và sửa `apps/desktop/scripts/desktop-build-paths.mjs` (một dòng `SUPPORTED_TARGETS`, ngoại lệ L2 đã ghi ở B24) |
 | A3 | Artifact ≤ 105 MB (A3′) | **đạt** | `size-gate.sh`: AppImage 86,7 MiB · .deb 66,9 MiB · .rpm 72,9 MiB · cây cài đặt 337 MiB |
 | A4 | RSS idle ≤ 250 MB | **đạt** | 170–179 MiB (`rss-probe.sh`, Host headless) |
-| A5 | Cold start → first paint ≤ 1,5 s | **mở — cần phiên GUI** | Cold start của Host đo được: 1,27–1,31 s (M7). "First paint" là thời điểm webview vẽ khung đầu: cần compositor thật (weston headless) hoặc phiên desktop của người dùng — quy tắc phiên này cấm mở cửa sổ |
+| A5 | Cold start → first paint ≤ 1,5 s | **đo được, chưa đạt** | `cold-start-probe.sh`: shell Tauri trong **weston headless** (không mở cửa sổ trên màn hình người dùng), chạy trong `isolated-run.sh`. Milestone JSON trên stderr của shell: `host-url` 1,5–2,3 s · `window-created` +0,2 s · `page-load-finished` **4,4–5,1 s**. Chênh lệch so với ngân sách: Host boot (1,3–2,3 s) + webview tải trang (2,5–2,8 s). Cách chữa: cửa sổ splash ngay (P1 chưa làm) để *first paint* thật sớm, cắt bundle client, và đo lại trên phiên desktop thật (sandbox + compositor phần mềm làm chậm) |
 | A6 | Update N→N+1 trên 3 nền tảng | **mở — chỉ Linux** | `update-probe.sh` chạy N→N+1 trên AppImage ✓ (P3b). macOS/Windows vẫn do carrier Electron phục vụ, chưa port |
 | A7 | Plugin thật cài + chạy | **đạt** | P0: cài từ registry, cài từ tarball cục bộ, plugin chạy (`fiberPhase: active`) |
 | A8 | Session cũ mở được | **đạt theo cấu trúc** | Định dạng session không đổi (A1/A2); snapshot/expected xanh. Bằng chứng end-to-end với session cũ cần API key → cùng điều kiện với A9 |
