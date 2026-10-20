@@ -15,6 +15,14 @@ work=${DSH_ISOLATION_DIR:?set DSH_ISOLATION_DIR to an existing writable director
 [ -d "$work" ] || { echo "isolated-run: $work does not exist" >&2; exit 2; }
 mkdir -p "$work/home" "$work/tmp"
 
+# Probe inputs that name read-only paths survive the clear; everything else the
+# caller exported stays out of the sandbox.
+forward=()
+for name in DSH_OFFICE_ROOT DSH_OFFICE_COMPONENTS DSH_DESKTOP_TARGET NODE_OPTIONS MALLOC_ARENA_MAX FLAGS ARENA; do
+  value=${!name:-}
+  if [ -n "$value" ]; then forward+=(--setenv "$name" "$value"); fi
+done
+
 exec bwrap \
   --unshare-pid --unshare-uts --unshare-ipc --unshare-cgroup-try \
   --new-session --die-with-parent \
@@ -28,4 +36,5 @@ exec bwrap \
   --setenv HOME "$work/home" \
   --setenv TMPDIR "$work/tmp" \
   --setenv DSH_ISOLATION_DIR "$work" \
+  "${forward[@]}" \
   -- "$@"

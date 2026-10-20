@@ -21,6 +21,8 @@ appimage=${1:-$(ls -t "$tree"/appimage/*.AppImage 2>/dev/null | head -1)}
 [ -n "$appimage" ] && [ -f "$appimage" ] || { echo "RESULT appimage=missing"; exit 1; }
 
 work="$tree/appimage/probe"
+# The previous run made its extraction read-only.
+chmod -R u+w "$work" 2>/dev/null
 rm -rf "$work"
 mkdir -p "$work/root" "$work/home" "$work/tmp" "$work/cache" "$work/config"
 cd "$work/root" || exit 1
@@ -38,7 +40,7 @@ echo "runtime_dir=$DSH_DESKTOP_RUNTIME_DIR"
 echo "project_dir=$DSH_DESKTOP_PROJECT_DIR"
 echo "version=$DSH_DESKTOP_VERSION"
 echo "client_version=$DSH_CLIENT_VERSION"
-echo "project_has_cordis=$([ -f "$DSH_DESKTOP_PROJECT_DIR/cordis.yml" ] && echo yes || echo no)"
+echo "project_seeded=$([ -f "$DSH_DESKTOP_PROJECT_DIR/package.json" ] && echo yes || echo no)"
 echo "node_exec=$([ -x "$DSH_DESKTOP_RUNTIME_DIR/../runtime/bin/node" ] && echo yes || echo no)"
 STUB
 chmod +x "$work/apprun/usr/bin/dsh-desktop-tauri"
@@ -46,8 +48,8 @@ env -i PATH=/usr/bin:/bin HOME="$work/home" TMPDIR="$work/tmp" \
   XDG_CACHE_HOME="$work/cache" XDG_CONFIG_HOME="$work/config" \
   DSH_HOME="$work/home/.dsh" APPIMAGE="$appimage" APPDIR="$work/apprun" \
   "$work/apprun/AppRun"
-echo "seeded_in_home=$(find "$work/home/.dsh/desktop-project" -maxdepth 1 -name cordis.yml 2>/dev/null | wc -l)"
-echo "seed_writable=$([ -w "$work/home/.dsh/desktop-project/cordis.yml" ] && echo yes || echo no)"
+echo "seeded_in_home=$(find "$work/home/.dsh/desktop-project" -maxdepth 1 -name package.json 2>/dev/null | wc -l)"
+echo "seed_writable=$([ -w "$work/home/.dsh/desktop-project/package.json" ] && echo yes || echo no)"
 
 # --- B. Packaged Host from a read-only extraction -------------------------
 chmod -R a-w "$extract"

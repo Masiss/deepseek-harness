@@ -556,18 +556,18 @@ Provider Rust pass parity; code cũ chỉ bị xoá sau một chu kỳ phát hà
 
 ### Công việc
 
-- Component manager cho Office/Python.
-- Prune production tree.
+- [x] Component manager cho Office/Python (`components/` + Host installer + bridge).
+- [x] Prune production tree.
 - Brotli cho Web dist.
 - Ripgrep on-demand.
 - CI size budget.
 
 ### Acceptance Criteria
 
-- [ ] Core ≤ 105 MB.
-- [ ] Office cài lần đầu chạy được, có progress + lỗi rõ ràng.
-- [ ] Python cài lần đầu chạy được.
-- [ ] Không có Office/Python trong bundle core.
+- [ ] Core ≤ 105 MB — hiện 558 MB cài đặt (`dsh/` 414 MB + runtime 144 MB), AppImage 137 MiB / .deb 108 MiB; ngưỡng 105 MB không thể đạt nếu chỉ cắt payload, cần quyết định lại ngân sách.
+- [x] Office cài lần đầu chạy được, có progress + lỗi rõ ràng (status + SSE; UI card còn mở).
+- [x] Python cài lần đầu chạy được (import check trước khi publish).
+- [x] Không có Office/Python trong bundle core.
 - [ ] Size gate trong CI.
 - [ ] `bun run test:web:built` vẫn pass.
 
@@ -623,8 +623,8 @@ Chỉ coi là hoàn thành khi **tất cả** đạt:
 |---|---|---|
 | A1 | 10 bất biến giữ nguyên | gate §6 `AGENTS.md` |
 | A2 | Không sửa `packages/` upstream | `git diff upstream/master...HEAD -- packages/` rỗng |
-| A3 | Core ≤ 105 MB | CI size gate |
-| A4 | RSS idle ≤ 250 MB | benchmark |
+| A3 | Core ≤ 105 MB | CI size gate — **chưa đạt**: 558 MB cài đặt, AppImage 137 MiB, .deb 108 MiB |
+| A4 | RSS idle ≤ 250 MB | **đạt**: 170–179 MiB (`rss-probe.sh`, Host headless) |
 | A5 | Cold start → first paint ≤ 1,5 s | benchmark |
 | A6 | Update N→N+1 pass trên 3 nền tảng | e2e máy sạch |
 | A7 | Plugin thật cài + chạy | e2e |

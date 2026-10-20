@@ -24,7 +24,7 @@ version=$(node -p "require('$repo/package.json').version")
 out="$work/DeepSeek-Harness-$version-$appimage_arch.AppImage"
 
 for required in "$tree/bin/desktop-host" "$tree/dsh/node_modules/@deepseek-ai/dsh-desktop-host/package.json" \
-  "$tree/runtime/bin/node" "$tree/runtime/primary-runtime/dependencies/node/bin/node" "$tree/project/cordis.yml"; do
+  "$tree/runtime/bin/node" "$tree/runtime/primary-runtime/dependencies/node/bin/node" "$tree/project/package.json"; do
   [ -e "$required" ] || { echo "pack-appimage: missing $required; run prepare-linux-runtime first" >&2; exit 1; }
 done
 
@@ -89,6 +89,10 @@ export DSH_DESKTOP_VERSION="\${DSH_DESKTOP_VERSION:-$version}"
 export DSH_CLIENT_VERSION="\${DSH_CLIENT_VERSION:-$version}"
 if [ -n "\${DSH_APPIMAGE_UPDATE_FEED:-}" ]; then
   export DSH_DESKTOP_UPDATE_FEED="\$DSH_APPIMAGE_UPDATE_FEED"
+fi
+# The Office component is a separate download from the same release feed.
+if [ -n "\${DSH_COMPONENT_FEED:-}" ]; then
+  export DSH_DESKTOP_COMPONENT_FEED="\$DSH_COMPONENT_FEED"
 fi
 exec "\$here/usr/bin/dsh-desktop-tauri" "\$@"
 EOF

@@ -1,0 +1,359 @@
+/**
+ * On-demand Office component.
+ *
+ * The Desktop bundle ships the Host, the dsh runtime, and a profile. Office
+ * authoring needs a Python payload and the Office skill assets, which a user
+ * who never opens a document should not download and should not pay for on
+ * disk. This service fetches that archive from the release feed, verifies its
+ * digest, extracts it below the Harness home, and proves the interpreter still
+ * imports every module the Office skills document before publishing it.
+ *
+ * The payload is composed as a second runtime: `runtime.json` is copied from
+ * the bundled primary runtime and Node and pnpm are linked to it, so the
+ * `desktop-office` plugin sees the same contract it sees in a full bundle.
+ *
+ * @module @deepseek-ai/dsh-desktop-host/components/office
+ */
+
+import { createHash } from 'node:crypto'
+import { execFile } from 'node:child_process'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { copyFile, mkdir, open, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
+import { parseComponentsManifest, type DesktopComponentArtifact } from './manifest.ts'
+import { extractZstdTar } from './tar.ts'
+
+const run = promisify(execFile)
+
+/** Stages the client renders. */
+export type DesktopComponentPhase = 'idle' | 'downloading' | 'verifying' | 'installing' | 'ready' | 'error'
+
+/** Fixed failure classes the client localizes. */
+export type DesktopComponentFailureKind = 'feed' | 'feed-network' | 'download' | 'download-network'
+  | 'integrity' | 'archive' | 'python' | 'install' | 'unavailable'
+
+/** The carrier-owned status the client may render. */
+export interface DesktopOfficeStatus {
+  /** Component this status describes. */
+  readonly id: 'office'
+  /** Whether a complete installation exists on disk. */
+  readonly installed: boolean
+  /** Whether the running Host composed the Office plugin from it. */
+  readonly active: boolean
+  /** Current stage. */
+  readonly phase: DesktopComponentPhase
+  /** Installed or target version, once known. */
+  readonly version?: string
+  /** Whole percent while downloading. */
+  readonly percent?: number
+  /** Fixed failure class, only on `error`. */
+  readonly failure?: DesktopComponentFailureKind
+}
+
+/** Construction inputs; every deployment-varying choice is explicit. */
+export interface DesktopOfficeComponentOptions {
+  /** Directory URL serving `components.json` and the archives. */
+  readonly feed: string
+  /** Root below the Harness home that holds installed versions. */
+  readonly directory: string
+  /** Bundled primary runtime supplying `runtime.json`, Node, and pnpm. */
+  readonly primaryRuntime: string
+  /** Fetch implementation, replaced at the network test boundary. */
+  readonly fetch?: (url: string, init: RequestInit) => Promise<Response>
+  /** Manifest request deadline in milliseconds. */
+  readonly timeoutMs?: number
+  /** Archive deadline in milliseconds; the payload is much larger than the manifest. */
+  readonly artifactTimeoutMs?: number
+}
+
+/** Largest accepted manifest. */
+const MAX_MANIFEST_BYTES = 64 * 1024
+
+/** Modules every Office skill imports; the archive must resolve all of them. */
+const REQUIRED_IMPORTS = 'import numpy, pandas, openpyxl, docx, pptx, PIL, lxml\n'
+
+/** One classified install failure. */
+class ComponentFailure extends Error {
+  constructor(readonly kind: DesktopComponentFailureKind, cause?: unknown) {
+    super(`desktop office component: ${kind}`, cause === undefined ? undefined : { cause })
+  }
+}
+
+/** Random suffix for staging names. */
+function suffix(): string {
+  return `${String(process.pid)}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+/** Read a response body with an upper bound. */
+async function boundedText(response: Response, limit: number): Promise<string> {
+  if (response.body === null) throw new ComponentFailure('feed')
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > limit) {
+      await reader.cancel()
+      throw new ComponentFailure('feed')
+    }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+/**
+ * Download one archive while hashing it.
+ *
+ * @param url - Absolute artifact URL.
+ * @param file - Destination path owned by the caller.
+ * @param fetchImpl - Fetch implementation.
+ * @param signal - Deadline shared with the request.
+ * @param onProgress - Receives bytes received so far.
+ * @returns The lowercase SHA-256 of the received bytes.
+ */
+async function download(
+  url: string,
+  file: string,
+  fetchImpl: NonNullable<DesktopOfficeComponentOptions['fetch']>,
+  signal: AbortSignal,
+  onProgress: (received: number) => void,
+): Promise<string> {
+  let response: Response
+  try {
+    response = await fetchImpl(url, { signal })
+  } catch (error) {
+    throw new ComponentFailure('download-network', error)
+  }
+  if (!response.ok || response.body === null) throw new ComponentFailure('download')
+  const hash = createHash('sha256')
+  const out = await open(file, 'w')
+  let received = 0
+  try {
+    const reader = response.body.getReader()
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      hash.update(value)
+      received += value.byteLength
+      let offset = 0
+      while (offset < value.byteLength) {
+        const { bytesWritten } = await out.write(value, offset, value.byteLength - offset)
+        offset += bytesWritten
+      }
+      onProgress(received)
+    }
+  } catch (error) {
+    if (error instanceof ComponentFailure) throw error
+    throw new ComponentFailure('download-network', error)
+  } finally {
+    await out.close()
+  }
+  return hash.digest('hex')
+}
+
+/**
+ * Read, verify, and install the Office component on request.
+ *
+ * Installs are serialized: a second request waits for the running one and
+ * receives its status instead of starting a competing extraction.
+ */
+export class DesktopOfficeComponent {
+  private readonly directory: string
+  private readonly primaryRuntime: string
+  private readonly feed: string
+  private readonly fetchImpl: NonNullable<DesktopOfficeComponentOptions['fetch']>
+  private readonly timeoutMs: number
+  private readonly artifactTimeoutMs: number
+  private status: DesktopOfficeStatus
+  private installing: Promise<void> | undefined
+  private readonly listeners = new Set<(state: DesktopOfficeStatus) => void>()
+
+  /**
+   * @param options - Feed, directories, and network substitutes.
+   */
+  constructor(options: DesktopOfficeComponentOptions) {
+    this.directory = options.directory
+    this.primaryRuntime = options.primaryRuntime
+    this.feed = options.feed.replace(/\/+$/u, '')
+    this.fetchImpl = options.fetch ?? ((url, init) => fetch(url, init))
+    this.timeoutMs = options.timeoutMs ?? 30_000
+    this.artifactTimeoutMs = options.artifactTimeoutMs ?? 30 * 60_000
+    const installed = this.installed()
+    this.status = installed === undefined
+      ? { id: 'office', installed: false, active: false, phase: 'idle' }
+      : { id: 'office', installed: true, active: false, phase: 'ready', version: installed.version }
+  }
+
+  /** Latest status; every published change is a new immutable object. */
+  get presentation(): DesktopOfficeStatus {
+    return this.status
+  }
+
+  /**
+   * Observe status changes.
+   *
+   * @param listener - Called after every published change.
+   * @returns Disposer removing this listener.
+   */
+  subscribe(listener: (state: DesktopOfficeStatus) => void): () => void {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
+  }
+
+  /**
+   * Locate a complete installation without trusting the manifest.
+   *
+   * @returns Version and composed runtime directory, or undefined when absent or incomplete.
+   */
+  installed(): { readonly version: string; readonly runtime: string } | undefined {
+    let version: unknown
+    try {
+      version = (JSON.parse(readFileSync(join(this.directory, 'current.json'), 'utf8')) as { version?: unknown }).version
+    } catch {
+      return undefined
+    }
+    if (typeof version !== 'string' || !/^[\w.+-]+$/u.test(version)) return undefined
+    const runtime = join(this.directory, 'versions', version, 'runtime')
+    try {
+      // A dangling link means the bundle moved; treat it as not installed.
+      statSync(join(runtime, 'runtime.json'))
+      statSync(join(runtime, 'dependencies', 'python', 'bin', 'python3'))
+      statSync(join(runtime, 'dependencies', 'node', 'bin', 'node'))
+    } catch {
+      return undefined
+    }
+    return { version, runtime }
+  }
+
+  /** Mark the running Host as having composed the Office plugin from the installation. */
+  markActive(): void {
+    if (this.status.installed) this.publish({ ...this.status, active: true })
+  }
+
+  /**
+   * Install the component, or wait for the running install.
+   *
+   * @returns The settled status; failures are published, not thrown.
+   */
+  async install(): Promise<DesktopOfficeStatus> {
+    if (this.installing !== undefined) {
+      await this.installing
+      return this.status
+    }
+    const attempt = this.attempt().finally(() => { this.installing = undefined })
+    this.installing = attempt
+    await attempt
+    return this.status
+  }
+
+  private publish(next: DesktopOfficeStatus): void {
+    this.status = next
+    for (const listener of this.listeners) listener(next)
+  }
+
+  private async attempt(): Promise<void> {
+    const existing = this.installed()
+    if (existing !== undefined) {
+      this.publish({ id: 'office', installed: true, active: this.status.active, phase: 'ready', version: existing.version })
+      return
+    }
+    await mkdir(this.directory, { recursive: true })
+    const staging = join(this.directory, `staging-${suffix()}`)
+    const archive = join(this.directory, `download-${suffix()}`)
+    try {
+      const artifact = await this.readArtifact()
+      this.publish({ id: 'office', installed: false, active: false, phase: 'downloading', version: artifact.version, percent: 0 })
+      const signal = AbortSignal.timeout(this.artifactTimeoutMs)
+      const digest = await download(`${this.feed}/${artifact.file}`, archive, this.fetchImpl, signal, (received) => {
+        this.publish({
+          id: 'office', installed: false, active: false, phase: 'downloading', version: artifact.version,
+          percent: Math.max(0, Math.min(100, Math.floor((received / artifact.bytes) * 100))),
+        })
+      })
+      if (digest !== artifact.sha256) throw new ComponentFailure('integrity')
+      this.publish({ id: 'office', installed: false, active: false, phase: 'verifying', version: artifact.version, percent: 100 })
+      await mkdir(staging, { recursive: true })
+      try {
+        await extractZstdTar(archive, staging, `${archive}.tar`)
+      } catch (error) {
+        throw new ComponentFailure(error instanceof ComponentFailure ? error.kind : 'archive', error)
+      }
+      await this.compose(staging)
+      this.publish({ id: 'office', installed: false, active: false, phase: 'installing', version: artifact.version })
+      await this.commit(staging, artifact.version)
+      this.publish({ id: 'office', installed: true, active: false, phase: 'ready', version: artifact.version })
+    } catch (error) {
+      const kind = error instanceof ComponentFailure ? error.kind : 'install'
+      console.error(error)
+      this.publish({ id: 'office', installed: false, active: false, phase: 'error', failure: kind })
+    } finally {
+      await rm(staging, { recursive: true, force: true }).catch(() => undefined)
+      await rm(archive, { force: true }).catch(() => undefined)
+      await rm(`${archive}.tar`, { force: true }).catch(() => undefined)
+    }
+  }
+
+  private async readArtifact(): Promise<DesktopComponentArtifact> {
+    let response: Response
+    try {
+      response = await this.fetchImpl(`${this.feed}/components.json`, { signal: AbortSignal.timeout(this.timeoutMs) })
+    } catch (error) {
+      throw new ComponentFailure('feed-network', error)
+    }
+    if (!response.ok) throw new ComponentFailure('feed')
+    let manifest
+    try {
+      manifest = parseComponentsManifest(JSON.parse(await boundedText(response, MAX_MANIFEST_BYTES)))
+    } catch (error) {
+      throw new ComponentFailure(error instanceof ComponentFailure ? error.kind : 'feed', error)
+    }
+    const artifact = manifest.components.find((entry: { id: string }) => entry.id === 'office')
+    if (artifact === undefined) throw new ComponentFailure('feed')
+    return artifact
+  }
+
+  /**
+   * Turn extracted files into a payload the `desktop-office` plugin accepts.
+   *
+   * @param root - Staging directory holding `runtime/` and `office-skills/`.
+   */
+  private async compose(root: string): Promise<void> {
+    const runtime = join(root, 'runtime')
+    await copyFile(join(this.primaryRuntime, 'runtime.json'), join(runtime, 'runtime.json'))
+    for (const name of ['node', 'pnpm']) {
+      const link = join(runtime, 'dependencies', name)
+      await rm(link, { recursive: true, force: true })
+      await symlink(join(this.primaryRuntime, 'dependencies', name), link, 'dir')
+    }
+    const python = join(runtime, 'dependencies', 'python', 'bin', 'python3')
+    try {
+      await stat(python)
+      await stat(join(root, 'office-skills'))
+    } catch (error) {
+      throw new ComponentFailure('archive', error)
+    }
+    try {
+      await run(python, ['-c', REQUIRED_IMPORTS], { timeout: 120_000, env: { PATH: '/usr/bin:/bin' } })
+    } catch (error) {
+      throw new ComponentFailure('python', error)
+    }
+    await mkdir(join(this.directory, 'versions'), { recursive: true })
+  }
+
+  private async commit(staging: string, version: string): Promise<void> {
+    const target = join(this.directory, 'versions', version)
+    await rm(target, { recursive: true, force: true })
+    await rename(staging, target)
+    const marker = join(this.directory, 'current.json')
+    const temporary = `${marker}.${suffix()}`
+    await writeFile(temporary, `${JSON.stringify({ version }, undefined, 2)}\n`)
+    await rename(temporary, marker)
+    // Previous versions are unreachable once the marker moved.
+    for (const entry of readdirSync(join(this.directory, 'versions'))) {
+      if (entry !== version) await rm(join(this.directory, 'versions', entry), { recursive: true, force: true })
+    }
+  }
+}

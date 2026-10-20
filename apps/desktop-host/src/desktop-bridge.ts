@@ -40,6 +40,7 @@ import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import type { IndexInjection } from '@deepseek-ai/dsh-host-webserver'
 import type { DesktopUpdatePresentation } from './update/service.ts'
+import type { DesktopOfficeStatus } from './components/office.ts'
 
 /** Absolute pathname prefix owning every bridge request. */
 export const BRIDGE_PATH = '/__dsh-desktop'
@@ -67,6 +68,11 @@ export interface DesktopBridgeOptions {
    * @defaultValue absent, which reports `idle` and opens nothing.
    */
   readonly updates?: DesktopUpdateChannel
+  /**
+   * On-demand Office component published to the client.
+   * @defaultValue absent, which reports an idle, uninstalled component.
+   */
+  readonly components?: DesktopOfficeChannel
 }
 
 /** The part of the update service the bridge publishes. */
@@ -84,6 +90,25 @@ export interface DesktopUpdateChannel {
    * @returns Nothing when the flow settles.
    */
   open(): Promise<void>
+}
+
+/**
+ * The part of the Office component service the bridge publishes.
+ */
+export interface DesktopOfficeChannel {
+  /** Latest published status. */
+  readonly presentation: DesktopOfficeStatus
+  /**
+   * Observe status changes.
+   * @param listener - Called after every published change.
+   * @returns Disposer removing this listener.
+   */
+  subscribe(listener: (state: DesktopOfficeStatus) => void): () => void
+  /**
+   * Download, verify, and install the component.
+   * @returns The settled status; failures are part of it, not exceptions.
+   */
+  install(): Promise<DesktopOfficeStatus>
 }
 
 /**
@@ -115,15 +140,21 @@ export function installDesktopBridge(ctx: Context, options: DesktopBridgeOptions
   const route = ctx.webServer.register({
     kind: 'prefix',
     path: BRIDGE_PATH,
-    handler: (req, res) => handle(ctx, shortcuts, options.updates, req, res),
+    handler: (req, res) => handle(ctx, shortcuts, options.updates, options.components, req, res),
   })
-  const events = options.updates === undefined ? undefined : serveUpdateEvents(ctx, options.updates)
+  const events = options.updates === undefined ? undefined : serveUpdates(ctx, options.updates)
+  const componentChannel = options.components
+  const componentEvents = componentChannel === undefined
+    ? undefined
+    : serveEvents(ctx, `${BRIDGE_PATH}/components-events`, () => componentChannel.presentation,
+      listener => componentChannel.subscribe(listener))
   const removeInject = ctx.on('webserver/index-inject', (table: IndexInjection[]) => {
     table.push({ kind: 'script', placement: 'head', text: renderShim(platform) })
   })
   return () => {
     route()
     events?.()
+    componentEvents?.()
     removeInject()
     shortcuts.dispose()
   }
@@ -141,6 +172,7 @@ async function handle(
   ctx: Context,
   shortcuts: ShortcutPersistence,
   updates: DesktopUpdateChannel | undefined,
+  components: DesktopOfficeChannel | undefined,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
@@ -168,7 +200,7 @@ async function handle(
     sendJson(res, 400, { error: 'invalid-json' })
     return
   }
-  const answer = await dispatch(shortcuts, updates, path, request)
+  const answer = await dispatch(shortcuts, updates, components, path, request)
   if (answer === undefined) {
     sendJson(res, 404, { error: 'unknown-method' })
     return
@@ -186,6 +218,7 @@ interface DispatchAnswer {
 async function dispatch(
   shortcuts: ShortcutPersistence,
   updates: DesktopUpdateChannel | undefined,
+  components: DesktopOfficeChannel | undefined,
   path: string,
   request: unknown,
 ): Promise<DispatchAnswer | undefined> {
@@ -221,6 +254,16 @@ async function dispatch(
       // settings spinner covers it; progress reaches the page over events.
       if (updates !== undefined) await updates.open()
       return { status: 204, payload: undefined }
+    case '/components-status':
+      return {
+        status: 200,
+        payload: components?.presentation ?? { id: 'office', installed: false, active: false, phase: 'idle' },
+      }
+    case '/components-install':
+      // Installing downloads and verifies a payload; the reply carries the
+      // settled status so the caller need not poll for the outcome.
+      if (components === undefined) return { status: 503, payload: { error: 'components-unavailable' } }
+      return { status: 200, payload: await components.install() }
     default:
       return undefined
   }
@@ -256,11 +299,30 @@ function sendJson(res: ServerResponse, status: number, payload: unknown): void {
  * @param updates - Service whose published states are forwarded.
  * @returns Disposer closing the route and every open response.
  */
-function serveUpdateEvents(ctx: Context, updates: DesktopUpdateChannel): () => void {
+function serveUpdates(ctx: Context, updates: DesktopUpdateChannel): () => void {
+  return serveEvents(ctx, `${BRIDGE_PATH}/updates-events`, () => updates.presentation,
+    listener => updates.subscribe(listener))
+}
+
+/**
+ * Serve one status stream as server-sent events.
+ *
+ * @param ctx - Host context owning the webserver and Connection fence.
+ * @param path - Absolute route below the bridge prefix.
+ * @param current - Latest state, sent on connect.
+ * @param subscribe - Status subscription for one client.
+ * @returns Disposer closing the route and every open response.
+ */
+function serveEvents<T>(
+  ctx: Context,
+  path: string,
+  current: () => T,
+  subscribe: (listener: (state: T) => void) => () => void,
+): () => void {
   const clients = new Set<ServerResponse>()
   const route = ctx.webServer.register({
     kind: 'exact',
-    path: `${BRIDGE_PATH}/updates-events`,
+    path,
     handler: (req, res) => {
       res.setHeader('cache-control', 'no-store')
       const rejection = ctx.connection.requestRejection(req)
@@ -280,14 +342,14 @@ function serveUpdateEvents(ctx: Context, updates: DesktopUpdateChannel): () => v
         connection: 'keep-alive',
         'x-accel-buffering': 'no',
       })
-      res.write(`data: ${JSON.stringify(updates.presentation)}\n\n`)
+      res.write(`data: ${JSON.stringify(current())}\n\n`)
       clients.add(res)
       // The response owns the connection lifetime; the request completes as
       // soon as its empty body ends, which is not when the page disconnects.
       res.on('close', () => { clients.delete(res) })
     },
   })
-  const unsubscribe = updates.subscribe((state) => {
+  const unsubscribe = subscribe((state) => {
     const record = `data: ${JSON.stringify(state)}\n\n`
     for (const res of clients) res.write(record)
   })
@@ -393,6 +455,17 @@ function renderShim(platform: ShortcutPlatform): string {
         const source = new EventSource(base + '/updates-events')
         source.onmessage = (event) => {
           try { listener(JSON.parse(event.data)) } catch (error) { console.warn('desktop bridge: update event', error) }
+        }
+        return () => { source.close() }
+      },
+    },
+    components: {
+      status: () => post('components-status'),
+      install: () => post('components-install'),
+      subscribe: (listener) => {
+        const source = new EventSource(base + '/components-events')
+        source.onmessage = (event) => {
+          try { listener(JSON.parse(event.data)) } catch (error) { console.warn('desktop bridge: component event', error) }
         }
         return () => { source.close() }
       },

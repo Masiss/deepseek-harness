@@ -186,6 +186,45 @@ Kiểm chứng thật:
 
 Còn mở: tên gói cho Fedora (RPM) và cài trên máy thật có GUI.
 
+### Office/Python theo nhu cầu (P6, đã đo)
+
+Bundle core **không còn** `runtime/primary-runtime/dependencies/python` lẫn `office-skills`. `prepare-linux-runtime.ts` prune + verify Python như cũ, rồi **chuyển** nó (cùng `packages/skill/skill-office/assets`) vào `components/office-<version>-<target>.tar.zst` và ghi `components/components.json` (id, version, file, bytes, sha256). `runtime.json` vẫn giữ bản ghi Python — installer chép nó vào runtime ghép.
+
+Host (`apps/desktop-host/src/components/`): `manifest.ts` validate; `tar.ts` đọc zstd + ustar tự viết (không thêm dependency, chặn entry/link thoát thư mục); `office.ts` tải → sha256 → giải nén → ghép runtime (`runtime.json` từ primary, `node`/`pnpm` symlink) → chạy `python3 -c 'import numpy, pandas, openpyxl, docx, pptx, PIL, lxml'` → `current.json` (atomic). Cài đặt tuần tự; lỗi phân loại `feed|feed-network|download|download-network|integrity|archive|python|install`. Bridge: `POST /__dsh-desktop/components-status|components-install`, SSE `/components-events`. Cài xong Host gửi frame `restart` (chỉ khi không có turn đang chạy); lần khởi động sau `tauri.ts` thấy bản cài rồi `ctx.plugin(desktopOffice, {source, root})` và báo `active:true`.
+
+| Số đo | Trước | Sau |
+|---|---|---|
+| primary runtime | 337 MB | **144 MB** |
+| component archive | — | **59.789.924 byte** (57 MB; giải nén 193 MB + assets) |
+| AppImage | 200.698.360 | **143.735.288** |
+| .deb | 153.888.540 | **112.839.092** |
+
+`office-component-probe.sh` (bwrap, không GUI) chạy trên **cả cây build lẫn AppImage đã giải nén**:
+
+```
+bundle_python=absent
+status_initial={"installed":false,"phase":"idle"}
+status_install={"installed":true,"phase":"ready","version":"0.2.1-rc.2"}
+restart_frame=yes
+python_imports=ok
+status_restarted={"installed":true,"active":true,"phase":"ready"}
+```
+
+Bẫy: project seed **không có `cordis.yml`** — Host tạo nó khi boot; mọi check đóng gói phải nhìn `project/package.json` (đã sửa ở `pack-appimage.sh`, `pack-deb.sh`, hai probe). `bin/desktop-host` là script sinh bởi `prepare-linux-runtime.ts`, nên đổi flag Node phải sửa ở đó rồi chạy lại.
+
+### A4 — RSS idle của Host (đã đo, đạt)
+
+Đo bằng `rss-probe.sh` trong `isolated-run.sh`: Host headless từ cây đã đóng gói, ổn định 15 s. WebKitGTK là process tree riêng nên **không** tính — đúng cách con số 309–318 MB trước đây được đo.
+
+| Cấu hình | RSS | heapTotal / heapUsed |
+|---|---|---|
+| mặc định | 314–324 MB | 217 / 78 MB |
+| `--max-old-space-size=128` | 281 MB | — |
+| `--max-old-space-size=64` | **không boot được** | — |
+| `--optimize-for-size` | **170–179 MB** | 73 / 68 MB |
+
+V8 chọn kích thước heap theo RAM của máy (32 GB ở đây), không theo nhu cầu: gần như toàn bộ 140 MB chênh lệch là heap dự trữ. Launcher `bin/desktop-host` thêm `--optimize-for-size`; `DSH_DESKTOP_NODE_FLAGS=` (rỗng) tắt nó. Đánh đổi: JIT/GC bớt tham lam, không đáng kể với workload chờ model; heap vẫn mở rộng khi session cần (không đặt trần old-space). Trên AppImage đã giải nén: `host_rss_kib=179684`, `node_flags=--optimize-for-size`.
+
 ### Update N → N+1 end-to-end (P3b, đã đo)
 
 Host sở hữu toàn bộ luồng; shell chỉ là người trả lời hộp thoại. Trước mỗi bước không thể hoàn tác, Host gửi `@@DSH@@{"type":"update-prompt","promptId":N,"action":"download"|"install","version":"…"}`; shell hiện dialog native (`tauri-plugin-dialog`, vốn đã là dependency) rồi trả `{"type":"update-prompt","promptId":N,"accepted":bool}`.
@@ -315,7 +354,7 @@ Menu Application: About, (dev) Reload Page + Toggle Developer Tools `F12`, Quit 
 | `apps/desktop-tauri/scripts/appimage-probe.sh` | AppImage headless isolated: hợp đồng `AppRun`, seed profile, Host boot từ ảnh read-only |
 | `apps/desktop-tauri/scripts/update-flow-probe.mjs` + `isolated-run.sh` | N → N+1 thật: feed HTTP, prompt qua stdio, thay `$APPIMAGE`, frame `restart` — trong sandbox bwrap |
 | `apps/desktop-tauri/scripts/isolated-run.sh` | Chạy bất kỳ lệnh nào không chạm phiên: PID/UTS/IPC ns, `/run` rỗng, no TTY, env sạch |
-| `apps/desktop-tauri/scripts/pack-deb.sh` + `deb-probe.sh` | Đóng gói `.deb` (ar+tar+zstd) và kiểm tra headless: launcher, seed, Host boot từ bản giải nén read-only |
+| `apps/desktop-tauri/scripts/pack-deb.sh` + `deb-probe.sh` | Đóng gói `.deb` (ar+tar+zstd) và kiểm tra headless: launcher, seed, Host boot từ bản giải nén read-only |\n| `apps/desktop-tauri/scripts/office-component-probe.sh` | Cài Office theo nhu cầu từ feed loopback, kiểm import Python, restart để Office compose |\n| `apps/desktop-tauri/scripts/rss-probe.sh` | Đo RSS idle của Host headless (A4) |
 
 `render.mjs` cần chạy trong `apps/web` (nơi có `playwright`):
 

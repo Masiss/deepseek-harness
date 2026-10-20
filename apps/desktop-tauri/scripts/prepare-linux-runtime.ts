@@ -30,7 +30,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { cpSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { delimiter, dirname, join, relative, resolve } from 'node:path'
 import {
   DESKTOP_HOST_PACKAGE,
@@ -48,6 +48,7 @@ import { prepareDesktopPackageSet } from '../../desktop/scripts/prepare-package-
 import { prepareRuntimePatches, verifyRuntimePatches } from '../../desktop/scripts/prepare-runtime-patches.ts'
 import { desktopRuntimeFileExclusion } from '../../desktop/scripts/runtime-file-policy.ts'
 import { selectOfficeEngine } from '../../../scripts/libreoffice-packages.mjs'
+import { buildOfficeComponent, type BuiltOfficeComponent } from './office-component.ts'
 import { prunePythonPayload, verifyPythonPayload } from './prune-python-payload.ts'
 
 const APP_ROOT = resolve(import.meta.dirname, '..')
@@ -64,10 +65,17 @@ const DESKTOP_APP_ROOT = join(REPOSITORY_ROOT, 'apps', 'desktop')
  */
 const HOST_LAUNCHER = `#!/bin/sh
 # Run the installed Desktop Host with the bundled Node.
+#
+# V8 sizes its heap from the machine's memory, not from what the Host needs:
+# an idle Host held a 217 MB heap (78 MB used) on a 32 GB machine. The size
+# heuristic cuts the reservation to 73 MB and idle RSS from 314 MB to 170 MB,
+# trading a small amount of JIT throughput for memory this shell does not need.
+# The value grows the heap again when a session asks for it; set
+# DSH_DESKTOP_NODE_FLAGS to empty to disable the flag.
 set -e
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 runtime=$1
-exec "$here/../runtime/bin/node" "$runtime/node_modules/@deepseek-ai/dsh-desktop-host/lib/tauri.js" "$@"
+exec "$here/../runtime/bin/node" \${DSH_DESKTOP_NODE_FLAGS---optimize-for-size} "$runtime/node_modules/@deepseek-ai/dsh-desktop-host/lib/tauri.js" "$@"
 `
 
 function targetName(value: string | undefined): 'linux-x64' | 'linux-arm64' {
@@ -127,13 +135,6 @@ async function main(): Promise<void> {
     throw new Error('linux runtime: the primary runtime declares no Node and pnpm versions')
   }
 
-  // The Python payload ships with packaging and development surface no
-  // documented Desktop workflow loads; prune it, then prove the interpreter
-  // still imports every module the Office skills name.
-  const pythonDir = join(primaryRuntime, 'dependencies', 'python')
-  const pruned = prunePythonPayload(pythonDir)
-  verifyPythonPayload(pythonDir)
-  console.error(`linux runtime: pruned ${String(pruned.removed.length)} Python path(s), deduplicated library=${String(pruned.deduplicatedLibrary)}`)
   const release = parseDesktopRelease({
     schemaVersion: 1,
     version: manifestVersion(join(DESKTOP_APP_ROOT, 'package.json'), 'desktop package'),
@@ -141,6 +142,40 @@ async function main(): Promise<void> {
     nodeVersion: primary.node,
     pnpmVersion: primary.pnpm,
   })
+
+  // Office authoring needs a Python payload and the Office skill assets, but a
+  // user who never opens a document should not download either. Prune the
+  // payload, prove the interpreter still imports every documented module, then
+  // move it out of the bundle into the component archive the Host installs on
+  // demand (ADR-0008). `runtime.json` keeps its Python record: the installer
+  // copies it into the composed runtime.
+  const pythonDir = join(primaryRuntime, 'dependencies', 'python')
+  const components = join(paths.root, 'components')
+  let officeComponent: BuiltOfficeComponent
+  if (existsSync(pythonDir)) {
+    const pruned = prunePythonPayload(pythonDir)
+    verifyPythonPayload(pythonDir)
+    console.error(`linux runtime: pruned ${String(pruned.removed.length)} Python path(s), deduplicated library=${String(pruned.deduplicatedLibrary)}`)
+    mkdirSync(components, { recursive: true })
+    officeComponent = buildOfficeComponent({
+      pythonDir,
+      assetsDir: join(REPOSITORY_ROOT, 'packages', 'skill', 'skill-office', 'assets'),
+      outDir: components,
+      version: release.version,
+      target: name,
+    })
+    console.error(`linux runtime: office component ${officeComponent.file} (${String(officeComponent.bytes)} bytes)`)
+  } else {
+    const published = join(components, 'components.json')
+    if (!existsSync(published)) {
+      throw new Error('linux runtime: the primary runtime has no Python payload and no published component')
+    }
+    const manifest = JSON.parse(readFileSync(published, 'utf8')) as { components?: BuiltOfficeComponent[] }
+    const entry = manifest.components?.[0]
+    if (entry === undefined) throw new Error('linux runtime: the component manifest lists no archive')
+    officeComponent = entry
+    console.error(`linux runtime: reusing office component ${officeComponent.file}`)
+  }
 
   // 1. Select and copy the local tarball closure that supplies dsh itself.
   prepareDesktopPackageSet([paths.packedDsh, paths.packedVendor, paths.packedLandlock], paths.packageSet)
@@ -218,6 +253,7 @@ async function main(): Promise<void> {
     primaryRuntime,
     pnpmEntry: pnpm,
     nodeBin: bin,
+    officeComponent: officeComponent.file,
   }, undefined, 2)}\n`)
 }
 

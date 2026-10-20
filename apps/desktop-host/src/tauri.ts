@@ -17,6 +17,8 @@ import { installDesktopUpdateTaskControl } from './update-tasks.ts'
 import { installDesktopQuitInspection } from './quit-inspection.ts'
 import { installPlatformSessionPublisher } from './platform-session.ts'
 import { prepareDesktopProfile } from './profile-lifecycle.ts'
+import { DesktopOfficeComponent } from './components/office.ts'
+import * as desktopOffice from './office.ts'
 import { createAppImageDriver } from './update/appimage.ts'
 import { updateTarget } from './update/manifest.ts'
 import { DesktopUpdateService, type DesktopUpdateAdmission } from './update/service.ts'
@@ -45,6 +47,14 @@ function updatePromptTimeout(): number {
 async function main(): Promise<void> {
   const runtimeDir = process.argv[2] as string
   const projectDir = process.argv[3] as string
+  const primaryRuntime = process.argv[4] ?? join(runtimeDir, '..', 'runtime', 'primary-runtime')
+  // Office ships as an on-demand component: the Host only knows where the
+  // release feed is, and composes the plugin after the user installs it.
+  const officeComponent = new DesktopOfficeComponent({
+    feed: process.env.DSH_DESKTOP_COMPONENT_FEED ?? '',
+    directory: join(resolveDshHome(), 'components'),
+    primaryRuntime,
+  })
   const installAnchor = join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')
   const preparation = prepareDesktopProfile(projectDir)
   if (preparation.droppedBundles.length > 0) {
@@ -130,10 +140,40 @@ async function main(): Promise<void> {
   control.updateTasks = installDesktopUpdateTaskControl(ctx)
   control.quitInspection = installDesktopQuitInspection(ctx)
   control.updates = createDesktopUpdates(() => control.updateTasks)
-  control.desktopBridge = installDesktopBridge(ctx, control.updates === undefined ? {} : { updates: control.updates })
+  control.desktopBridge = installDesktopBridge(ctx, {
+    ...(control.updates === undefined ? {} : { updates: control.updates }),
+    components: officeComponent,
+  })
   installPlatformSessionPublisher(ctx, (session) => {
     void transport.send({ type: 'platform-session', session }).catch((error: unknown) => { console.error(error) })
   })
+  const installedOffice = officeComponent.installed()
+  if (installedOffice !== undefined) {
+    await ctx.plugin(desktopOffice, {
+      runtimeDir,
+      source: installedOffice.runtime,
+      root: installedOffice.runtime,
+    })
+    officeComponent.markActive()
+  } else {
+    // A finished install becomes visible only after the Host composes the
+    // plugin, so the shell is asked to relaunch — the same restart the plugin
+    // installer asks for. An active turn keeps running: the client restarts.
+    officeComponent.subscribe((state) => {
+      if (!state.installed || state.phase !== 'ready' || state.active) return
+      const decide = control.updateTasks
+      if (decide === undefined) return
+      void (async () => {
+        try {
+          if (await decide('lock')) {
+            await decide('unlock')
+            return
+          }
+          await transport.send({ type: 'restart' })
+        } catch (error: unknown) { console.error(error) }
+      })()
+    })
+  }
   const url = ctx.connection.authenticatedUrl(`${ctx.webServer.protocol}//127.0.0.1:${String(ctx.webServer.port)}`)
   void transport.send({ type: 'ready', url, injections: ctx.webServer.collectIndexInjections() })
     .then(async () => {

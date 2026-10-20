@@ -36,14 +36,14 @@ echo "host_bin=$DSH_DESKTOP_HOST_BIN"
 echo "project_dir=$DSH_DESKTOP_PROJECT_DIR"
 echo "version=$DSH_DESKTOP_VERSION"
 echo "client_version=$DSH_CLIENT_VERSION"
-echo "project_has_cordis=$([ -f "$DSH_DESKTOP_PROJECT_DIR/cordis.yml" ] && echo yes || echo no)"
+echo "project_seeded=$([ -f "$DSH_DESKTOP_PROJECT_DIR/package.json" ] && echo yes || echo no)"
 echo "node_exec=$([ -x "$DSH_DESKTOP_NODE_BIN/node" ] && echo yes || echo no)"
 STUB
 chmod +x "$root/usr/lib/deepseek-harness/dsh-desktop-tauri"
 env -i PATH=/usr/bin:/bin HOME="$work/home" TMPDIR="$work/tmp" DSH_HOME="$home" \
   "$root/usr/bin/deepseek-harness"
-echo "seeded=$(find "$home/desktop-project" -maxdepth 1 -name cordis.yml 2>/dev/null | wc -l)"
-echo "seed_writable=$([ -w "$home/desktop-project/cordis.yml" ] && echo yes || echo no)"
+echo "seeded=$(find "$home/desktop-project" -maxdepth 1 -name package.json 2>/dev/null | wc -l)"
+echo "seed_writable=$([ -w "$home/desktop-project/package.json" ] && echo yes || echo no)"
 echo "seed_outside_root=$([ -d "$root/usr/lib/deepseek-harness/project" ] && echo ok || echo missing)"
 
 # --- B. packaged Host from a read-only extraction -------------------------
