@@ -16,7 +16,7 @@ import type { DesktopUpdatePresentation } from '../src/update/service.ts'
 /** A channel whose state the test drives directly. */
 class StubChannel implements DesktopUpdateChannel {
   presentation: DesktopUpdatePresentation = { phase: 'idle' }
-  readonly manualChecks: boolean[] = []
+  opens = 0
   private readonly listeners = new Set<(state: DesktopUpdatePresentation) => void>()
 
   subscribe(listener: (state: DesktopUpdatePresentation) => void): () => void {
@@ -24,10 +24,9 @@ class StubChannel implements DesktopUpdateChannel {
     return () => { this.listeners.delete(listener) }
   }
 
-  async check(manual = false): Promise<DesktopUpdatePresentation> {
-    this.manualChecks.push(manual)
+  async open(): Promise<void> {
+    this.opens += 1
     this.emit({ phase: 'available', version: '0.3.0' })
-    return this.presentation
   }
 
   /** Publish one state to every subscriber. */
@@ -67,7 +66,7 @@ function base(): string {
 }
 
 describe('desktop bridge updates', () => {
-  it('reports the service status and waits for the requested check', async () => {
+  it('reports the service status and runs the requested flow', async () => {
     expect(await (await fetch(`${base()}${BRIDGE_PATH}/updates-status`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: 'null',
     })).json()).toEqual({ phase: 'idle' })
@@ -76,7 +75,7 @@ describe('desktop bridge updates', () => {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: 'null',
     })
     expect(opened.status).toBe(204)
-    expect(channel.manualChecks).toEqual([true])
+    expect(channel.opens).toBe(1)
 
     expect(await (await fetch(`${base()}${BRIDGE_PATH}/updates-status`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: 'null',

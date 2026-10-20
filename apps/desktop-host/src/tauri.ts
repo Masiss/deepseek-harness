@@ -24,6 +24,24 @@ import { DesktopUpdateService, type DesktopUpdateAdmission } from './update/serv
 /** Control channel chosen once: stdio when the Tauri shell spawned this executable. */
 const transport = createHostTransport()
 
+/** User decisions sent to the shell and awaited by request id. */
+const promptWaiters = new Map<number, (accepted: boolean) => void>()
+let nextPromptRequest = 1
+
+/**
+ * Deadline for one native dialog.
+ *
+ * A shell without a visible window (a headless probe, a session without a
+ * display) must not leave the update flow waiting forever.
+ *
+ * @returns Validated delay in milliseconds.
+ */
+function updatePromptTimeout(): number {
+  const raw = process.env.DSH_DESKTOP_UPDATE_PROMPT_TIMEOUT_MS
+  const parsed = raw === undefined ? Number.NaN : Number(raw)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 180_000
+}
+
 async function main(): Promise<void> {
   const runtimeDir = process.argv[2] as string
   const projectDir = process.argv[3] as string
@@ -71,6 +89,14 @@ async function main(): Promise<void> {
   })()
   transport.onMessage((message) => {
     if (message.type === 'shutdown') { void stop(); return }
+    if (message.type === 'update-prompt') {
+      if (typeof message.promptId !== 'number' || !Number.isSafeInteger(message.promptId)) return
+      const waiter = promptWaiters.get(message.promptId)
+      if (waiter === undefined) return
+      promptWaiters.delete(message.promptId)
+      waiter(message.accepted === true)
+      return
+    }
     if (message.type === 'quit-inspection') {
       if (!('requestId' in message) || !Number.isSafeInteger(message.requestId)) return
       const requestId = message.requestId
@@ -142,6 +168,25 @@ function createDesktopUpdates(
       target: updateTarget(process.platform, process.arch),
       directory: join(resolveDshHome(), 'updates'),
       driver: createAppImageDriver(),
+      confirm: prompt => new Promise<boolean>((resolve) => {
+        const promptId = nextPromptRequest++
+        const timer = setTimeout(() => {
+          promptWaiters.delete(promptId)
+          resolve(false)
+        }, updatePromptTimeout())
+        promptWaiters.set(promptId, (accepted) => {
+          clearTimeout(timer)
+          resolve(accepted)
+        })
+        void transport.send({ type: 'update-prompt', promptId, action: prompt.action, version: prompt.version })
+          .catch((error: unknown) => {
+            clearTimeout(timer)
+            promptWaiters.delete(promptId)
+            console.error(error)
+            resolve(false)
+          })
+      }),
+      restart: async () => { await transport.send({ type: 'restart' }) },
       beforeInstall: async (): Promise<DesktopUpdateAdmission> => {
         const decide = taskControl()
         if (decide === undefined) return 'unavailable'

@@ -80,11 +80,10 @@ export interface DesktopUpdateChannel {
    */
   subscribe(listener: (state: DesktopUpdatePresentation) => void): () => void
   /**
-   * Run the user-requested check.
-   * @param manual - Whether a failure must stay visible.
-   * @returns The resulting status.
+   * Run the user-requested flow: check, ask, download, ask, install, relaunch.
+   * @returns Nothing when the flow settles.
    */
-  check(manual?: boolean): Promise<DesktopUpdatePresentation>
+  open(): Promise<void>
 }
 
 /**
@@ -218,9 +217,9 @@ async function dispatch(
     case '/updates-status':
       return { status: 200, payload: updates?.presentation ?? { phase: 'idle' } }
     case '/updates-open':
-      // The user asked for a check. The reply waits for it so the settings
-      // spinner covers the request; progress reaches the page over events.
-      if (updates !== undefined) await updates.check(true)
+      // The user asked to update. The reply waits for the whole flow so the
+      // settings spinner covers it; progress reaches the page over events.
+      if (updates !== undefined) await updates.open()
       return { status: 204, payload: undefined }
     default:
       return undefined

@@ -210,6 +210,90 @@ describe('DesktopUpdateService', () => {
     await expect(updates.install('0.3.0')).resolves.toMatchObject({ phase: 'error', failure: 'install' })
   })
 
+  it('runs check, download, install, and relaunch after both confirmations', async () => {
+    serveArtifact()
+    const prompts: string[] = []
+    const restarted = vi.fn()
+    const updates = service({
+      confirm: async (prompt) => { prompts.push(`${prompt.action}:${prompt.version}`); return true },
+      restart: restarted,
+    })
+
+    await updates.open()
+
+    expect(prompts).toEqual(['download:0.3.0', 'install:0.3.0'])
+    expect(installed).toHaveLength(1)
+    expect(restarted).toHaveBeenCalledOnce()
+    expect(updates.presentation).toEqual({ phase: 'installing', version: '0.3.0' })
+  })
+
+  it('stops before downloading when the user declines', async () => {
+    serveArtifact()
+    const restarted = vi.fn()
+    const updates = service({
+      confirm: async prompt => prompt.action !== 'download',
+      restart: restarted,
+    })
+
+    await updates.open()
+
+    expect(updates.presentation).toEqual({ phase: 'available', version: '0.3.0' })
+    expect(installed).toHaveLength(0)
+    expect(restarted).not.toHaveBeenCalled()
+  })
+
+  it('keeps a downloaded artifact and asks only for the install next time', async () => {
+    serveArtifact()
+    const asked: string[] = []
+    let allowInstall = false
+    const updates = service({
+      confirm: async (prompt) => {
+        asked.push(prompt.action)
+        return prompt.action === 'download' || allowInstall
+      },
+    })
+
+    await updates.open()
+    expect(updates.presentation).toEqual({ phase: 'ready', version: '0.3.0' })
+    expect(installed).toHaveLength(0)
+
+    // A second request resumes at the install decision; the artifact stays.
+    await updates.open()
+    expect(asked).toEqual(['download', 'install', 'install'])
+    expect(installed).toHaveLength(0)
+
+    allowInstall = true
+    await updates.open()
+    expect(installed).toHaveLength(1)
+  })
+
+  it('does not relaunch when the download fails', async () => {
+    serveArtifact()
+    artifactBody = Buffer.from('tampered payload')
+    const restarted = vi.fn()
+    const updates = service({
+      confirm: async () => true,
+      restart: restarted,
+    })
+
+    await updates.open()
+
+    expect(updates.presentation).toMatchObject({ phase: 'error', failure: 'download' })
+    expect(installed).toHaveLength(0)
+    expect(restarted).not.toHaveBeenCalled()
+  })
+
+  it('joins concurrent requests into one flow', async () => {
+    serveArtifact()
+    const confirm = vi.fn(async () => true)
+    const updates = service({ confirm })
+
+    await Promise.all([updates.open(), updates.open(), updates.open()])
+
+    expect(confirm).toHaveBeenCalledTimes(2)
+    expect(installed).toHaveLength(1)
+  })
+
   it('stops publishing after disposal', async () => {
     serveArtifact()
     const updates = service()

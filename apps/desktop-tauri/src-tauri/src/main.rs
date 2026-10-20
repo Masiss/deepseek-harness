@@ -409,6 +409,7 @@ fn main() {
         .setup(|app| {
             let (binary, args) = host_command()?;
             let (host, url) = HostClient::spawn(&binary, &args)?;
+            host.attach(app.handle().clone());
             app.manage(AppState { host });
 
             let target = tauri::Url::parse(&url)?;

@@ -12,6 +12,8 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
+use tauri::AppHandle;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 /// Marker that separates a control frame from unrelated output.
 const FRAME_PREFIX: &str = "@@DSH@@";
@@ -28,6 +30,8 @@ pub struct HostClient {
     stdin: Mutex<ChildStdin>,
     pending: Mutex<HashMap<u64, mpsc::Sender<Value>>>,
     next_request: AtomicU64,
+    /// Application handle for user-facing update decisions; attached after spawn.
+    app: Mutex<Option<AppHandle>>,
 }
 
 impl HostClient {
@@ -54,6 +58,7 @@ impl HostClient {
             stdin: Mutex::new(stdin),
             pending: Mutex::new(HashMap::new()),
             next_request: AtomicU64::new(1),
+            app: Mutex::new(None),
         });
 
         let mut reader = BufReader::new(stdout);
@@ -84,12 +89,21 @@ impl HostClient {
         };
 
         let dispatch = Arc::clone(&client);
-        std::thread::spawn(move || dispatch.read_frames(reader));
+        std::thread::spawn(move || HostClient::read_frames(&dispatch, reader));
         Ok((client, url))
     }
 
+    /// Give the reader thread an application handle for native update dialogs.
+    ///
+    /// @param app - handle used to show dialogs and relaunch the process.
+    pub fn attach(&self, app: AppHandle) {
+        if let Ok(mut slot) = self.app.lock() {
+            *slot = Some(app);
+        }
+    }
+
     /// Drain frames for the rest of the Host lifetime.
-    fn read_frames(&self, mut reader: BufReader<ChildStdout>) {
+    fn read_frames(self: &Arc<Self>, mut reader: BufReader<ChildStdout>) {
         let mut line = String::new();
         loop {
             line.clear();
@@ -97,8 +111,11 @@ impl HostClient {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {
                     let Some(frame) = parse_frame(&line) else { continue };
-                    if frame.get("type").and_then(Value::as_str) == Some("fatal") {
-                        eprintln!("desktop host fatal: {}", line.trim());
+                    match frame.get("type").and_then(Value::as_str) {
+                        Some("fatal") => eprintln!("desktop host fatal: {}", line.trim()),
+                        Some("update-prompt") => self.prompt_update(&frame),
+                        Some("restart") => self.relaunch(),
+                        _ => {}
                     }
                     if let Some(id) = frame.get("requestId").and_then(Value::as_u64) {
                         let waiter = self
@@ -113,6 +130,79 @@ impl HostClient {
                 }
             }
         }
+    }
+
+    /// Ask the user to authorize one update step.
+    ///
+    /// The answer travels back over the same channel with `promptId`, which is
+    /// separate from the shell-to-Host `requestId` space, so a Host that gave up
+    /// waiting finds no waiter and its answer is ignored.
+    ///
+    /// @param frame - `update-prompt` request carrying `promptId`, `action`, and `version`.
+    fn prompt_update(self: &Arc<Self>, frame: &Value) {
+        let Some(id) = frame.get("promptId").and_then(Value::as_u64) else { return };
+        let action = frame.get("action").and_then(Value::as_str).unwrap_or("download");
+        let version = frame.get("version").and_then(Value::as_str).unwrap_or("");
+        let Some(app) = self.app.lock().ok().and_then(|slot| slot.clone()) else { return };
+        let (title, message, confirm) = if action == "install" {
+            (
+                format!("DeepSeek Harness {version} is ready"),
+                format!("Restart the application to install version {version}?"),
+                "Restart",
+            )
+        } else {
+            (
+                format!("DeepSeek Harness {version} is available"),
+                format!("Download version {version}? It is installed after you confirm a restart."),
+                "Download",
+            )
+        };
+        let client = Arc::clone(self);
+        app.dialog()
+            .message(message)
+            .title(title)
+            .kind(MessageDialogKind::Info)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                confirm.to_owned(),
+                "Cancel".to_owned(),
+            ))
+            .show(move |accepted| {
+                let _ = client.send(&json!({
+                    "type": "update-prompt",
+                    "promptId": id,
+                    "accepted": accepted,
+                }));
+            });
+    }
+
+    /// Relaunch the application after the Host replaced its installation.
+    ///
+    /// An AppImage runs from a temporary mount of the file it was started from,
+    /// so re-executing the running binary would start the replaced image from
+    /// memory. The outer `$APPIMAGE` is the file the installer rewrote.
+    fn relaunch(self: &Arc<Self>) {
+        let Some(app) = self.app.lock().ok().and_then(|slot| slot.clone()) else { return };
+        let executable = std::env::var("APPIMAGE")
+            .ok()
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::current_exe().ok());
+        if let Some(executable) = executable {
+            // The single-instance plugin owns a lock until this process exits,
+            // so the replacement waits for this pid instead of racing it.
+            let script = format!(
+                "while kill -0 {} 2>/dev/null; do sleep 0.2; done; exec \"$0\"",
+                std::process::id()
+            );
+            let _ = Command::new("sh")
+                .arg("-c")
+                .arg(script)
+                .arg(executable)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn();
+        }
+        app.exit(0);
     }
 
     /// Send one frame to the Host.

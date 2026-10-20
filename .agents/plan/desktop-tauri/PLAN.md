@@ -452,13 +452,13 @@ Bridge contract TS không đổi — đã giữ: chỉ thêm backend Host, khôn
 - [ ] macOS: Developer ID, notarize, DMG.
 - [ ] Windows: Authenticode, NSIS/MSI.
 - [x] Manifest thống nhất: version, sha256, platform, arch, size (signature để P4 cùng gói ký).
-- [ ] Hộp thoại xác nhận tải/cài + restart shell (chặn AC "Update N → N+1").
+- [x] Hộp thoại xác nhận tải/cài + restart shell (`tauri-plugin-dialog` đã có sẵn; Host hỏi qua frame `update-prompt`, shell trả lời qua stdio).
 
 ### Acceptance Criteria
 
-- [~] Update N → N+1 trên Linux sạch: đường ống (manifest → tải → verify → thay `$APPIMAGE` nguyên tử) đã có test; còn thiếu nút xác nhận + restart, nên chưa chạy N → N+1 thật.
+- [~] Update N → N+1 trên Linux sạch: **đã chạy end-to-end headless** — feed HTTP thật, hai prompt trả lời qua stdio, `$APPIMAGE` bị thay đúng byte + mode 755, có frame `restart` (`update-flow-probe.mjs`). Còn thiếu: bản phát hành thật và máy sạch.
 - [ ] Mandatory update chặn đúng theo policy.
-- [~] Có task chạy → update **không** cài (`ready`), nhưng chưa có hộp thoại "hỏi" người dùng.
+- [x] Có task chạy → update **không** cài (`ready`); hộp thoại hỏi người dùng đã có, và câu trả lời đi qua protocol có `promptId` riêng.
 - [x] Journal ghi đủ bước; crash trước `rename` để lại ảnh cũ nguyên vẹn (test).
 - [ ] macOS: `codesign --verify --deep --strict` + `spctl -a` pass.
 - [ ] Windows: `signtool verify /pa` pass.

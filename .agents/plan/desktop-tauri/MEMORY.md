@@ -165,6 +165,27 @@ feed_requests=2
 
 **Còn thiếu để đóng P3:** hộp thoại xác nhận tải/cài (Electron dùng `dialog.showMessageBox`; Tauri cần dialog native hoặc UI), restart shell sau `install`, và ký gói (macOS `codesign`/notarize, Windows `signtool`). Vì chưa có chỗ xác nhận, cầu chỉ mở đường **check**; `download`/`install` đã có API + test nhưng chưa nối vào nút bấm nào.
 
+### Update N → N+1 end-to-end (P3b, đã đo)
+
+Host sở hữu toàn bộ luồng; shell chỉ là người trả lời hộp thoại. Trước mỗi bước không thể hoàn tác, Host gửi `@@DSH@@{"type":"update-prompt","promptId":N,"action":"download"|"install","version":"…"}`; shell hiện dialog native (`tauri-plugin-dialog`, vốn đã là dependency) rồi trả `{"type":"update-prompt","promptId":N,"accepted":bool}`.
+
+Hai chi tiết phải đúng, nếu không là hỏng âm thầm:
+
+1. **`promptId` tách khỏi `requestId`.** Reader của shell định tuyến *mọi* frame có `requestId` vào bảng request shell→Host; dùng chung không gian id thì một prompt của Host có thể "trả lời" nhầm một `quit-inspection` đang chờ.
+2. **Restart phải chạy `$APPIMAGE`.** AppImage chạy từ mount tạm; `app.restart()`/`current_exe()` sẽ chạy lại **ảnh cũ trong mount**, không phải file vừa được ghi. Shell spawn `sh -c 'while kill -0 <pid>; do sleep 0.2; done; exec "$0"'` với `$APPIMAGE`, rồi `app.exit(0)` — chờ pid cũ chết để không đua khoá single-instance.
+
+Đo bằng `apps/desktop-tauri/scripts/update-flow-probe.mjs`: script đóng vai shell — tự phục vụ feed HTTP, spawn Host qua stdio, trả lời prompt, và kiểm tra `$APPIMAGE` giả bị thay. Chạy trong `isolated-run.sh` (xem dưới):
+
+```
+RESULT ready=OK port=46183
+prompts=download:2.0.0,install:2.0.0
+open_status=204 presentation={"phase":"installing","version":"2.0.0"}
+restart_frame=true
+image_replaced=true mode=755
+```
+
+**Cách ly khỏi phiên desktop** (`apps/desktop-tauri/scripts/isolated-run.sh`, bwrap): PID/UTS/IPC namespace riêng, `/run` rỗng (mất socket Wayland, D-Bus, Hyprland), `/tmp` riêng, không controlling terminal, `clearenv`, `/` chỉ đọc và chỉ thư mục làm việc được ghi. Đo lại sau khi chạy: `clipse` và watcher vẫn sống, `wl-paste --list-types` exit 0. Mọi probe từ giờ chạy qua wrapper này; probe nào cần ghi vào cây thì đặt state trong `$DSH_ISOLATION_DIR`.
+
 ### AppImage Linux (P4a, đã đo)
 
 `apps/desktop-tauri/scripts/pack-appimage.sh` ghép shell release + `bin/`, `dsh/`, `runtime/`, `project/` của tree đã chuẩn bị vào một AppDir rồi pack bằng appimagetool. **200.698.360 byte** (191 MiB) từ AppDir ~751 MB.
@@ -271,6 +292,8 @@ Menu Application: About, (dev) Reload Page + Toggle Developer Tools `F12`, Quit 
 | `.agents/plan/desktop-tauri/probes/session-read-probe.sh` | Host Tauri đọc session trên đĩa qua RPC `session/list` (đọc thật, không sửa) |
 | `apps/desktop-tauri/scripts/update-probe.sh` | Feed HTTP thật → `updates-status` = `available`, SSE phát đúng state |
 | `apps/desktop-tauri/scripts/appimage-probe.sh` | AppImage headless isolated: hợp đồng `AppRun`, seed profile, Host boot từ ảnh read-only |
+| `apps/desktop-tauri/scripts/update-flow-probe.mjs` + `isolated-run.sh` | N → N+1 thật: feed HTTP, prompt qua stdio, thay `$APPIMAGE`, frame `restart` — trong sandbox bwrap |
+| `apps/desktop-tauri/scripts/isolated-run.sh` | Chạy bất kỳ lệnh nào không chạm phiên: PID/UTS/IPC ns, `/run` rỗng, no TTY, env sạch |
 
 `render.mjs` cần chạy trong `apps/web` (nơi có `playwright`):
 
@@ -319,6 +342,7 @@ DSH_DESKTOP_PROJECT_DIR=$HOME/.dsh/profiles/web \
 | D23 | Shim của cầu **nối tiếp** mọi lời gọi (một request một lúc): client đọc shortcut một lần cho mỗi command đăng ký, không await |
 | D25 | Giữ Python trong payload nhưng **prune**: bỏ pip/ensurepip/IDLE/tkinter+tcl/tk/terminfo/header và bản sao thứ hai của `libpython3.12.so`; **không** bỏ numpy/pandas (SKILL.md dạy model dùng) và **không** strip |
 | D24 | Vòng đời profile nằm trong **Host** (TS, dùng lại `@deepseek-ai/dsh-app-boot`), không viết lại bằng Rust: tạo profile + bỏ link projection + giữ đúng **một app bundle** (web). Feature bundle không bị đụng |
+| D28 | Update N→N+1: Host hỏi qua frame `update-prompt` (id riêng `promptId`, không dùng chung không gian `requestId` của shell→Host), shell hiện dialog native và trả lời qua stdio; restart phải chạy `$APPIMAGE` chứ không phải `current_exe()` (mount tạm), và chờ pid cũ thoát để không đua single-instance |
 | D27 | Linux phát hành dạng **AppImage**: ảnh read-only nên profile seed vào `$DSH_HOME/desktop-project` ở lần chạy đầu; `AppRun` giữ hợp đồng env của tree (thêm `DSH_CLIENT_VERSION` vì telemetry đọc nó) |
 | D26 | Update: manifest tự mô tả theo `platform-arch`, tải + verify sha256/size, cài bằng **rename nguyên tử** lên `$APPIMAGE`; Q3 = **AppImage self-update**, gói `.deb` để trình quản lý gói (`unsupported`) |
 | D22 | Welcome/onboarding v1 = **không tới được**: cửa sổ welcome là tài liệu native riêng cần copy của `locale.ts` (TS) và luồng đăng nhập Platform. Không chép choreography `hasApiKey` của `welcome-backend.ts` sang Host (sẽ là nhà thứ hai) |

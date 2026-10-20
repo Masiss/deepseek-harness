@@ -49,6 +49,14 @@ export interface DesktopUpdatePresentation {
 /** Admission answer from the shell: install, wait for tasks, or refuse. */
 export type DesktopUpdateAdmission = 'proceed' | 'tasks-active' | 'unavailable'
 
+/** One user decision the shell must ask before the service continues. */
+export interface DesktopUpdatePrompt {
+  /** What the user is authorizing. */
+  readonly action: 'download' | 'install'
+  /** Version the decision applies to. */
+  readonly version: string
+}
+
 /** Construction inputs; every deployment-varying choice is explicit. */
 export interface DesktopUpdateServiceOptions {
   /** Manifest URL the shell was built to trust. */
@@ -65,6 +73,13 @@ export interface DesktopUpdateServiceOptions {
   readonly channel?: 'nightly' | 'latest'
   /** Task admission and shutdown authorization, performed immediately before an install. */
   readonly beforeInstall?: () => Promise<DesktopUpdateAdmission>
+  /**
+   * Ask the user before downloading or installing.
+   * @defaultValue absent, which proceeds: only a shell that has no dialog reaches this.
+   */
+  readonly confirm?: (prompt: DesktopUpdatePrompt) => Promise<boolean>
+  /** Relaunch the application after the driver replaced it. */
+  readonly restart?: () => Promise<void> | void
   /** Fetch implementation, replaced at the network test boundary. */
   readonly fetch?: (url: string, init: RequestInit) => Promise<Response>
   /** Feed request deadline in milliseconds. */
@@ -112,6 +127,7 @@ export class DesktopUpdateService {
   private current: DesktopUpdatePresentation = { phase: 'idle' }
   private candidate: { readonly version: string; readonly artifact: UpdateArtifact } | undefined
   private prepared: UpdateInstallPlan | undefined
+  private openOperation: Promise<void> | undefined
   private checkOperation: Promise<DesktopUpdatePresentation> | undefined
   private downloadOperation: Promise<DesktopUpdatePresentation> | undefined
   private installOperation: Promise<DesktopUpdatePresentation> | undefined
@@ -147,6 +163,19 @@ export class DesktopUpdateService {
   subscribe(listener: (state: DesktopUpdatePresentation) => void): () => void {
     this.listeners.add(listener)
     return () => { this.listeners.delete(listener) }
+  }
+
+  /**
+   * Run the whole user-requested flow: check, ask to download, ask to install,
+   * then relaunch. Each step needs its own decision, and a declined decision
+   * leaves the attempt where it was.
+   *
+   * @returns Nothing when the flow settles, installed or not.
+   */
+  async open(): Promise<void> {
+    this.assertLive()
+    this.openOperation ??= this.doOpen().finally(() => { this.openOperation = undefined })
+    return this.openOperation
   }
 
   /**
@@ -217,6 +246,23 @@ export class DesktopUpdateService {
 
   private fail(failure: DesktopUpdateFailureKind, version?: string): DesktopUpdatePresentation {
     return { phase: 'error', failure, ...(version === undefined ? {} : { version }) }
+  }
+
+  private async doOpen(): Promise<void> {
+    let state = await this.check(true)
+    if (state.phase === 'available' && state.version !== undefined) {
+      if (!await this.ask({ action: 'download', version: state.version })) return
+      state = await this.download(state.version)
+    }
+    if (state.phase === 'ready' && state.version !== undefined) {
+      if (!await this.ask({ action: 'install', version: state.version })) return
+      const installed = await this.install(state.version)
+      if (installed.phase === 'installing') await this.options.restart?.()
+    }
+  }
+
+  private async ask(prompt: DesktopUpdatePrompt): Promise<boolean> {
+    return this.options.confirm === undefined ? true : await this.options.confirm(prompt)
   }
 
   private async doCheck(manual: boolean): Promise<DesktopUpdatePresentation> {
