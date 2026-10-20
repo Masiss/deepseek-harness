@@ -104,7 +104,7 @@ Nguyên tắc giữ nguyên: **không bỏ gốc sản phẩm** — mọi thứ 
 
 **Acceptance.** AppImage nhỏ hơn ~38 MB; client vẫn tải và render đúng; không có request nào 404 vì `.br`.
 
-## S3 — Một nguồn chuỗi cho shell (locale)
+## S3 — Một nguồn chuỗi cho shell (locale) — *thuộc [`PLAN.md`](PLAN.md) P1, không làm lại ở đây*
 
 **Vì sao.** `apps/desktop/src/locale.ts` là nguồn duy nhất; chép tay sang Rust tạo hai nhà cho cùng chuỗi (B1 của audit).
 
@@ -131,7 +131,7 @@ Nguyên tắc giữ nguyên: **không bỏ gốc sản phẩm** — mọi thứ 
 | 1 | S1-A (core set) | 1–2 pw | cắt 67 MB, không cần cơ chế mới ⇒ làm trước |
 | 2 | S2 (brotli) | 0,5–1 pw | đo lại AppImage sau S1-A |
 | 3 | S1-C (ripgrep) | 0,5 pw | chọn component hay hệ thống |
-| 4 | S3 (locale) | 0,5 pw | đóng luôn mục P1 còn mở |
+| 4 | ~~S3 (locale)~~ | — | thuộc plan chính (P1) |
 | 5 | S1-B (provider SDK) | 1–2 pw | cần cơ chế "cài lúc chạy" cho SDK |
 | 6 | S4 (PR upstream) | 1 pw | phụ thuộc upstream |
 
