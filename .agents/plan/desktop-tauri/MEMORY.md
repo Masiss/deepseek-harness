@@ -121,15 +121,44 @@ apps/desktop/.desktop-build/targets/linux-x64/
 | RSS idle của Host | 309–318 MiB |
 | Boot shell Tauri thật trên cây này | `ready=OK`, `pluginManager/*` trả dữ liệu của profile |
 
-### Ngân sách runtime: cắt Python, giữ pnpm
+### Ngân sách runtime: giữ pnpm, prune Python
 
 | Thành phần | Kích thước | Kết luận |
 |---|---|---|
-| Python + wheels | **257 MB** (64% payload) | **Cắt được**: bỏ `dependencies/python` đi thì Host vẫn `ready=OK`, plugin vẫn active, RSS không đổi (Python chỉ nằm trên đĩa). Đúng ADR-0008: Office/Python thành thành phần tải theo nhu cầu. |
+| Python + wheels | **193 MB** sau prune (trước 257 MB) | Bỏ hẳn thì Host vẫn `ready=OK`, plugin vẫn active, RSS không đổi (Python chỉ nằm trên đĩa) → on-demand của ADR-0008 là khả thi. Nhưng xem mục "Làm nhẹ payload Python" bên dưới: phần lớn chỗ đó **cắt được ngay** mà không mất gì. |
 | Node | 121 MB | Bắt buộc — đây là runtime JS của app (ADR-0002). |
 | **pnpm** | **23 MB** | **Giữ.** Đây chính là cơ chế cài/gỡ plugin (`installBundle`/`removeBundle`). Cắt nó là mất hệ plugin — yêu cầu số một của migration và là nội dung điều kiện dừng #4. Tự viết lại resolver+installer cũng trái luật "prefer maintained dependencies". |
 
 Cắt Python đưa primary runtime từ 401 MB xuống 144 MB; việc còn lại là cơ chế tải theo nhu cầu của ADR-0008.
+
+### Làm nhẹ payload Python (D25) — 257 MB → 193 MB, đo được
+
+`apps/desktop-tauri/scripts/prune-python-payload.ts`, gọi trong `prepare-linux-runtime.ts` ngay sau khi đọc manifest primary runtime, rồi **verify bằng import thật** (`numpy, pandas, openpyxl, docx, pptx, PIL, lxml`) — payload prune xong vẫn boot app (`ready=OK`).
+
+| Hạng mục bỏ | Vì sao |
+|---|---|
+| bản sao thứ hai của `libpython3.12.so` (**−31 MB**, thành symlink) | loader chỉ cần soname; payload khoá ship hai file y hệt nhau |
+| `share/terminfo` + `share/man` (−12 MB) | cơ sở dữ liệu cho TUI, app desktop không dùng |
+| `pip` + `ensurepip` (−8 MB) | skill Office dặn *"Do not install packages"*; runtime không cài gì |
+| `tkinter` + cây `tcl/tk/itcl/thread` + `_tkinter*.so` (−13 MB) | chỉ dùng qua GUI toolkit |
+| `idlelib`, `lib2to3`, `pydoc_data`, `include/` (−4 MB) | công cụ phát triển |
+
+| Phép đo | Trước | Sau |
+|---|---|---|
+| thư mục `dependencies/python` | 257 MB | **193 MB** (−64 MB, −25%) |
+| số file | 6.971 | 3.802 |
+| nén `zstd -19` | 58,7 MB | 47,4 MB |
+| primary runtime | 401 MB | **337 MB** |
+| import đủ 7 module tài liệu | ok | **ok** (verify trong prepare) |
+| boot shell Tauri + RPC | `ready=OK` | `ready=OK` |
+
+**Ba thứ đã cân nhắc và từ chối:**
+
+1. **Strip binary** — **không được**. `strip --strip-unneeded` và cả `--strip-debug` phá layout section đã relocate của `python-build-standalone`: interpreter chết với `symbol lookup error: undefined symbol: , version` và cảnh báo `no version information available`. Bản lock vốn đã là `install_only_stripped`, nên không còn debug info để cắt.
+2. **Bỏ numpy + pandas (76 MB)** — không. `packages/skill/skill-office/assets/office-xlsx/SKILL.md` nói rõ với model: *"run its Python executable with bundled `openpyxl` and `pandas`"*. Đó là hợp đồng model-visible (bất biến #3); cắt là đổi hành vi sản phẩm.
+3. **Nén sẵn để giảm bản tải** — lợi rất ít: `.deb`/AppImage vốn đã nén cả payload, mà 58,7 → 47,4 MB chỉ chênh 11 MB; còn trên đĩa thì vẫn phải giải nén lại thành 193 MB. Chỉ đáng nếu phát hành dạng tarball thô hoặc làm bước tải của on-demand.
+
+**Kết luận:** giữ Python, đã prune. On-demand (ADR-0008) vẫn là đòn lớn nhất — bỏ hẳn 193 MB khỏi bản cài — nhưng giờ bản tải về của thành phần đó chỉ còn ~47 MB.
 
 ### `dsh plugin` trên cây production — cài **và chạy** đã đo được
 
@@ -227,6 +256,7 @@ DSH_DESKTOP_PROJECT_DIR=$HOME/.dsh/profiles/web \
 | D20 | Directory picker **không cần Tauri dialog**: `directory-picker-auto` trong web bundle đã tự chọn chooser native của Host |
 | D21 | Product analytics đã cổng sẵn ở client bằng `'dshDesktop' in globalThis`; cầu của ta thoả cổng, không cần thêm gì |
 | D23 | Shim của cầu **nối tiếp** mọi lời gọi (một request một lúc): client đọc shortcut một lần cho mỗi command đăng ký, không await |
+| D25 | Giữ Python trong payload nhưng **prune**: bỏ pip/ensurepip/IDLE/tkinter+tcl/tk/terminfo/header và bản sao thứ hai của `libpython3.12.so`; **không** bỏ numpy/pandas (SKILL.md dạy model dùng) và **không** strip |
 | D24 | Vòng đời profile nằm trong **Host** (TS, dùng lại `@deepseek-ai/dsh-app-boot`), không viết lại bằng Rust: tạo profile + bỏ link projection + giữ đúng **một app bundle** (web). Feature bundle không bị đụng |
 | D22 | Welcome/onboarding v1 = **không tới được**: cửa sổ welcome là tài liệu native riêng cần copy của `locale.ts` (TS) và luồng đăng nhập Platform. Không chép choreography `hasApiKey` của `welcome-backend.ts` sang Host (sẽ là nhà thứ hai) |
 
@@ -478,6 +508,7 @@ Item đăng ký đủ (`Id`, `Status`, `IconName`, `Menu` trỏ tới `/org/ayat
 - Rust 1.98.1; webkit2gtk 2.54.1 + gtk3 + libsoup3 + appindicator **đầy đủ**, Tauri build được.
 - `CI=1` bỏ qua Lefthook postinstall.
 - Host `desktop` dùng được profile `~/.dsh/profiles/web` cho thí nghiệm: bỏ `skill-office`, đặt `runtimeDir=$HOME/.dsh/profiles`, `projectDir=$HOME/.dsh/profiles/web`.
+- `strip` lên binary Python của python-build-standalone làm hỏng interpreter (mất symbol versioning); đừng strip, hãy prune file.
 - `/tmp` là tmpfs 7,7 GB và chỉ còn ~1,6 GB: copy Node (120 MB) hay wheel vào đó chết với `Unknown system error -122` (EDQUOT). Đặt `TMPDIR` sang ổ lớn (`apps/desktop/.desktop-build/tmp` hoặc `~/.cache/…`) khi dựng primary runtime và khi chạy `apps/desktop-host/tests` (spec `office.spec.ts` copy Node).
 
 ## Lịch sử cập nhật

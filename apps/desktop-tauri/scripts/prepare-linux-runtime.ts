@@ -48,6 +48,7 @@ import { prepareDesktopPackageSet } from '../../desktop/scripts/prepare-package-
 import { prepareRuntimePatches, verifyRuntimePatches } from '../../desktop/scripts/prepare-runtime-patches.ts'
 import { desktopRuntimeFileExclusion } from '../../desktop/scripts/runtime-file-policy.ts'
 import { selectOfficeEngine } from '../../../scripts/libreoffice-packages.mjs'
+import { prunePythonPayload, verifyPythonPayload } from './prune-python-payload.ts'
 
 const APP_ROOT = resolve(import.meta.dirname, '..')
 const REPOSITORY_ROOT = resolve(APP_ROOT, '..', '..')
@@ -125,6 +126,14 @@ async function main(): Promise<void> {
   if (typeof primary.node !== 'string' || typeof primary.pnpm !== 'string') {
     throw new Error('linux runtime: the primary runtime declares no Node and pnpm versions')
   }
+
+  // The Python payload ships with packaging and development surface no
+  // documented Desktop workflow loads; prune it, then prove the interpreter
+  // still imports every module the Office skills name.
+  const pythonDir = join(primaryRuntime, 'dependencies', 'python')
+  const pruned = prunePythonPayload(pythonDir)
+  verifyPythonPayload(pythonDir)
+  console.error(`linux runtime: pruned ${String(pruned.removed.length)} Python path(s), deduplicated library=${String(pruned.deduplicatedLibrary)}`)
   const release = parseDesktopRelease({
     schemaVersion: 1,
     version: manifestVersion(join(DESKTOP_APP_ROOT, 'package.json'), 'desktop package'),

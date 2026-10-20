@@ -483,7 +483,7 @@ Update không làm mất dữ liệu và không cài bản sai nền tảng.
 - CI matrix 5 target; cache Rust.
 - Resource layout sẵn sàng ký lồng nhau.
 - [x] **Vòng đời profile trong shell Tauri** — đã làm trong Host (`apps/desktop-host/src/profile-lifecycle.ts`, D24): tạo profile lúc khởi động, dọn link projection, và giữ đúng một app bundle (bỏ `dsh-headless`/ACP/SDK nếu người dùng cài thêm, giữ feature bundle). Đo end-to-end: profile 2 app bundle từng làm app không mở được giờ tự sửa và boot (`ready=OK`). Còn lại: đưa thông báo phục hồi lên UI (hiện ở stderr) và khoá profile nếu sau này cho phép nhiều Host.
-- **Python/Office tải theo nhu cầu** (ADR-0008): payload hiện 401 MB, riêng Python 257 MB. Đo được: bỏ `dependencies/python` thì Host vẫn `ready=OK`, plugin vẫn chạy, RSS không đổi — nên cắt khỏi payload mặc định là an toàn, nhưng phải có cơ chế tải khi người dùng cần tính năng tài liệu, nếu không là mất tính năng.
+- **Python/Office tải theo nhu cầu** (ADR-0008): đã **prune** payload Python 257 → 193 MB (primary runtime 401 → 337 MB) mà không mất module tài liệu nào — xem D25. Việc còn lại là cơ chế tải: bỏ hẳn 193 MB khỏi bản cài, và bản tải về của thành phần đó nén còn ~47 MB. Bỏ Python khỏi payload đã đo là an toàn (Host vẫn `ready=OK`, plugin vẫn chạy, RSS không đổi), nhưng phải có đường tải khi người dùng cần tính năng tài liệu, nếu không là mất tính năng.
 
 ### Acceptance Criteria
 
