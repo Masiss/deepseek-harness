@@ -643,3 +643,42 @@ Chỉ coi là hoàn thành khi **tất cả** đạt:
 - `MEMORY.md` ghi mọi file L2 đã sửa.
 - CI gate: `git diff --name-only upstream/master...HEAD -- packages apps/desktop` phải rỗng (cho phép danh sách L2).
 - Không xoá `apps/desktop` cho đến khi Windows/macOS port xong.
+
+---
+
+# Phần X — Audit (2026-10-20)
+
+Audit trạng thái migration sau P5-posix + A3. Mỗi điều kiện nghiệm thu ở Phần VIII được kiểm lại bằng bằng chứng chạy được; phần chưa đạt ghi rõ vì sao và cần gì để đóng.
+
+| # | Điều kiện | Kết luận | Bằng chứng |
+|---|---|---|---|
+| A1 | 10 bất biến giữ nguyên | **đạt (9/10 cơ chế, 1 cần môi trường)** | Session format/`SESSION_FORMAT_VERSION` không đổi; transcript không đổi (`git diff origin/master...HEAD -- packages/session packages/core` rỗng); CLI/`cordis.yml` không đổi; token/cookie + WebSocket giữ nguyên (bridge probe); PTY semantics kiểm bằng provider parity (resize/signal/exit code); sandbox semantics kiểm bằng landlock parity (`parity=identical`) + đọc-thoát `fd`; update policy giữ nguyên (N→N+1 chạy trên AppImage); plugin API giữ nguyên (`dsh plugin` cài + chạy, P0); bundle/profile giữ nguyên (profile desktop dùng chung `dsh`); **transcript diff = 0 chưa chạy được** (không có `DEEPSEEK_API_KEY` → A9) |
+| A2 | Không sửa `packages/` upstream | **đạt theo lớp L0, có 1 ngoại lệ L2 đã ghi** | `git diff --name-only origin/master...HEAD -- packages/core packages/llm packages/session packages/bundle apps/desktop/src` **rỗng**. Ngoại lệ L2: `packages/client/ui-settings-general` (thẻ cài Office trong Settings) + `packages/extensions/cordis-client-runner/src/client/slot-catalog.ts` (sinh tự động). Ngoài đó fork chỉ thêm `apps/desktop-tauri/`, `apps/desktop-host/native/`, `native/dsh-native/` và sửa `apps/desktop/scripts/desktop-build-paths.mjs` (một dòng `SUPPORTED_TARGETS`, ngoại lệ L2 đã ghi ở B24) |
+| A3 | Artifact ≤ 105 MB (A3′) | **đạt** | `size-gate.sh`: AppImage 86,7 MiB · .deb 66,9 MiB · .rpm 72,9 MiB · cây cài đặt 337 MiB |
+| A4 | RSS idle ≤ 250 MB | **đạt** | 170–179 MiB (`rss-probe.sh`, Host headless) |
+| A5 | Cold start → first paint ≤ 1,5 s | **mở — cần phiên GUI** | Cold start của Host đo được: 1,27–1,31 s (M7). "First paint" là thời điểm webview vẽ khung đầu: cần compositor thật (weston headless) hoặc phiên desktop của người dùng — quy tắc phiên này cấm mở cửa sổ |
+| A6 | Update N→N+1 trên 3 nền tảng | **mở — chỉ Linux** | `update-probe.sh` chạy N→N+1 trên AppImage ✓ (P3b). macOS/Windows vẫn do carrier Electron phục vụ, chưa port |
+| A7 | Plugin thật cài + chạy | **đạt** | P0: cài từ registry, cài từ tarball cục bộ, plugin chạy (`fiberPhase: active`) |
+| A8 | Session cũ mở được | **đạt theo cấu trúc** | Định dạng session không đổi (A1/A2); snapshot/expected xanh. Bằng chứng end-to-end với session cũ cần API key → cùng điều kiện với A9 |
+| A9 | Transcript diff = 0 | **mở — cần API key** | Không có `DEEPSEEK_API_KEY`/`.env` trong phiên này |
+| A10 | Không còn Electron trong app mới | **đạt** | AppImage không chứa Electron (chỉ còn một thư mục *type* của browser sidebar); shell là Tauri 2 |
+
+## Phát hiện audit khác
+
+| # | Phát hiện | Mức độ | Xử lý |
+|---|---|---|---|
+| 1 | `bun run test:web:built` đỏ 3 test (skill invocation policy ×2, replayed Session log ×1) | **có sẵn, không phải do fork** | Đã kiểm lại bằng cách checkout `f8d5be74c2^ -- packages/client apps/web` (bỏ thẻ Office + slot catalog) và dựng lại client: **vẫn đỏ y hệt** → lỗi của upstream/điều kiện máy, không phải hồi quy của lane Tauri |
+| 2 | Ngân sách "cài đặt ≤ 105 MB" bất khả thi | đã xử lý | A3′ (D31): artifact ≤ 105 MB, cài đặt ≤ 400 MB; Node 24.21 stripped đã 103,5 MB |
+| 3 | Lỗi có sẵn: `verify-repository-references` (`python/sdk/uv.lock:113`) | có sẵn | Không sửa (ngoài phạm vi) |
+| 4 | Lỗi có sẵn: `scripts/release/pack.spec.ts > does not broaden an empty parallel family` | có sẵn | Không sửa (ngoài phạm vi) |
+| 5 | `git diff origin/master...HEAD -- packages` **không rỗng** (12 file, +544) | đã ghi | Là thẻ Office trong client package (L2 theo AGENTS §3, không nằm trong danh sách L0). CI gate của fork phải cho phép danh sách L2 này |
+| 6 | Thiếu bằng chứng cho tray/window-state/deep link | mở | Cần phiên desktop thật (B18, B17); deep link `dsh://open` khai báo nhưng chưa cài/thử |
+| 7 | P5-win32 chưa làm | mở | Chỉ khi Windows vào phạm vi; giữ koffi cho tới lúc đó (theo kịch bản rủi ro #7/#8) |
+
+## Việc còn lại theo thứ tự ưu tiên
+
+1. **A5** — đo first paint với weston headless trong sandbox (không mở cửa sổ trên màn hình người dùng).
+2. **A9/A8** — chạy transcript diff + mở session cũ khi có `DEEPSEEK_API_KEY`.
+3. **P6 tùy chọn** — brotli cho Web dist (96,9 MB JS/CSS trong payload; server tĩnh là upstream nên cần middleware của Host) và ripgrep on-demand (5,5 MB; cần loại component mới).
+4. **P5-win32** — khi Windows vào phạm vi.
+5. **A6** — e2e update trên macOS/Windows sau khi carrier Tauri thay Electron.

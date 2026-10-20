@@ -702,6 +702,18 @@ P6 chuyển Python khỏi primary runtime vào archive ⇒ lần prepare sau kh�
 
 `import -window root` fail (`missing an image filename`); `grim` chụp được toàn màn hình nhưng cửa sổ Tauri không nằm trong khung hình chụp. Cách kiểm chứng đáng tin là `ss -tnp`: thấy `WebKitNetworkProcess` mở kết nối ESTAB tới cổng Host.
 
+## File L2 đã sửa (fork, phải ghi để upstream merge không đụng)
+
+Theo `AGENTS.md` §3 của lane: L0 = `packages/core/*`, `packages/llm/*`, `packages/session/*`, `packages/bundle/*`, `apps/desktop/src/*` — **không đụng** (kiểm bằng `git diff --name-only origin/master...HEAD -- < các đường dẫn L0 >` → rỗng ✓).
+
+| File | Lý do | Ghi chú |
+|---|---|---|
+| `apps/desktop/scripts/desktop-build-paths.mjs` | Cho phép target Linux (một dòng `SUPPORTED_TARGETS`) | Ngoại lệ L2 duy nhất vào `apps/desktop/` (B24) — conflict upstream nằm đúng dòng đó |
+| `packages/client/ui-settings-general/**` (7 file + 2 test + README) | Thẻ cài Office on-demand trong Settings | L2: không thuộc danh sách L0; đã ghi ở PLAN Phần X (phát hiện #5) |
+| `packages/extensions/cordis-client-runner/src/client/slot-catalog.ts` | File sinh tự động theo slot đăng ký (thẻ Office) | Sửa bằng `pnpm run gen-client-catalog`; CI gate `verify-client-catalog` bắt buộc |
+
+Mọi thay đổi còn lại nằm ở L1 (thêm mới): `apps/desktop-tauri/**`, `apps/desktop-host/native/**`, `apps/desktop-host/src/components/**` (component manager), `native/dsh-native/**`, `apps/desktop-host/src/office.ts`.
+
 ## Sự kiện / đo đạc cần làm
 
 | # | Việc | Phase | Trạng thái |
@@ -750,5 +762,6 @@ P6 chuyển Python khỏi primary runtime vào archive ⇒ lần prepare sau kh�
 | 2026-10-20 | P5-posix (1): crate napi-rs `native/dsh-native` thay `node-pty` bằng `portable-pty`; loader resolve hook `node-pty`; thêm D29, B25–B27 |
 | 2026-10-20 | P5-posix (2): crate `native/dsh-native` thêm flock của session lease và binding `execve`/`fcntl` (thay koffi trên Linux); payload Linux không còn `koffi`/`node-pty`/`system.node`; thêm B28–B30, M10 |
 | 2026-10-20 | P5-posix (3): launcher `landlock-run` bằng Rust (UAPI trực tiếp) thay bản C trong payload — ma trận hành vi giống hệt; thêm B31, M11 |
+| 2026-10-20 | Audit toàn diện: A1–A10 được kiểm lại bằng bằng chứng chạy được; 3 lỗi `test:web:built` chứng minh **có sẵn** (checkout `f8d5be74c2^` → vẫn đỏ); danh sách file L2 được ghi; mục A5/A6/A9 ghi rõ điều kiện đóng |
 | 2026-10-20 | A3: engine Office (144 MB) chuyển vào component on-demand; strip Node và module native; bỏ `sharp`/`@img`/`node-pty`/`koffi`/`system.node`; size gate `size-gate.sh`; artifact ≤ 105 MiB; thêm D30–D31, B35–B36, M13–M14 |
 | 2026-10-20 | P5-posix (4): pipeline ảnh bằng Rust thay `sharp` (decode `zune-png`, resize `fast_image_resize`, WebP libwebp tĩnh, JPEG zune) — facts giống hệt, WebP lệch 0–6%, 93 test `attachment-local` xanh; payload không còn `sharp`/`@img`; thêm B32–B34, M12 |
