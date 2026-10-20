@@ -165,6 +165,27 @@ feed_requests=2
 
 **Còn thiếu để đóng P3:** hộp thoại xác nhận tải/cài (Electron dùng `dialog.showMessageBox`; Tauri cần dialog native hoặc UI), restart shell sau `install`, và ký gói (macOS `codesign`/notarize, Windows `signtool`). Vì chưa có chỗ xác nhận, cầu chỉ mở đường **check**; `download`/`install` đã có API + test nhưng chưa nối vào nút bấm nào.
 
+### Gói .deb Linux (P4b, đã đo)
+
+`apps/desktop-tauri/scripts/pack-deb.sh` dựng đúng định dạng Debian bằng `ar` + `tar` + `zstd` — máy build là **Arch, không có dpkg**, nên không thể dựa vào `dpkg-deb --build`; bộ giải nén cũng đọc `ar`/`tar` trực tiếp.
+
+| Số đo | Giá trị |
+|---|---|
+| gói | **153.868.430 byte** (147 MiB) |
+| cài đặt | 750 MB (`Installed-Size` 778.348 KiB) |
+| layout | `/usr/lib/deepseek-harness/{bin,dsh,runtime,project,dsh-desktop-tauri}` + `/usr/bin/deepseek-harness` |
+| `Depends` | `libgtk-3-0, libwebkit2gtk-4.1-0` (lấy từ `ldd` của shell) |
+| `Recommends` | `libayatana-appindicator3-1` (tray được dlopen, không link cứng) |
+
+Launcher suy `root` từ `readlink -f "$0"` rồi lùi hai cấp, nên **cùng một cây** chạy được từ cài đặt thật hoặc từ `ar x` + giải nén; profile vẫn seed sang `$DSH_HOME` và ảnh/gói không bị ghi (`image_writable_files=0`).
+
+Kiểm chứng thật:
+
+- `deb-probe.sh` (trong `isolated-run.sh`): giải nén read-only, stub shell kiểm hợp đồng env + seed, Host boot → `bridge_status={"phase":"idle"}`.
+- Container **Ubuntu 24.04** sạch: `apt-get install /pkg/*.deb` → `Status: install ok installed`, deps resolve; launcher tạo `$DSH_HOME/desktop-project/{cordis.yml,package.json,…}`; `runtime/bin/node` là symlink đúng vào primary runtime. Shell đồ hoạ panic vì container không có display — ngoài phạm vi phép thử này.
+
+Còn mở: tên gói cho Fedora (RPM) và cài trên máy thật có GUI.
+
 ### Update N → N+1 end-to-end (P3b, đã đo)
 
 Host sở hữu toàn bộ luồng; shell chỉ là người trả lời hộp thoại. Trước mỗi bước không thể hoàn tác, Host gửi `@@DSH@@{"type":"update-prompt","promptId":N,"action":"download"|"install","version":"…"}`; shell hiện dialog native (`tauri-plugin-dialog`, vốn đã là dependency) rồi trả `{"type":"update-prompt","promptId":N,"accepted":bool}`.
@@ -294,6 +315,7 @@ Menu Application: About, (dev) Reload Page + Toggle Developer Tools `F12`, Quit 
 | `apps/desktop-tauri/scripts/appimage-probe.sh` | AppImage headless isolated: hợp đồng `AppRun`, seed profile, Host boot từ ảnh read-only |
 | `apps/desktop-tauri/scripts/update-flow-probe.mjs` + `isolated-run.sh` | N → N+1 thật: feed HTTP, prompt qua stdio, thay `$APPIMAGE`, frame `restart` — trong sandbox bwrap |
 | `apps/desktop-tauri/scripts/isolated-run.sh` | Chạy bất kỳ lệnh nào không chạm phiên: PID/UTS/IPC ns, `/run` rỗng, no TTY, env sạch |
+| `apps/desktop-tauri/scripts/pack-deb.sh` + `deb-probe.sh` | Đóng gói `.deb` (ar+tar+zstd) và kiểm tra headless: launcher, seed, Host boot từ bản giải nén read-only |
 
 `render.mjs` cần chạy trong `apps/web` (nơi có `playwright`):
 

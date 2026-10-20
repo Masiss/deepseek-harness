@@ -47,6 +47,7 @@ env -i PATH=/usr/bin:/bin HOME="$work/home" TMPDIR="$work/tmp" \
   DSH_HOME="$work/home/.dsh" APPIMAGE="$appimage" APPDIR="$work/apprun" \
   "$work/apprun/AppRun"
 echo "seeded_in_home=$(find "$work/home/.dsh/desktop-project" -maxdepth 1 -name cordis.yml 2>/dev/null | wc -l)"
+echo "seed_writable=$([ -w "$work/home/.dsh/desktop-project/cordis.yml" ] && echo yes || echo no)"
 
 # --- B. Packaged Host from a read-only extraction -------------------------
 chmod -R a-w "$extract"

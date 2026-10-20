@@ -9,7 +9,8 @@ set -eu
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 tree=$repo/apps/desktop/.desktop-build/targets/${DSH_DESKTOP_TARGET:-linux-x64}
-work=$(mktemp -d /tmp/opencode/measure-tree.XXXXXX)
+mkdir -p "$tree/probe"
+work=$(mktemp -d "$tree/probe/measure-tree.XXXXXX")
 mkfifo "$work/in" "$work/out"
 
 start=$(date +%s%N)

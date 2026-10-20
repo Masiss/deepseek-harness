@@ -70,6 +70,9 @@ profile="\$home/desktop-project"
 if [ ! -d "\$profile" ]; then
   mkdir -p "\$home"
   cp -a "\$root/project" "\$profile"
+  # The image is read-only; a copy that kept those bits would refuse every
+  # plugin install later, so the seeded profile is explicitly user-writable.
+  chmod -R u+w "\$profile"
 fi
 
 export DSH_DESKTOP_HOST_BIN="\$root/bin/desktop-host"

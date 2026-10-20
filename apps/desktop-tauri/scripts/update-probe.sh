@@ -11,7 +11,8 @@ set -u
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 target=${DSH_DESKTOP_TARGET:-linux-x64}
 tree=$repo/apps/desktop/.desktop-build/targets/$target
-work=$(mktemp -d /tmp/opencode/update-probe.XXXXXX)
+mkdir -p "$tree/probe"
+work=$(mktemp -d "$tree/probe/update-probe.XXXXXX")
 mkdir -p "$work/feed" "$work/home"
 
 head -c 65536 /dev/urandom > "$work/feed/app.bin"

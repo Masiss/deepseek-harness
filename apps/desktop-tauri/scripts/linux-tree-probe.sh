@@ -11,7 +11,8 @@ tree=$repo/apps/desktop/.desktop-build/targets/$target
 mode=${1:?usage: linux-tree-probe.sh rpc|install ...}
 shift
 
-work=$(mktemp -d /tmp/opencode/linux-tree.XXXXXX)
+mkdir -p "$tree/probe"
+work=$(mktemp -d "$tree/probe/linux-tree.XXXXXX")
 
 env DSH_DESKTOP_HOST_BIN="$tree/bin/desktop-host" \
   DSH_DESKTOP_RUNTIME_DIR="$tree/dsh" \

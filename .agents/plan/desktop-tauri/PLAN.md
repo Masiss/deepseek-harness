@@ -479,7 +479,7 @@ Update không làm mất dữ liệu và không cài bản sai nền tảng.
 ### Công việc
 
 - [x] Linux **AppImage** (`apps/desktop-tauri/scripts/pack-appimage.sh`): shell release + payload chuẩn bị sẵn, `AppRun` giữ đúng hợp đồng env, profile seed vào `$DSH_HOME` vì ảnh là read-only. Đo: 200.698.360 byte; boot headless từ bản giải nén read-only, cầu trả `{"phase":"idle"}`, `image_writable_files=0`.
-- [ ] Linux `.deb` + khai báo dependency WebKitGTK.
+- [x] Linux `.deb` (`apps/desktop-tauri/scripts/pack-deb.sh`): payload ở `/usr/lib/deepseek-harness`, launcher `/usr/bin/deepseek-harness` tự suy đường dẫn từ `$0`, seed profile vào `$DSH_HOME`. 147 MiB / cài 750 MB.
 - macOS `.app`/`.dmg`, universal.
 - Windows NSIS/MSI (không port installer UI tùy biến ở v1).
 - CI matrix 5 target; cache Rust.
@@ -489,7 +489,7 @@ Update không làm mất dữ liệu và không cài bản sai nền tảng.
 
 ### Acceptance Criteria
 
-- [ ] Cài trên Ubuntu 24.04 sạch, mở app, chat chạy.
+- [~] Cài trên Ubuntu 24.04 sạch: container `apt-get install` **thành công** (`Status: install ok installed`, deps resolve), launcher seed đúng profile, Host boot từ bản giải nén read-only. Chưa mở GUI/chat trong container (không có display).
 - [ ] Cài trên Fedora sạch.
 - [ ] macOS: mở từ Applications, không bị Gatekeeper chặn.
 - [ ] Windows: cài, mở, PTY chạy.
