@@ -447,21 +447,22 @@ Bridge contract TS không đổi — đã giữ: chỉ thêm backend Host, khôn
 
 ### Công việc
 
-- Tách `UpdateInstallerDriver` khỏi policy.
-- Linux: AppImage self-update hoặc repo apt (chọn ở Q3).
-- macOS: Developer ID, notarize, DMG.
-- Windows: Authenticode, NSIS/MSI.
-- Manifest thống nhất: version, sha256, platform, arch, signature.
+- [x] Tách `UpdateInstallerDriver` khỏi policy (`update/appimage.ts` + `update/service.ts`).
+- [x] Linux: AppImage self-update (Q3 đã chốt, D26); `.deb` do trình quản lý gói.
+- [ ] macOS: Developer ID, notarize, DMG.
+- [ ] Windows: Authenticode, NSIS/MSI.
+- [x] Manifest thống nhất: version, sha256, platform, arch, size (signature để P4 cùng gói ký).
+- [ ] Hộp thoại xác nhận tải/cài + restart shell (chặn AC "Update N → N+1").
 
 ### Acceptance Criteria
 
-- [ ] Update N → N+1 trên Linux sạch.
+- [~] Update N → N+1 trên Linux sạch: đường ống (manifest → tải → verify → thay `$APPIMAGE` nguyên tử) đã có test; còn thiếu nút xác nhận + restart, nên chưa chạy N → N+1 thật.
 - [ ] Mandatory update chặn đúng theo policy.
-- [ ] Có task chạy → update hỏi và không mất task.
-- [ ] Journal ghi đủ bước, phục hồi được sau crash.
+- [~] Có task chạy → update **không** cài (`ready`), nhưng chưa có hộp thoại "hỏi" người dùng.
+- [x] Journal ghi đủ bước; crash trước `rename` để lại ảnh cũ nguyên vẹn (test).
 - [ ] macOS: `codesign --verify --deep --strict` + `spctl -a` pass.
 - [ ] Windows: `signtool verify /pa` pass.
-- [ ] Manifest từ chối sai platform/arch/hash.
+- [x] Manifest từ chối sai platform/arch/hash/size (14 test).
 
 ### Exit gate
 

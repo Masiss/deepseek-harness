@@ -10,12 +10,16 @@
 import { delimiter, join } from 'node:path'
 import { loadLayeredEnv, loadProfileDirectory, reportSkippedBundles } from '@deepseek-ai/dsh-app-boot'
 import { runProfile } from '@deepseek-ai/dsh/profile-boot'
+import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { createHostTransport } from './transport.ts'
 import { installDesktopBridge } from './desktop-bridge.ts'
 import { installDesktopUpdateTaskControl } from './update-tasks.ts'
 import { installDesktopQuitInspection } from './quit-inspection.ts'
 import { installPlatformSessionPublisher } from './platform-session.ts'
 import { prepareDesktopProfile } from './profile-lifecycle.ts'
+import { createAppImageDriver } from './update/appimage.ts'
+import { updateTarget } from './update/manifest.ts'
+import { DesktopUpdateService, type DesktopUpdateAdmission } from './update/service.ts'
 
 /** Control channel chosen once: stdio when the Tauri shell spawned this executable. */
 const transport = createHostTransport()
@@ -55,9 +59,11 @@ async function main(): Promise<void> {
     updateTasks?: ReturnType<typeof installDesktopUpdateTaskControl>
     quitInspection?: ReturnType<typeof installDesktopQuitInspection>
     desktopBridge?: () => void
+    updates?: DesktopUpdateService | undefined
   } = {}
   const stop = (): Promise<void> => stopping ??= (async () => {
     control.desktopBridge?.()
+    control.updates?.dispose()
     const running = await application.catch(() => undefined)
     await running?.shutdown.shutdown(0)
     try { await transport.send({ type: 'shutdown-complete' }) } catch (error: unknown) { console.error(error) }
@@ -97,13 +103,65 @@ async function main(): Promise<void> {
   const { ctx } = await application
   control.updateTasks = installDesktopUpdateTaskControl(ctx)
   control.quitInspection = installDesktopQuitInspection(ctx)
-  control.desktopBridge = installDesktopBridge(ctx)
+  control.updates = createDesktopUpdates(() => control.updateTasks)
+  control.desktopBridge = installDesktopBridge(ctx, control.updates === undefined ? {} : { updates: control.updates })
   installPlatformSessionPublisher(ctx, (session) => {
     void transport.send({ type: 'platform-session', session }).catch((error: unknown) => { console.error(error) })
   })
   const url = ctx.connection.authenticatedUrl(`${ctx.webServer.protocol}//127.0.0.1:${String(ctx.webServer.port)}`)
   void transport.send({ type: 'ready', url, injections: ctx.webServer.collectIndexInjections() })
+    .then(async () => {
+      // The ordinary check the Electron coordinator schedules at startup; the
+      // feed and the installed version are the shell's, not the page's.
+      if (control.updates !== undefined) await control.updates.check()
+    })
     .catch((error: unknown) => { console.error(error) })
+}
+
+/**
+ * Build the update service this shell was configured with.
+ *
+ * Both inputs come from the shell: a release without a feed URL has no update
+ * source, and a release that names no version cannot compare one. A target
+ * this build cannot publish for (or a platform without an installer driver)
+ * disables updates instead of failing the Host.
+ *
+ * @param taskControl - Task admission owned by the Booted Host context.
+ * @returns The service, or undefined when this installation cannot update itself.
+ */
+function createDesktopUpdates(
+  taskControl: () => ReturnType<typeof installDesktopUpdateTaskControl> | undefined,
+): DesktopUpdateService | undefined {
+  const feed = process.env.DSH_DESKTOP_UPDATE_FEED
+  const currentVersion = process.env.DSH_DESKTOP_VERSION
+  if (feed === undefined || feed === '' || currentVersion === undefined || currentVersion === '') return undefined
+  try {
+    return new DesktopUpdateService({
+      feed,
+      currentVersion,
+      target: updateTarget(process.platform, process.arch),
+      directory: join(resolveDshHome(), 'updates'),
+      driver: createAppImageDriver(),
+      beforeInstall: async (): Promise<DesktopUpdateAdmission> => {
+        const decide = taskControl()
+        if (decide === undefined) return 'unavailable'
+        try {
+          // Refusing new requests before the final check is what keeps an
+          // install from cutting a running turn in half.
+          const active = await decide('lock')
+          if (!active) return 'proceed'
+          await decide('unlock')
+          return 'tasks-active'
+        } catch (error: unknown) {
+          console.error(error)
+          return 'unavailable'
+        }
+      },
+    })
+  } catch (error: unknown) {
+    console.error(error)
+    return undefined
+  }
 }
 
 if (import.meta.main) {

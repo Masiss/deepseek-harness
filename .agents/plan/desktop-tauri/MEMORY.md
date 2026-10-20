@@ -131,6 +131,40 @@ apps/desktop/.desktop-build/targets/linux-x64/
 
 Cắt Python đưa primary runtime từ 401 MB xuống 144 MB; việc còn lại là cơ chế tải theo nhu cầu của ADR-0008.
 
+### Update trên Linux: feed thật → `available` (P3a, đã đo)
+
+**Q3 đã chốt:** AppImage self-update. AppImage là định dạng duy nhất có thể tự thay thế chính nó mà không cần root; gói `.deb` (và mọi cài đặt không có `$APPIMAGE`) do trình quản lý gói sở hữu, driver trả `unsupported` chứ không đoán.
+
+Hợp đồng manifest (`apps/desktop-host/src/update/manifest.ts`), một tài liệu cho mọi nền tảng:
+
+```json
+{"schemaVersion":1,"version":"0.3.0","artifacts":{
+  "linux-x64":{"url":"https://…/dsh.AppImage","sha256":"<64 hex>","size":123456789}}}
+```
+
+- khoá là `${platform}-${arch}` nên **không thể** chọn nhầm artifact; target lạ bị bỏ qua để bản cũ đọc được bản phát hành mới;
+- URL chỉ `https:` (trừ loopback `http://127.0.0.1` để diễn tập phát hành);
+- sha256 chữ thường 64 hex, size nguyên dương; sai → `UpdateManifestError` với `failure` cố định;
+- `latest` từ chối prerelease, `nightly` nhận — cùng chính sách với coordinator Electron.
+
+Đường cài (`update/appimage.ts`) chứng minh được tính nguyên tử: verify size + sha256 → copy sang `<APPIMAGE>.new` cùng thư mục → `fsync` file → `chmod 0755` → `rename` → `fsync` thư mục. Crash trước `rename` để lại ảnh cũ nguyên vẹn (có test), crash sau để lại ảnh mới hoàn chỉnh. `.new` sót lại từ lần lỗi bị ghi đè.
+
+Dịch vụ (`update/service.ts`) giữ đúng chính sách Electron: check không tải, tải cần đúng version người dùng đã thấy, cài cần artifact đã verify **và** một lần xác nhận riêng; lỗi tự động thì im lặng, lỗi thủ công mới hiện. Trước khi cài nó gọi `update-tasks` (khoá nhận request) — có task chạy thì trả `ready` và **không** cài.
+
+**Đo thật** (`apps/desktop-tauri/scripts/update-probe.sh`, shell release + Host đóng gói + feed HTTP thật):
+
+```
+RESULT ready=OK port=38649
+status_before={"phase":"available","version":"9.9.9"}
+status_after={"phase":"available","version":"9.9.9"}
+data: {"phase":"available","version":"9.9.9"}
+feed_requests=2
+```
+
+42 unit test cho manifest/AppImage/service; 95 test toàn `apps/desktop-host`. Env do shell truyền: `DSH_DESKTOP_UPDATE_FEED` (URL manifest) và `DSH_DESKTOP_VERSION` (bản đang cài); thiếu một trong hai → **không** có dịch vụ update (idle), đúng kiểu một bản phát hành không có nguồn cập nhật.
+
+**Còn thiếu để đóng P3:** hộp thoại xác nhận tải/cài (Electron dùng `dialog.showMessageBox`; Tauri cần dialog native hoặc UI), restart shell sau `install`, và ký gói (macOS `codesign`/notarize, Windows `signtool`). Vì chưa có chỗ xác nhận, cầu chỉ mở đường **check**; `download`/`install` đã có API + test nhưng chưa nối vào nút bấm nào.
+
 ### Làm nhẹ payload Python (D25) — 257 MB → 193 MB, đo được
 
 `apps/desktop-tauri/scripts/prune-python-payload.ts`, gọi trong `prepare-linux-runtime.ts` ngay sau khi đọc manifest primary runtime, rồi **verify bằng import thật** (`numpy, pandas, openpyxl, docx, pptx, PIL, lxml`) — payload prune xong vẫn boot app (`ready=OK`).
@@ -210,6 +244,7 @@ Menu Application: About, (dev) Reload Page + Toggle Developer Tools `F12`, Quit 
 | `.agents/plan/desktop-tauri/probes/bridge-probe.sh` | Cầu `/__dsh-desktop` trên HTTP thật: fence, device info, shortcut round trip, phase update |
 | `.agents/plan/desktop-tauri/probes/bridge-page.mjs` + `bridge-page-probe.sh` | Quan sát cầu từ trong trang thật bằng Chromium |
 | `.agents/plan/desktop-tauri/probes/session-read-probe.sh` | Host Tauri đọc session trên đĩa qua RPC `session/list` (đọc thật, không sửa) |
+| `apps/desktop-tauri/scripts/update-probe.sh` | Feed HTTP thật → `updates-status` = `available`, SSE phát đúng state |
 
 `render.mjs` cần chạy trong `apps/web` (nơi có `playwright`):
 
@@ -251,13 +286,14 @@ DSH_DESKTOP_PROJECT_DIR=$HOME/.dsh/profiles/web \
 | D15 | Mở lại app luôn là đường về (single instance focus), nên không bao giờ có tiến trình mồ côi không lối vào |
 | D16 | Cầu `window.dshDesktop` **do Host phục vụ**, không phải init script + Tauri command (ADR-0011) |
 | D17 | `shortcuts` chạy đúng `ShortcutPersistence` của client package trong Host — một thuật toán, hai shell |
-| D18 | `keyboard`/`shortcuts`/`updates.subscribe` trả disposer rỗng: một cửa sổ, client tự áp snapshot từ `get`/`edit` |
+| D18 | `keyboard`/`shortcuts` trả disposer rỗng: một cửa sổ, client tự áp snapshot từ `get`/`edit`; `updates.subscribe` là **EventSource thật** (D26) |
 | D19 | `data-platform` do chính shim đặt (thay `markDocumentPlatform` của preload Electron) |
 | D20 | Directory picker **không cần Tauri dialog**: `directory-picker-auto` trong web bundle đã tự chọn chooser native của Host |
 | D21 | Product analytics đã cổng sẵn ở client bằng `'dshDesktop' in globalThis`; cầu của ta thoả cổng, không cần thêm gì |
 | D23 | Shim của cầu **nối tiếp** mọi lời gọi (một request một lúc): client đọc shortcut một lần cho mỗi command đăng ký, không await |
 | D25 | Giữ Python trong payload nhưng **prune**: bỏ pip/ensurepip/IDLE/tkinter+tcl/tk/terminfo/header và bản sao thứ hai của `libpython3.12.so`; **không** bỏ numpy/pandas (SKILL.md dạy model dùng) và **không** strip |
 | D24 | Vòng đời profile nằm trong **Host** (TS, dùng lại `@deepseek-ai/dsh-app-boot`), không viết lại bằng Rust: tạo profile + bỏ link projection + giữ đúng **một app bundle** (web). Feature bundle không bị đụng |
+| D26 | Update: manifest tự mô tả theo `platform-arch`, tải + verify sha256/size, cài bằng **rename nguyên tử** lên `$APPIMAGE`; Q3 = **AppImage self-update**, gói `.deb` để trình quản lý gói (`unsupported`) |
 | D22 | Welcome/onboarding v1 = **không tới được**: cửa sổ welcome là tài liệu native riêng cần copy của `locale.ts` (TS) và luồng đăng nhập Platform. Không chép choreography `hasApiKey` của `welcome-backend.ts` sang Host (sẽ là nhà thứ hai) |
 
 ## Số đo thật
@@ -497,7 +533,7 @@ Item đăng ký đủ (`Id`, `Status`, `IconName`, `Menu` trỏ tới `/org/ayat
 |---|---|---|
 | Q1 | Có cần embedded browser (sidebar) + Platform view trên Tauri không? | Nếu có: +4–6 pw, không parity đầy đủ |
 | Q2 | Windows có bắt buộc trong 12 tháng tới? | Quyết định P5-win32 (5–7 pw) |
-| Q3 | Auto-update Linux dùng AppImage self-update hay repo apt? | P3 |
+| Q3 | Auto-update Linux dùng AppImage self-update hay repo apt? | **Đã chốt: AppImage self-update** (D26); `.deb` do trình quản lý gói |
 | Q4 | Có cần ký/notarize macOS ngay v1 không? | +3–5 pw |
 | Q5 | Có chấp nhận Office/Python tải sau lần dùng đầu? | −273 MB nếu có |
 

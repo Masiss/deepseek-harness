@@ -280,7 +280,9 @@
         "@deepseek-ai/dsh": "workspace:*",
         "@deepseek-ai/dsh-agent": "workspace:*",
         "@deepseek-ai/dsh-app-boot": "workspace:*",
+        "@deepseek-ai/dsh-atomic-write": "workspace:*",
         "@deepseek-ai/dsh-client-connection": "workspace:*",
+        "@deepseek-ai/dsh-client-shortcuts": "workspace:*",
         "@deepseek-ai/dsh-deepseek-account": "workspace:*",
         "@deepseek-ai/dsh-home-paths": "workspace:*",
         "@deepseek-ai/dsh-host-webserver": "workspace:*",
@@ -291,11 +293,13 @@
         "@deepseek-ai/dsh-workspace": "workspace:*",
         "@deepseek-ai/libreoffice-kit": "^0.1.5",
         "koffi": "3.1.1",
+        "semver": "^7.8.5",
       },
       "devDependencies": {
         "@deepseek-ai/cordis-plugin-include": "workspace:~",
         "@deepseek-ai/cordis-plugin-loader": "workspace:~",
         "@deepseek-ai/dsh-skill": "workspace:*",
+        "@types/semver": "^7.8.0",
       },
     },
     "apps/desktop-tauri": {

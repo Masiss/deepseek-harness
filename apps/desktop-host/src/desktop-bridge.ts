@@ -14,11 +14,11 @@
  * process runs, so both shells share one device-preference implementation and
  * one `keybindings.json` document shape.
  *
- * The bridge deliberately omits three capabilities the Electron preload
- * carries: `browser` (no Tauri equivalent to `WebContentsView`), native menu
- * input, and update presentation, which arrive with the updater. Their absence
- * is visible to the client as an optional member, and no page consumes a
- * missing member as present.
+ * The bridge deliberately omits `browser` (no Tauri equivalent to
+ * `WebContentsView`) and native menu input. Update presentation is served here
+ * when the Host was given an update service; without one the surface reports
+ * `idle` and opens nothing, which is what the client treats as "this carrier
+ * cannot update".
  *
  * @module @deepseek-ai/dsh-desktop-host/desktop-bridge
  */
@@ -39,6 +39,7 @@ import type {
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import type {} from '@deepseek-ai/dsh-client-connection'
 import type { IndexInjection } from '@deepseek-ai/dsh-host-webserver'
+import type { DesktopUpdatePresentation } from './update/service.ts'
 
 /** Absolute pathname prefix owning every bridge request. */
 export const BRIDGE_PATH = '/__dsh-desktop'
@@ -61,6 +62,29 @@ export interface DesktopBridgeOptions {
    * @defaultValue the running platform.
    */
   readonly platform?: ShortcutPlatform
+  /**
+   * Update status published to the client.
+   * @defaultValue absent, which reports `idle` and opens nothing.
+   */
+  readonly updates?: DesktopUpdateChannel
+}
+
+/** The part of the update service the bridge publishes. */
+export interface DesktopUpdateChannel {
+  /** Latest published status. */
+  readonly presentation: DesktopUpdatePresentation
+  /**
+   * Observe status changes.
+   * @param listener - Called after every published change.
+   * @returns Disposer removing this listener.
+   */
+  subscribe(listener: (state: DesktopUpdatePresentation) => void): () => void
+  /**
+   * Run the user-requested check.
+   * @param manual - Whether a failure must stay visible.
+   * @returns The resulting status.
+   */
+  check(manual?: boolean): Promise<DesktopUpdatePresentation>
 }
 
 /**
@@ -92,13 +116,15 @@ export function installDesktopBridge(ctx: Context, options: DesktopBridgeOptions
   const route = ctx.webServer.register({
     kind: 'prefix',
     path: BRIDGE_PATH,
-    handler: (req, res) => handle(ctx, shortcuts, req, res),
+    handler: (req, res) => handle(ctx, shortcuts, options.updates, req, res),
   })
+  const events = options.updates === undefined ? undefined : serveUpdateEvents(ctx, options.updates)
   const removeInject = ctx.on('webserver/index-inject', (table: IndexInjection[]) => {
     table.push({ kind: 'script', placement: 'head', text: renderShim(platform) })
   })
   return () => {
     route()
+    events?.()
     removeInject()
     shortcuts.dispose()
   }
@@ -115,6 +141,7 @@ function shortcutPlatform(platform: NodeJS.Platform): ShortcutPlatform {
 async function handle(
   ctx: Context,
   shortcuts: ShortcutPersistence,
+  updates: DesktopUpdateChannel | undefined,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
@@ -142,7 +169,7 @@ async function handle(
     sendJson(res, 400, { error: 'invalid-json' })
     return
   }
-  const answer = await dispatch(shortcuts, path, request)
+  const answer = await dispatch(shortcuts, updates, path, request)
   if (answer === undefined) {
     sendJson(res, 404, { error: 'unknown-method' })
     return
@@ -159,6 +186,7 @@ interface DispatchAnswer {
 /** Run one bridge method, or answer `undefined` when the path names none. */
 async function dispatch(
   shortcuts: ShortcutPersistence,
+  updates: DesktopUpdateChannel | undefined,
   path: string,
   request: unknown,
 ): Promise<DispatchAnswer | undefined> {
@@ -188,8 +216,11 @@ async function dispatch(
       // One window owns the bridge; its configuration cannot be stale elsewhere.
       return { status: 204, payload: undefined }
     case '/updates-status':
-      return { status: 200, payload: { phase: 'idle' } }
+      return { status: 200, payload: updates?.presentation ?? { phase: 'idle' } }
     case '/updates-open':
+      // The user asked for a check. The reply waits for it so the settings
+      // spinner covers the request; progress reaches the page over events.
+      if (updates !== undefined) await updates.check(true)
       return { status: 204, payload: undefined }
     default:
       return undefined
@@ -213,6 +244,60 @@ function sendJson(res: ServerResponse, status: number, payload: unknown): void {
   res.statusCode = status
   res.setHeader('content-type', 'application/json; charset=utf-8')
   res.end(text)
+}
+
+/**
+ * Serve update status as server-sent events.
+ *
+ * The page cannot poll for readiness without a timer of its own, and the
+ * settings row subscribes once; one long-lived response per page is the
+ * smallest carrier for that contract.
+ *
+ * @param ctx - Host context owning the webserver and Connection fence.
+ * @param updates - Service whose published states are forwarded.
+ * @returns Disposer closing the route and every open response.
+ */
+function serveUpdateEvents(ctx: Context, updates: DesktopUpdateChannel): () => void {
+  const clients = new Set<ServerResponse>()
+  const route = ctx.webServer.register({
+    kind: 'exact',
+    path: `${BRIDGE_PATH}/updates-events`,
+    handler: (req, res) => {
+      res.setHeader('cache-control', 'no-store')
+      const rejection = ctx.connection.requestRejection(req)
+      if (rejection !== undefined) {
+        res.statusCode = rejection
+        res.end()
+        return
+      }
+      if (req.method !== 'GET') {
+        res.statusCode = 405
+        res.setHeader('allow', 'GET')
+        res.end()
+        return
+      }
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        connection: 'keep-alive',
+        'x-accel-buffering': 'no',
+      })
+      res.write(`data: ${JSON.stringify(updates.presentation)}\n\n`)
+      clients.add(res)
+      // The response owns the connection lifetime; the request completes as
+      // soon as its empty body ends, which is not when the page disconnects.
+      res.on('close', () => { clients.delete(res) })
+    },
+  })
+  const unsubscribe = updates.subscribe((state) => {
+    const record = `data: ${JSON.stringify(state)}\n\n`
+    for (const res of clients) res.write(record)
+  })
+  return () => {
+    unsubscribe()
+    route()
+    for (const res of clients) res.end()
+    clients.clear()
+  }
 }
 
 /** Collect a bounded request body as UTF-8 text; null once the ceiling is passed (stream drained). */
@@ -305,7 +390,13 @@ function renderShim(platform: ShortcutPlatform): string {
     updates: {
       status: () => post('updates-status'),
       open: () => post('updates-open').then(() => undefined),
-      subscribe: never,
+      subscribe: (listener) => {
+        const source = new EventSource(base + '/updates-events')
+        source.onmessage = (event) => {
+          try { listener(JSON.parse(event.data)) } catch (error) { console.warn('desktop bridge: update event', error) }
+        }
+        return () => { source.close() }
+      },
     },
   }
   document.documentElement.dataset.platform = ${JSON.stringify(platform)}
