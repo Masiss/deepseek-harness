@@ -36,8 +36,14 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
-            desktop-file-utils \
-            bubblewrap
+            desktop-file-utils
+
+      # The recorded-session replay drives tools that run confined, so the
+      # runner needs a working sandbox backend. The upstream script pins a
+      # bubblewrap build and lifts the unprivileged user-namespace restriction
+      # the hosted image applies.
+      - name: Prepare bubblewrap
+        run: bash scripts/prepare-ci-bubblewrap.sh
 
       - name: Build the workspace
         run: bun run build
