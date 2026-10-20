@@ -165,6 +165,31 @@ feed_requests=2
 
 **Còn thiếu để đóng P3:** hộp thoại xác nhận tải/cài (Electron dùng `dialog.showMessageBox`; Tauri cần dialog native hoặc UI), restart shell sau `install`, và ký gói (macOS `codesign`/notarize, Windows `signtool`). Vì chưa có chỗ xác nhận, cầu chỉ mở đường **check**; `download`/`install` đã có API + test nhưng chưa nối vào nút bấm nào.
 
+### AppImage Linux (P4a, đã đo)
+
+`apps/desktop-tauri/scripts/pack-appimage.sh` ghép shell release + `bin/`, `dsh/`, `runtime/`, `project/` của tree đã chuẩn bị vào một AppDir rồi pack bằng appimagetool. **200.698.360 byte** (191 MiB) từ AppDir ~751 MB.
+
+Ảnh AppImage là **read-only**, nên `AppRun` làm hai việc mà tree không cần: tính lại mọi đường dẫn từ `$here` (không phụ thuộc cwd), và seed profile `project/` sang `$DSH_HOME/desktop-project` ở lần chạy đầu. Mọi ghi của profile (plugin, patch) rơi vào bản sao trong `$DSH_HOME`; ảnh không bị đụng — probe đo `image_writable_files=0` sau khi boot xong.
+
+Hai lỗi thật lộ ra khi chạy, không đoán được từ đọc code:
+
+1. **Thiếu `DSH_CLIENT_VERSION`** → entry `desktop-product-telemetry` chết với `ValidationError: invalid config: $.serviceVersion missing required value` (config web-app đọc `process.env.DSH_CLIENT_VERSION`). `AppRun` giờ export cả `DSH_DESKTOP_VERSION` (so sánh update) và `DSH_CLIENT_VERSION` (telemetry) cùng một release identity.
+2. **appimagetool bản `continuous` báo sai**: nó kết luận "Desktop file contains errors" cho một file mà chính `desktop-file-validate` của nó trả exit 0 — hàm `validate_desktop_file()` `waitpid(..., WUNTRACED | WCONTINUED)` nên `WIFEXITED` sai. Ghim **1.9.1**; bản này pack sạch.
+
+`apps/desktop-tauri/scripts/appimage-probe.sh` kiểm chứng hoàn toàn headless (giải nén thay vì mount FUSE, `env -i` với HOME/TMPDIR/DSH_HOME/XDG riêng, `setsid`, không DISPLAY/WAYLAND):
+
+```
+RESULT appimage=DeepSeek-Harness-0.2.1-rc.2-x86_64.AppImage bytes=200698360
+version=0.2.1-rc.2  client_version=0.2.1-rc.2  project_has_cordis=yes  node_exec=yes
+seeded_in_home=1
+RESULT host=OK port=35455
+bridge_status={"phase":"idle"}
+image_writable_files=0
+RESULT done=1
+```
+
+Feed update lúc build: đặt `DSH_APPIMAGE_UPDATE_FEED` khi chạy `pack-appimage.sh` thì `AppRun` export nó thành `DSH_DESKTOP_UPDATE_FEED` (mặc định không có → không nguồn update).
+
 ### Làm nhẹ payload Python (D25) — 257 MB → 193 MB, đo được
 
 `apps/desktop-tauri/scripts/prune-python-payload.ts`, gọi trong `prepare-linux-runtime.ts` ngay sau khi đọc manifest primary runtime, rồi **verify bằng import thật** (`numpy, pandas, openpyxl, docx, pptx, PIL, lxml`) — payload prune xong vẫn boot app (`ready=OK`).
@@ -245,6 +270,7 @@ Menu Application: About, (dev) Reload Page + Toggle Developer Tools `F12`, Quit 
 | `.agents/plan/desktop-tauri/probes/bridge-page.mjs` + `bridge-page-probe.sh` | Quan sát cầu từ trong trang thật bằng Chromium |
 | `.agents/plan/desktop-tauri/probes/session-read-probe.sh` | Host Tauri đọc session trên đĩa qua RPC `session/list` (đọc thật, không sửa) |
 | `apps/desktop-tauri/scripts/update-probe.sh` | Feed HTTP thật → `updates-status` = `available`, SSE phát đúng state |
+| `apps/desktop-tauri/scripts/appimage-probe.sh` | AppImage headless isolated: hợp đồng `AppRun`, seed profile, Host boot từ ảnh read-only |
 
 `render.mjs` cần chạy trong `apps/web` (nơi có `playwright`):
 
@@ -293,6 +319,7 @@ DSH_DESKTOP_PROJECT_DIR=$HOME/.dsh/profiles/web \
 | D23 | Shim của cầu **nối tiếp** mọi lời gọi (một request một lúc): client đọc shortcut một lần cho mỗi command đăng ký, không await |
 | D25 | Giữ Python trong payload nhưng **prune**: bỏ pip/ensurepip/IDLE/tkinter+tcl/tk/terminfo/header và bản sao thứ hai của `libpython3.12.so`; **không** bỏ numpy/pandas (SKILL.md dạy model dùng) và **không** strip |
 | D24 | Vòng đời profile nằm trong **Host** (TS, dùng lại `@deepseek-ai/dsh-app-boot`), không viết lại bằng Rust: tạo profile + bỏ link projection + giữ đúng **một app bundle** (web). Feature bundle không bị đụng |
+| D27 | Linux phát hành dạng **AppImage**: ảnh read-only nên profile seed vào `$DSH_HOME/desktop-project` ở lần chạy đầu; `AppRun` giữ hợp đồng env của tree (thêm `DSH_CLIENT_VERSION` vì telemetry đọc nó) |
 | D26 | Update: manifest tự mô tả theo `platform-arch`, tải + verify sha256/size, cài bằng **rename nguyên tử** lên `$APPIMAGE`; Q3 = **AppImage self-update**, gói `.deb` để trình quản lý gói (`unsupported`) |
 | D22 | Welcome/onboarding v1 = **không tới được**: cửa sổ welcome là tài liệu native riêng cần copy của `locale.ts` (TS) và luồng đăng nhập Platform. Không chép choreography `hasApiKey` của `welcome-backend.ts` sang Host (sẽ là nhà thứ hai) |
 

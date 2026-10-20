@@ -478,7 +478,8 @@ Update không làm mất dữ liệu và không cài bản sai nền tảng.
 
 ### Công việc
 
-- Linux `.deb` + AppImage; khai báo dependency WebKitGTK.
+- [x] Linux **AppImage** (`apps/desktop-tauri/scripts/pack-appimage.sh`): shell release + payload chuẩn bị sẵn, `AppRun` giữ đúng hợp đồng env, profile seed vào `$DSH_HOME` vì ảnh là read-only. Đo: 200.698.360 byte; boot headless từ bản giải nén read-only, cầu trả `{"phase":"idle"}`, `image_writable_files=0`.
+- [ ] Linux `.deb` + khai báo dependency WebKitGTK.
 - macOS `.app`/`.dmg`, universal.
 - Windows NSIS/MSI (không port installer UI tùy biến ở v1).
 - CI matrix 5 target; cache Rust.
