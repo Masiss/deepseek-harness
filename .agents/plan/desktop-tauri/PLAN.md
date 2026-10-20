@@ -343,11 +343,12 @@ Mỗi phase có **Acceptance Criteria (AC)** dạng checkbox. Không chuyển ph
 - [x] `/` trả 200 sau token; `__DSH_BOOT__` có mặt — frame `ready` mang 13 injection, gồm `__DSH_BOOT__`.
 - [x] `/api/remote.mux` trả `101 Switching Protocols` — đo thật bằng `curl` upgrade, trả `HTTP/1.1 101`.
 - [x] PTY spawn được (`/dev/pts/N`), gõ lệnh trong terminal — đo hai tầng: (a) `terminal/create` qua RPC của Host Tauri trả `/bin/bash -i`, `state=running`; (b) gõ lệnh trong terminal thật của app (Chromium trên đúng Host mà shell Tauri nạp) cho `PTY_OK`, `/dev/pts/2`, `ROWS=50 COLS=76`, và `Ctrl+C` trả lại prompt. **Chưa gõ được xuyên WebView Tauri** vì máy không có công cụ bơm phím an toàn vào cửa sổ (`xdotool`/`wmctrl` đều không có).
-- [~] `dsh plugin` cài và chạy được một plugin thật — **cài đã chạy, "chạy" chưa đo được**:
-  - Trên cây production thật: `installBundle @deepseek-ai/dsh-headless@0.2.1-rc.2` → `changed: true`, `stage: "enable"`, `application: "restart-required"`; pnpm đi kèm (11.28.5) chạy bằng Node đi kèm (24.21.0), tải 6 gói.
+- [x] `dsh plugin` cài và chạy được một plugin thật — **đo đủ cả hai nửa** qua shell Tauri thật trên cây production:
+  - Cài từ registry: `installBundle @deepseek-ai/dsh-headless@0.2.1-rc.2` → `changed: true`, `stage: "enable"`, `application: "restart-required"`; pnpm đi kèm (11.28.5) chạy bằng Node đi kèm (24.21.0), tải 6 gói.
   - Bộ chặn phiên bản từ chối `latest` (`0.0.1-rc.1`) kèm hướng dẫn `dsh plugin allow-version` — đúng thiết kế.
-  - **Chưa đo được "plugin chạy"**: mọi bundle cài được đều là app bundle; cài thêm `dsh-headless` vào profile web làm app hỏng lúc khởi động (`unknown option '--no-open'`) vì profile có hai app bundle. Khôi phục profile thì boot lại được.
-  - **Điều kiện dừng #4 của `AGENTS.md` §7 (không cài/chạy được plugin) không bị chạm**: phần cài đặt — thứ phụ thuộc runtime Tauri — đã chạy thật. Phần "chạy" phụ thuộc luật bundle của sản phẩm, giống nhau ở cả hai shell.
+  - Cài từ tarball cục bộ rồi **chạy**: fixture `apps/desktop-tauri/scripts/load-probe/` (`file:` spec) → khởi động lại thì `apply()` của plugin in `DSH_LOAD_PROBE_ACTIVE`, và `pluginManager/listPlugins` trả `{"entryId":"include:load-probe","moduleName":"@masiss/dsh-load-probe","enabled":true,"fiberPhase":"active","patchId":"load-probe"}`.
+  - Fixture là **feature bundle** (insert một row) vì mọi bundle cài được trên registry đều là app bundle; cài thêm app bundle thứ hai làm profile hỏng lúc khởi động (`unknown option '--no-open'`) — luật của sản phẩm, giống nhau ở cả hai shell.
+  - **Điều kiện dừng #4 của `AGENTS.md` §7 đã qua.**
 - [x] Mở được session ghi bản cũ — đo bằng `session-read-probe.sh` trên đúng 7 file đang có trên đĩa: `session/list` trả `ok=true`, 7/7 item, `format_status={"current":5,"migration-required":2}`. Host Tauri đọc được cả hai thế hệ và báo đúng thế hệ cũ là cần migration thay vì đọc nhầm.
 - [ ] Transcript cùng prompt khớp bản cũ (diff = 0) — **chặn**: máy này không có `DEEPSEEK_API_KEY`.
 - [x] `node:sqlite` hoạt động dưới Bun — có, nhưng không còn cần cho quyết định runtime.
@@ -481,6 +482,8 @@ Update không làm mất dữ liệu và không cài bản sai nền tảng.
 - Windows NSIS/MSI (không port installer UI tùy biến ở v1).
 - CI matrix 5 target; cache Rust.
 - Resource layout sẵn sàng ký lồng nhau.
+- **Vòng đời profile trong shell Tauri** — hiện làn đóng gói mới tạo `project/` một lần, còn Electron tạo/sửa nó lúc khởi động (`DesktopProjectManager.applyRelease`: `initProfile`, `migrateProfileSettings`, `removeLinkProjections`) và cứu được profile hỏng (`disableAllPlugins`). Thiếu đường này thì một profile hỏng là app không mở lại được. Chỗ đặt hợp lý là Host (TypeScript dùng lại `@deepseek-ai/dsh-app-boot`), không phải Rust.
+- **Python/Office tải theo nhu cầu** (ADR-0008): payload hiện 401 MB, riêng Python 257 MB. Đo được: bỏ `dependencies/python` thì Host vẫn `ready=OK`, plugin vẫn chạy, RSS không đổi — nên cắt khỏi payload mặc định là an toàn, nhưng phải có cơ chế tải khi người dùng cần tính năng tài liệu, nếu không là mất tính năng.
 
 ### Acceptance Criteria
 

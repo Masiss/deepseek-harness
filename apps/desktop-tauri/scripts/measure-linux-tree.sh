@@ -8,7 +8,7 @@
 set -eu
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
-tree=$repo/apps/desktop-tauri/.build/linux-x64
+tree=$repo/apps/desktop/.desktop-build/targets/${DSH_DESKTOP_TARGET:-linux-x64}
 work=$(mktemp -d /tmp/opencode/measure-tree.XXXXXX)
 mkfifo "$work/in" "$work/out"
 

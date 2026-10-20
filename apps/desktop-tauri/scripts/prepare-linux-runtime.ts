@@ -2,29 +2,30 @@
  * Materialize the Linux Desktop runtime tree the Tauri shell supervises.
  *
  * This is the fork-owned counterpart of `apps/desktop/scripts/prepare-dsh.ts`.
- * It performs the same package-set install and keeps the same directory
- * contract, but differs where the Electron lane cannot serve Linux:
+ * It performs the same package-set install into the same target directories,
+ * but differs where the Electron carrier cannot serve Linux:
  *
- * - the target is `linux-<arch>`; the Electron build paths only accept
- *   `mac-arm64`, `mac-x64`, and `win-x64`.
  * - pnpm runs on the bundled primary-runtime Node, not on an Electron binary.
  * - nothing is signed, and no Electron distribution is downloaded.
+ *
+ * The directories come from `desktop-build-paths.mjs`, so the Linux lane and
+ * the Electron lane agree on the layout by construction.
  *
  * The result feeds the shell's documented environment contract:
  *
  * ```
- * DSH_DESKTOP_RUNTIME_DIR=<out>/dsh
- * DSH_DESKTOP_PROJECT_DIR=<out>/project
- * DSH_DESKTOP_PRIMARY_RUNTIME=<out>/runtime/primary-runtime
- * DSH_DESKTOP_PNPM_ENTRY=<out>/runtime/primary-runtime/dependencies/pnpm/bin/pnpm.mjs
- * DSH_DESKTOP_NODE_BIN=<out>/runtime/bin
+ * DSH_DESKTOP_RUNTIME_DIR=<dsh>
+ * DSH_DESKTOP_PROJECT_DIR=<root>/project
+ * DSH_DESKTOP_PRIMARY_RUNTIME=<runtime>/primary-runtime
+ * DSH_DESKTOP_PNPM_ENTRY=<runtime>/primary-runtime/dependencies/pnpm/bin/pnpm.mjs
+ * DSH_DESKTOP_NODE_BIN=<runtime>/bin
  * ```
  *
  * Usage, after packing the release tarballs and preparing the primary runtime
  * (see `pack-linux.sh` and `scripts/primary-runtime/prepare.ts`):
  *
  * ```
- * bunx tsx apps/desktop-tauri/scripts/prepare-linux-runtime.ts <target>
+ * bunx tsx apps/desktop-tauri/scripts/prepare-linux-runtime.ts [linux-x64|linux-arm64]
  * ```
  */
 
@@ -42,6 +43,7 @@ import {
 import { DESKTOP_HOST_PROTOCOL_VERSION } from '../../desktop/src/host-protocol.ts'
 import { createPluginProfile, createRuntimeProjectMetadata } from '../../desktop/src/project-manager.ts'
 import { parseDesktopRelease } from '../../desktop/src/release.ts'
+import { desktopTargetPlatform, resolveDesktopTargetBuildPaths } from '../../desktop/scripts/desktop-build-paths.mjs'
 import { prepareDesktopPackageSet } from '../../desktop/scripts/prepare-package-set.ts'
 import { prepareRuntimePatches, verifyRuntimePatches } from '../../desktop/scripts/prepare-runtime-patches.ts'
 import { desktopRuntimeFileExclusion } from '../../desktop/scripts/runtime-file-policy.ts'
@@ -49,7 +51,6 @@ import { selectOfficeEngine } from '../../../scripts/libreoffice-packages.mjs'
 
 const APP_ROOT = resolve(import.meta.dirname, '..')
 const REPOSITORY_ROOT = resolve(APP_ROOT, '..', '..')
-const BUILD_ROOT = join(APP_ROOT, '.build')
 const DESKTOP_APP_ROOT = join(REPOSITORY_ROOT, 'apps', 'desktop')
 
 /**
@@ -57,6 +58,8 @@ const DESKTOP_APP_ROOT = join(REPOSITORY_ROOT, 'apps', 'desktop')
  *
  * The shell passes the runtime directory as the first argument and appends the
  * remaining positional arguments, so the entry resolves inside that runtime.
+ * It sits beside `runtime/`, which is why it reaches the bundled Node through
+ * a sibling path.
  */
 const HOST_LAUNCHER = `#!/bin/sh
 # Run the installed Desktop Host with the bundled Node.
@@ -66,19 +69,12 @@ runtime=$1
 exec "$here/../runtime/bin/node" "$runtime/node_modules/@deepseek-ai/dsh-desktop-host/lib/tauri.js" "$@"
 `
 
-/** Target platform facts the runtime filter and the Office engine selection need. */
-interface LinuxTarget {
-  readonly name: 'linux-x64' | 'linux-arm64'
-  readonly platform: 'linux'
-  readonly arch: 'x64' | 'arm64'
-}
-
-function resolveTarget(value: string | undefined): LinuxTarget {
+function targetName(value: string | undefined): 'linux-x64' | 'linux-arm64' {
   const name = value ?? `linux-${process.arch === 'arm64' ? 'arm64' : 'x64'}`
   if (name !== 'linux-x64' && name !== 'linux-arm64') {
     throw new Error(`linux runtime: unsupported target ${JSON.stringify(name)}; expected linux-x64 or linux-arm64`)
   }
-  return { name, platform: 'linux', arch: name === 'linux-arm64' ? 'arm64' : 'x64' }
+  return name
 }
 
 function manifestVersion(path: string, subject: string): string {
@@ -95,7 +91,7 @@ function runPnpm(pnpm: string, node: string, cwd: string, args: readonly string[
       env: {
         ...process.env,
         // Package scripts must resolve the bundled Node, never a host install.
-        PATH: `${join(BUILD_ROOT, 'runtime', 'bin')}${delimiter}${process.env.PATH ?? ''}`,
+        PATH: `${dirname(node)}${delimiter}${process.env.PATH ?? ''}`,
         DSH_DESKTOP_NODE_EXECUTABLE: node,
       },
       stdio: 'inherit',
@@ -109,16 +105,18 @@ function runPnpm(pnpm: string, node: string, cwd: string, args: readonly string[
 }
 
 async function main(): Promise<void> {
-  const target = resolveTarget(process.argv[2])
-  const out = join(BUILD_ROOT, target.name)
-  const packed = join(out, 'packed')
-  const packageSetDir = join(out, 'package-set')
-  const runtime = join(out, 'runtime')
-  const primaryRuntime = join(runtime, 'primary-runtime')
+  const name = targetName(process.argv[2])
+  const target = desktopTargetPlatform(name)
+  const paths = resolveDesktopTargetBuildPaths({
+    ...process.env,
+    DSH_DESKTOP_TARGET_PLATFORM: target.platform,
+    DSH_DESKTOP_TARGET_ARCH: target.arch,
+  })
+
+  const primaryRuntime = join(paths.runtime, 'primary-runtime')
   const node = join(primaryRuntime, 'dependencies', 'node', 'bin', 'node')
   const pnpm = join(primaryRuntime, 'dependencies', 'pnpm', 'bin', 'pnpm.mjs')
-  const dsh = join(out, 'dsh')
-  const project = join(out, 'project')
+  const project = join(paths.root, 'project')
 
   const primary = JSON.parse(readFileSync(join(primaryRuntime, 'runtime.json'), 'utf8')) as {
     node?: unknown
@@ -136,23 +134,21 @@ async function main(): Promise<void> {
   })
 
   // 1. Select and copy the local tarball closure that supplies dsh itself.
-  prepareDesktopPackageSet(
-    [join(packed, 'dsh'), join(packed, 'vendor'), join(packed, 'landlock')],
-    packageSetDir,
-  )
+  prepareDesktopPackageSet([paths.packedDsh, paths.packedVendor, paths.packedLandlock], paths.packageSet)
 
   // 2. Resolve the runtime project against the local tarballs only.
-  const staging = join(BUILD_ROOT, 'tmp', `dsh-install-${target.name}`)
+  const staging = join(paths.dshPnpm, 'staging')
   rmSync(staging, { recursive: true, force: true })
+  rmSync(paths.dshPnpm, { recursive: true, force: true })
   mkdirSync(staging, { recursive: true })
-  cpSync(join(packageSetDir, DESKTOP_PACKAGE_SET_FILE), join(staging, DESKTOP_PACKAGE_SET_FILE))
-  cpSync(join(packageSetDir, DESKTOP_PACKAGES_DIR), join(staging, DESKTOP_PACKAGES_DIR), { recursive: true })
+  cpSync(join(paths.packageSet, DESKTOP_PACKAGE_SET_FILE), join(staging, DESKTOP_PACKAGE_SET_FILE))
+  cpSync(join(paths.packageSet, DESKTOP_PACKAGES_DIR), join(staging, DESKTOP_PACKAGES_DIR), { recursive: true })
   createRuntimeProjectMetadata(staging, release)
   const patches = prepareRuntimePatches(staging, REPOSITORY_ROOT)
-  const config = join(BUILD_ROOT, 'tmp', 'pnpm-config', target.name)
+  const config = join(paths.dshPnpm, 'config')
   mkdirSync(config, { recursive: true })
   writeFileSync(join(config, 'npmrc'), '')
-  const pnpmFlags = [`--config.userconfig=${join(config, 'npmrc')}`, `--config.store-dir=${join(BUILD_ROOT, 'tmp', 'store')}`]
+  const pnpmFlags = [`--config.userconfig=${join(config, 'npmrc')}`, `--config.store-dir=${join(paths.dshPnpm, 'store')}`]
   await runPnpm(pnpm, node, staging, [...pnpmFlags, 'install', '--lockfile-only'])
   verifyRuntimePatches(staging, patches)
   verifyDesktopCoreLockfile(
@@ -168,13 +164,13 @@ async function main(): Promise<void> {
   }
   const officeEngine = selectOfficeEngine(office, target)
   const packageSet = readDesktopCorePackageSet(staging, release.version)
-  rmSync(dsh, { recursive: true, force: true })
-  cpSync(modules, join(dsh, 'node_modules'), {
+  rmSync(paths.dsh, { recursive: true, force: true })
+  cpSync(modules, join(paths.dsh, 'node_modules'), {
     recursive: true,
     dereference: true,
     filter: source => desktopRuntimeFileExclusion(relative(modules, source), target, officeEngine) === undefined,
   })
-  writeFileSync(join(dsh, 'package.json'), `${JSON.stringify({
+  writeFileSync(join(paths.dsh, 'package.json'), `${JSON.stringify({
     name: '@deepseek-ai/dsh-desktop-runtime',
     private: true,
     version: release.version,
@@ -182,8 +178,7 @@ async function main(): Promise<void> {
     dependencies: Object.fromEntries(packageSet.packages.map(entry => [entry.name, entry.version])),
   }, undefined, 2)}\n`)
   for (const file of DESKTOP_HOST_RUNTIME_FILES) {
-    const path = join(dsh, 'node_modules', DESKTOP_HOST_PACKAGE, file)
-    readFileSync(path)
+    readFileSync(join(paths.dsh, 'node_modules', DESKTOP_HOST_PACKAGE, file))
   }
 
   // 4. The profile the Host edits. The Desktop application owns this directory
@@ -192,27 +187,28 @@ async function main(): Promise<void> {
   createPluginProfile(project)
 
   // 5. Publish the launcher contract the shell reads.
-  const runtimeBin = join(runtime, 'bin')
-  mkdirSync(runtimeBin, { recursive: true })
-  rmSync(join(runtimeBin, 'node'), { force: true })
-  symlinkSync(join('..', 'primary-runtime', 'dependencies', 'node', 'bin', 'node'), join(runtimeBin, 'node'))
-  writeFileSync(join(runtime, 'versions.json'), `${JSON.stringify({
+  const bin = join(paths.runtime, 'bin')
+  mkdirSync(bin, { recursive: true })
+  rmSync(join(bin, 'node'), { force: true })
+  symlinkSync(join('..', 'primary-runtime', 'dependencies', 'node', 'bin', 'node'), join(bin, 'node'))
+  writeFileSync(join(paths.runtime, 'versions.json'), `${JSON.stringify({
     schemaVersion: 1,
     node: release.nodeVersion,
     pnpm: release.pnpmVersion,
   }, undefined, 2)}\n`)
 
-  const launcher = join(out, 'bin', 'desktop-host')
+  const launcher = join(paths.root, 'bin', 'desktop-host')
   mkdirSync(dirname(launcher), { recursive: true })
   writeFileSync(launcher, HOST_LAUNCHER, { mode: 0o755 })
 
   process.stdout.write(`${JSON.stringify({
-    target: target.name,
-    runtime: dsh,
+    target: name,
+    launcher,
+    runtime: paths.dsh,
     project,
     primaryRuntime,
     pnpmEntry: pnpm,
-    nodeBin: runtimeBin,
+    nodeBin: bin,
   }, undefined, 2)}\n`)
 }
 

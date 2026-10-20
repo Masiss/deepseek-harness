@@ -6,14 +6,23 @@
 # `release:pack` per family, plus the private Desktop Host tarball the `dsh`
 # family does not publish.
 #
+# Output goes to the same target directories `desktop-build-paths.mjs` hands
+# the Electron lane, so both lanes read one layout.
+#
 # Every step runs through pnpm: `release:pack` resolves its own executable from
 # `npm_execpath`, which only a pnpm lifecycle provides.
 #
-#   usage: pack-linux.sh <output-directory>
+#   usage: pack-linux.sh [linux-x64|linux-arm64]
 set -eu
 
-out=${1:?usage: pack-linux.sh <output-directory>}
+target=${1:-linux-$(uname -m | sed 's/x86_64/x64/; s/aarch64/arm64/')}
+case "$target" in
+  linux-x64 | linux-arm64) ;;
+  *) echo "pack-linux: unsupported target $target" >&2; exit 2 ;;
+esac
+
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+out="$repo/apps/desktop/.desktop-build/targets/$target/packed"
 cd "$repo"
 
 mkdir -p "$out/dsh" "$out/vendor" "$out/landlock"

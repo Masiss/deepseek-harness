@@ -1,0 +1,7 @@
+# Load-probe bundle patch: insert one feature row over the profile's app
+# bundle. Inserting rather than overriding keeps the Web application intact,
+# which is what distinguishes a feature bundle from the published application
+# bundles.
+- insert:
+    - id: load-probe
+      name: '@masiss/dsh-load-probe'

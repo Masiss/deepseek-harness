@@ -6,7 +6,8 @@
 set -u
 
 repo=/home/masis/deepseek-harness
-tree=$repo/apps/desktop-tauri/.build/linux-x64
+target=${DSH_DESKTOP_TARGET:-linux-x64}
+tree=$repo/apps/desktop/.desktop-build/targets/$target
 mode=${1:?usage: linux-tree-probe.sh rpc|install ...}
 shift
 
@@ -49,6 +50,7 @@ fi
 port=$(printf '%s' "$url" | sed -E 's#.*:([0-9]+)/.*#\1#')
 base="http://127.0.0.1:$port"
 echo "RESULT ready=OK port=$port"
+echo "load_probe_marker=$(grep -c DSH_LOAD_PROBE_ACTIVE "$work/err" || true)"
 curl -s -L -c "$work/cookies" -b "$work/cookies" -o /dev/null "$url"
 echo "cookie_bytes=$(stat -c %s "$work/cookies")"
 
@@ -64,14 +66,16 @@ case "$mode" in
     while [ $# -ge 2 ]; do
       method=$1; args=$2; shift 2
       echo "CALL $method $args"
-      rpc "$method" "$args" | head -c 700
+      rpc "$method" "$args" > "$work/rpc.json"
+      head -c 4000 "$work/rpc.json"
       echo
     done
     ;;
   install)
     spec=${1:?usage: linux-tree-probe.sh install <spec>}
     echo "CALL installBundle $spec"
-    rpc pluginManager/installBundle "{\"spec\":\"$spec\",\"options\":{\"acceptRisk\":true}}" | head -c 900
+    rpc pluginManager/installBundle "{\"spec\":\"$spec\",\"options\":{\"acceptRisk\":true}}" > "$work/install.json"
+    head -c 2000 "$work/install.json"
     echo
     ;;
 esac

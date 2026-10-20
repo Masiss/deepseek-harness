@@ -76,7 +76,7 @@ Số đo mới: shell release **10,3 MB** (tăng 1,5 MB cho tray + dialog + wind
 
 ### Làn đóng gói Linux (M1) — đã dựng và đo
 
-Bốn script thuộc fork, không sửa `apps/desktop`:
+Bốn script thuộc fork, chỉ chạm `apps/desktop` một bản vá đường dẫn:
 
 | Script | Việc |
 |---|---|
@@ -85,100 +85,52 @@ Bốn script thuộc fork, không sửa `apps/desktop`:
 | `apps/desktop-tauri/scripts/linux-tree-probe.sh` | Chạy shell Tauri thật trên cây đó rồi gọi RPC |
 | `apps/desktop-tauri/scripts/measure-linux-tree.sh` | Đo cold start + RSS của Host đã đóng gói |
 
-Dùng lại phần trung lập của upstream: `scripts/primary-runtime/prepare.ts` (đã khoá `linux-x64`), `release:pack`, `prepareDesktopPackageSet`, `createRuntimeProjectMetadata`, `prepareRuntimePatches`, `desktopRuntimeFileExclusion`, `createPluginProfile`.
-
 ```
-apps/desktop-tauri/.build/linux-x64/
+apps/desktop/.desktop-build/targets/linux-x64/
   bin/desktop-host        launcher shell spawn (chạy lib/tauri.js bằng Node đi kèm)
   runtime/primary-runtime node 24.21.0 + pnpm 11.28.5 + Python 3.12.14   401 MB
   runtime/bin/node        symlink tới Node đi kèm
   dsh/                    runtimeDir: node_modules của dsh                414 MB
-  project/                projectDir: profile (rỗng, 12 KB)
+  project/                projectDir: profile
+  packed/{dsh,vendor,landlock}   tarball release mà `prepareDesktopPackageSet` tiêu thụ
 ```
 
 | Phép đo | Kết quả |
 |---|---|
 | Node đi kèm | `v24.21.0`, `dependencies/node/bin/node` = 126.595.440 B (120,7 MiB) |
-| pnpm đi kèm | chạy bằng chính Node đó, `11.28.5` |
-| Cold start Host (spawn → frame `ready`), 3 lần | 1265 / 1272 / 1309 ms |
-| RSS idle của Host | 316552 / 325212 / 322924 KiB (309–318 MiB) |
-| Boot shell Tauri thật trên cây này | `ready=OK`, `pluginManager/listBundles` trả bundle của profile |
+| pnpm đi kèm | chạy bằng chính Node đó, `11.28.5`, **23 MB** |
+| Cold start Host (spawn → frame `ready`) | 1147–1482 ms qua nhiều lần đo |
+| RSS idle của Host | 309–318 MiB |
+| Boot shell Tauri thật trên cây này | `ready=OK`, `pluginManager/*` trả dữ liệu của profile |
 
-### `dsh plugin` trên cây production — cài đã chạy, "chạy được" vướng luật bundle
+### Ngân sách runtime: cắt Python, giữ pnpm
+
+| Thành phần | Kích thước | Kết luận |
+|---|---|---|
+| Python + wheels | **257 MB** (64% payload) | **Cắt được**: bỏ `dependencies/python` đi thì Host vẫn `ready=OK`, plugin vẫn active, RSS không đổi (Python chỉ nằm trên đĩa). Đúng ADR-0008: Office/Python thành thành phần tải theo nhu cầu. |
+| Node | 121 MB | Bắt buộc — đây là runtime JS của app (ADR-0002). |
+| **pnpm** | **23 MB** | **Giữ.** Đây chính là cơ chế cài/gỡ plugin (`installBundle`/`removeBundle`). Cắt nó là mất hệ plugin — yêu cầu số một của migration và là nội dung điều kiện dừng #4. Tự viết lại resolver+installer cũng trái luật "prefer maintained dependencies". |
+
+Cắt Python đưa primary runtime từ 401 MB xuống 144 MB; việc còn lại là cơ chế tải theo nhu cầu của ADR-0008.
+
+### `dsh plugin` trên cây production — cài **và chạy** đã đo được
 
 Đo qua shell Tauri thật với `installBundle`:
 
 | Lời gọi | Kết quả |
 |---|---|
 | `@deepseek-ai/dsh-headless` (dist-tag `latest` = `0.0.1-rc.1`) | `application: "failed"` — bộ chặn phiên bản từ chối: *"is incompatible with dsh 0.2.1-rc.2 … grant the exact-version exemption … with `dsh plugin allow-version`"*. Đúng thiết kế, thông điệp có hành động. |
-| `@deepseek-ai/dsh-headless@0.2.1-rc.2` | `changed: true`, `stage: "enable"`, `enabled: true`, `application: "restart-required"`; pnpm đi kèm tải 6 gói, thêm 8 package; `project/package.json` ghi dependency và thêm bundle vào `dsh.profile.bundles` |
+| `@deepseek-ai/dsh-headless@0.2.1-rc.2` | `changed: true`, `stage: "enable"`, `application: "restart-required"`; pnpm đi kèm tải 6 gói |
+| `file:…/masiss-dsh-load-probe-0.2.1-rc.2.tgz` (bundle fixture của fork) | pnpm cài từ tarball cục bộ; khởi động lại thì plugin **chạy** |
 
-**Nhưng lần khởi động sau đó thì app hỏng** — và đây là phát hiện, không phải lỗi của làn đóng gói:
+Bằng chứng "chạy" của fixture `apps/desktop-tauri/scripts/load-probe/`:
 
-```
-error: unknown option '--no-open'
-CordisError: cannot create effect on inactive context
-  at installDesktopUpdateTaskControl (.../dsh-desktop-host/lib/tauri.js:462)
-```
+- stderr của Host có `DSH_LOAD_PROBE_ACTIVE` (do chính `apply()` của plugin in ra);
+- `pluginManager/listPlugins` trả `{"entryId":"include:load-probe","moduleName":"@masiss/dsh-load-probe","enabled":true,"fiberPhase":"active","patchId":"load-probe"}`.
 
-Profile khi đó liệt kê **hai bundle ứng dụng** (`dsh-web-app` + `dsh-headless`); `dsh-headless` là một app bundle thay thế bề mặt CLI, nên `--no-open` của web app không còn tồn tại và cây plugin không mount được. Khôi phục `project/` về trạng thái trước thì app boot lại bình thường (đã kiểm).
+**Vì sao phải là feature bundle:** cài thêm một *app bundle* (`dsh-headless`) làm profile có hai app bundle, lần khởi động sau hỏng (`error: unknown option '--no-open'` → `cannot create effect on inactive context`) vì bundle app thay thế bề mặt CLI của app kia. Bundle **insert** một row thì ghép được vào app đang chạy. Đây là luật của sản phẩm, giống nhau ở cả hai shell.
 
-Hệ quả: **mọi bundle cài được đều là bundle ứng dụng** (`dsh-base`, `dsh-acp-app`, `dsh-headless`, `dsh-sdk-app`, `dsh-sdk-minimal`, `dsh-web-app`); `installBundle` từ chối plugin thường (`@deepseek-ai/dsh-tool-lsp` → `not-a-bundle`). Nên "cài một plugin thật rồi thấy nó chạy" chưa đo được trên bề mặt này: một feature-bundle bên thứ ba mới là phép thử đúng, và nó chưa có để cài.
-
-Ghi kèm một lỗ hổng cho P4: shell Tauri **chưa có đường tạo/khôi phục profile**. Electron làm việc đó ở `DesktopProjectManager.applyRelease` (tạo profile, `migrateProfileSettings`, `removeLinkProjections`) và `disableAllPlugins` khi khởi động hỏng; làn Hiện tại chỉ dựng profile lúc đóng gói.
-
-### B24 — Không có làn đóng gói Linux: `prepare-dsh` bất khả thi trên Linux
-
-Điều kiện M1 ("chạy `prepare-dsh`, đo cây production thật") **không thực hiện được** trên Linux, vì hai lý do độc lập:
-
-1. `apps/desktop/scripts/desktop-build-paths.mjs:7` — `SUPPORTED_TARGETS = { 'mac-arm64', 'mac-x64', 'win-x64' }`. `resolveDesktopBuildTarget()` và `resolveDesktopTargetBuildPaths()` **ném lỗi cho mọi target Linux**; `upload-target.ts` cũng vậy. Toàn bộ làn đóng gói của `apps/desktop` chỉ có macOS và Windows.
-2. `prepare-dsh.ts:46` chạy pnpm bằng **binary Electron** (`BUILD_PATHS.electron`), và `package-target.ts` tải Electron qua `@electron/get`.
-
-**Nhưng phần dùng lại được đã có sẵn và trung lập nền tảng:**
-
-| Thành phần | Hỗ trợ Linux |
-|---|---|
-| `scripts/primary-runtime/prepare.ts` | **có** — `lock.json` đã khoá `linux-x64` và `linux-arm64` (Node archive + bánh xe Python) |
-| `scripts/release/pack.ts` (`release:pack --family …`) | **có** — không có nhánh theo nền tảng |
-| `prepare-package-set.ts` (`prepareDesktopPackageSet`) | logic trung lập; chỉ `main()` gọi `resolveDesktopTargetBuildPaths()` nên CLI mới hỏng |
-| `src/core-package-set.ts`, `src/runtime-tree.ts`, `src/project-manager.ts`, `prepare-runtime-patches.ts` | trung lập (chưa thấy nhánh nền tảng) |
-| `prepare-dsh.ts`, `prepare-runtime.ts`, `package-target.ts` | **không** — gắn Electron và/hoặc mac/win |
-
-**Hệ quả cho M1:** cần một làn đóng gói Linux thuộc sở hữu fork (ví dụ `apps/desktop-tauri/scripts/`), ghép các mảnh trung lập trên với một bản `prepare-dsh` chạy pnpm bằng **Node thật** thay vì Electron, và chốt ba biến `DSH_DESKTOP_PRIMARY_RUNTIME` / `DSH_DESKTOP_PNPM_ENTRY` / `DSH_DESKTOP_NODE_BIN` mà `main.rs` đã đọc (B22).
-
-Không sửa `apps/desktop` cho việc này: thêm target Linux vào làn Electron là thay đổi giao diện đóng gói của upstream, trái tinh thần "không sửa thứ thuộc upstream".
-
-### Plugin manager qua shell Tauri thật (đo bằng `plugin-probe.sh`)
-
-| Phép đo | Kết quả |
-|---|---|
-| `pluginManager/listPlugins` | `ok=true`, các row `fiberPhase: "active"` — plugin đang chạy |
-| `pluginManager/listBundles` | `ok=true`, `@deepseek-ai/dsh-base` v0.2.1-rc.2 … |
-| `inspect` spec chưa cài, **có** bộ ba argv | `ERR_PNPM_FETCH_404 GET https://registry.npmmirror.com/…` — pnpm đi kèm chạy thật |
-| `inspect` spec chưa cài, **không** có bộ ba | `problem: "unknown"`, `reason: "PROBE_PNPM_SHIM_REFUSED"` — rơi về `pnpm` trên PATH |
-
-### Session trên đĩa (đo bằng `session-read-probe.sh`)
-
-Đây là bất biến số 1 của kế hoạch: format session log và reader của nó.
-
-| Phép đo | Kết quả |
-|---|---|
-| File trên đĩa | 7 (`session.jsonl.zstd` hiện tại: 2, `session.v4.jsonl.zstd`: 5) |
-| `session/list` trên Host Tauri | `ok=true`, **7/7 item** |
-| `formatStatus` | `{"current": 5, "migration-required": 2}` |
-
-Host đọc được cả hai thế hệ và báo thế hệ cũ là `migration-required` thay vì đọc nhầm — đúng chính sách released-session-format.
-
-### PTY (đo bằng `pty-probe.sh` và `terminal-page-probe.sh`)
-
-| Phép đo | Kết quả |
-|---|---|
-| `terminal/list` | `ok=true, []` — controller có mặt trong profile desktop |
-| `terminal/environment` | `cwd=/home/masis/deepseek-harness`, `maxCols=500`, `maxRows=200`, `scrollback=1000` |
-| `terminal/create` | `{"shell":{"path":"/bin/bash","args":["-i"]},"state":"running"}` |
-| Con của Host | `/bin/bash --rcfile /tmp/dsh-shell-XXXX/bashrc -i` |
-| Gõ trong terminal của app | `PTY_OK`, `/dev/pts/2`, `ROWS=50 COLS=76` — tức resize đúng theo cỡ pane |
-| Tín hiệu | `sleep 30` → `Ctrl+C` → `^C` + prompt trở lại → `echo AFTER_SIGNAL` chạy |
+**Điều kiện dừng #4 của `AGENTS.md` §7 đã qua hẳn:** plugin cài lúc chạy được nạp và ở trạng thái `active`.
 
 ### Ba đường đóng (đo bằng `close-paths-probe.sh`)
 
@@ -423,6 +375,17 @@ Trên Linux, tauri dùng libappindicator; không có StatusNotifier host thì `b
 
 Client gọi `shortcuts.get` **một lần cho mỗi command đăng ký và không await** (`syncDefinitions`). Đo được `peak_in_flight=33` lời gọi cầu cùng lúc; Chromium (và WebKitGTK) chỉ cho ~6 kết nối mỗi host, nên 5 request chết với `ERR_INSUFFICIENT_RESOURCES` → `console_errors=5`, và phía client mỗi lần lỗi rơi vào `failRead()` (shortcut bị đánh dấu `unreadable`). Sửa bằng cách **nối tiếp** trong shim (`let queue = Promise.resolve()`), giữ nguyên thứ tự nên revision cũng nhất quán hơn. Sau khi sửa: `peak_in_flight=1`, `failed=0`, `console_errors=0`.
 
+### B24 — Làn đóng gói Electron không phục vụ Linux
+
+`prepare-dsh` không chạy được trên Linux vì hai lý do độc lập, và chúng được xử lý khác nhau:
+
+1. **`desktop-build-paths.mjs` chặn Linux — đã ăn (ngoại lệ L2 duy nhất vào `apps/desktop/`).**
+   `SUPPORTED_TARGETS` thêm `linux-x64`/`linux-arm64`, `desktopTargetPlatform` ánh xạ `platform: 'linux'`, `desktopTargetBuildPaths` giữ nguyên. Sáu dòng, chỉ thêm, không đổi hành vi mac/win.
+   Nhờ đó làn Linux dùng chung `resolveDesktopTargetBuildPaths()` và ghi vào `apps/desktop/.desktop-build/targets/<target>/` — cùng layout với làn Electron, hết cảnh hai bên tự đặt đường dẫn.
+   `package-target.ts` vẫn giữ bộ target riêng (mac/win) và từ chối Linux bằng thông điệp rõ: target set đặt tên **payload**, carrier nào lấp cũng được.
+   *Đây là chỗ duy nhất trong toàn bộ migration sửa file Electron của upstream; `AGENTS.md` §8 cấm điều đó trừ khi có yêu cầu riêng, và yêu cầu đó là của người dùng ("ăn luôn desktop-build-paths"). Nếu upstream đổi file này, conflict nằm ở đúng dòng `SUPPORTED_TARGETS`.*
+2. **`prepare-dsh.ts` chạy pnpm bằng binary Electron — không ăn.** Đây là script của carrier Electron (ADR-0001 giữ Electron cho mac/win); kéo Node vào đó là sửa đường phát hành của upstream mà chỉ fork dùng. Phần dùng lại được đã dùng hết: primary-runtime builder, `release:pack`, package set, runtime project metadata, runtime patch policy, profile init, và build paths.
+
 ### B22 — Shell Tauri truyền thiếu argv ⇒ thao tác gói rơi về `pnpm` trên PATH
 
 `DesktopHostProcess` của Electron truyền 5 tham số vị trí:
@@ -438,7 +401,7 @@ argv[5] pnpm.mjs     argv[6] nodeBin
 
 Đã sửa: `host_command()` đẩy đủ 5 slot, bộ ba package-manager là all-or-nothing (thiếu một cái là lỗi to, không suy diễn). Kiểm chứng bằng shim `pnpm` từ chối trong `$PATH` — xem bảng M1.
 
-Vẫn cần cho M1: *core package set* (`DESKTOP_PACKAGE_SET_FILE`) để pnpm không kéo gói core từ registry khi cài plugin.
+Kiểm chứng đầy đủ ở M1 (xem bảng làn đóng gói): cài từ registry, cài từ tarball cục bộ, và plugin **chạy** (`fiberPhase: active`).
 
 ### B21 — Typecheck fail vẫn emit rác vào `src/`
 
