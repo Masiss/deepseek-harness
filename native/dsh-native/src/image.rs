@@ -408,75 +408,72 @@ fn decode_png(data: &[u8]) -> Result<DynamicImage> {
     let samples = decoder
         .decode()
         .map_err(|error| Error::from_reason(format!("unsupported or malformed image data: {error:?}")))?;
+    let mismatch = || Error::from_reason("image pixels do not match their dimensions");
     match samples {
-        DecodingResult::U8(bytes) => match colorspace {
-            ColorSpace::RGB => Ok(DynamicImage::ImageRgb8(
+        DecodingResult::U8(bytes) => Ok(match colorspace {
+            ColorSpace::RGB => DynamicImage::ImageRgb8(
                 image::ImageBuffer::<image::Rgb<u8>, Vec<u8>>::from_raw(width, height, bytes)
                     .ok_or_else(mismatch)?,
-            )),
-            ColorSpace::RGBA => Ok(DynamicImage::ImageRgba8(
+            ),
+            ColorSpace::RGBA => DynamicImage::ImageRgba8(
                 image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(width, height, bytes)
                     .ok_or_else(mismatch)?,
-            )),
-            ColorSpace::Luma => Ok(DynamicImage::ImageLuma8(
+            ),
+            ColorSpace::Luma => DynamicImage::ImageLuma8(
                 image::ImageBuffer::<image::Luma<u8>, Vec<u8>>::from_raw(width, height, bytes)
                     .ok_or_else(mismatch)?,
-            )),
-            _ => Ok(DynamicImage::ImageLumaA8(
+            ),
+            _ => DynamicImage::ImageLumaA8(
                 image::ImageBuffer::<image::LumaA<u8>, Vec<u8>>::from_raw(width, height, bytes)
                     .ok_or_else(mismatch)?,
-            )),
-        },
-        DecodingResult::U16(bytes) => match colorspace {
-            ColorSpace::RGB => Ok(DynamicImage::ImageRgb16(
+            ),
+        }),
+        DecodingResult::U16(bytes) => Ok(match colorspace {
+            ColorSpace::RGB => DynamicImage::ImageRgb16(
                 image::ImageBuffer::<image::Rgb<u16>, Vec<u16>>::from_raw(width, height, bytes)
                     .ok_or_else(mismatch)?,
-            )),
-            ColorSpace::RGBA => Ok(DynamicImage::ImageRgba16(
+            ),
+            ColorSpace::RGBA => DynamicImage::ImageRgba16(
                 image::ImageBuffer::<image::Rgba<u16>, Vec<u16>>::from_raw(width, height, bytes)
                     .ok_or_else(mismatch)?,
-            )),
-            ColorSpace::Luma => Ok(DynamicImage::ImageLuma16(
+            ),
+            ColorSpace::Luma => DynamicImage::ImageLuma16(
                 image::ImageBuffer::<image::Luma<u16>, Vec<u16>>::from_raw(width, height, bytes)
                     .ok_or_else(mismatch)?,
-            )),
-            _ => Ok(DynamicImage::ImageLumaA16(
+            ),
+            _ => DynamicImage::ImageLumaA16(
                 image::ImageBuffer::<image::LumaA<u16>, Vec<u16>>::from_raw(width, height, bytes)
                     .ok_or_else(mismatch)?,
-            )),
-        },
+            ),
+        }),
         DecodingResult::F32(bytes) => {
             let narrow: Vec<u8> = bytes
                 .iter()
                 .map(|value| (value.clamp(0.0, 1.0) * 255.0).round() as u8)
                 .collect();
-            match colorspace {
-                ColorSpace::RGB => Ok(DynamicImage::ImageRgb8(
+            Ok(match colorspace {
+                ColorSpace::RGB => DynamicImage::ImageRgb8(
                     image::ImageBuffer::<image::Rgb<u8>, Vec<u8>>::from_raw(width, height, narrow)
                         .ok_or_else(mismatch)?,
-                )),
-                ColorSpace::RGBA => Ok(DynamicImage::ImageRgba8(
+                ),
+                ColorSpace::RGBA => DynamicImage::ImageRgba8(
                     image::ImageBuffer::<image::Rgba<u8>, Vec<u8>>::from_raw(width, height, narrow)
                         .ok_or_else(mismatch)?,
-                )),
-                ColorSpace::Luma => Ok(DynamicImage::ImageLuma8(
+                ),
+                ColorSpace::Luma => DynamicImage::ImageLuma8(
                     image::ImageBuffer::<image::Luma<u8>, Vec<u8>>::from_raw(width, height, narrow)
                         .ok_or_else(mismatch)?,
-                )),
-                _ => Ok(DynamicImage::ImageLumaA8(
+                ),
+                _ => DynamicImage::ImageLumaA8(
                     image::ImageBuffer::<image::LumaA<u8>, Vec<u8>>::from_raw(width, height, narrow)
                         .ok_or_else(mismatch)?,
-                )),
-            }
+                ),
+            })
         }
         _ => Err(Error::from_reason("unsupported or malformed image data")),
     }
 }
 
-/// The error for pixels that do not match their dimensions.
-fn mismatch() -> Error {
-    Error::from_reason("image pixels do not match their dimensions")
-}
 
 /// Scale a raster with the SIMD resizer libvips uses behind sharp.
 /// @param source - The raster to scale.
