@@ -74,6 +74,24 @@ Số đo mới: shell release **10,3 MB** (tăng 1,5 MB cho tray + dialog + wind
 | Lời gọi cầu đồng thời (trước sửa) | `peak_in_flight=33`, `failed=5`, `console_errors=5` |
 | Lời gọi cầu đồng thời (sau sửa) | `peak_in_flight=1`, `failed=0`, `console_errors=0` |
 
+### Vòng đời profile trong Host (D24) — đã đo
+
+`apps/desktop-host/src/profile-lifecycle.ts`, gọi ở đầu `tauri.ts` trước `loadProfileDirectory`:
+
+1. `initProfile(dir, PROFILE_TEMPLATES.web.bundles)` — tạo profile nếu thiếu, giữ nguyên nếu có.
+2. `removeLinkProjections(dir)` — dọn link do dev để lại.
+3. Đọc manifest, tìm các **application bundle** (`dsh-web-app`, `dsh-headless`, `dsh-acp-app`, `dsh-sdk-app`, `dsh-sdk-minimal`). Desktop Host chỉ chạy được đúng `dsh-web-app`; nếu có app bundle khác thì bỏ nó, nếu thiếu web thì thêm lại. **Feature bundle không bị bỏ.**
+
+Vì sao không phải "thử boot rồi cứu": `loadProfileDirectory` vốn đã bỏ qua bundle hỏng (`skippedBundles`) nên lỗi bundle lẻ không làm chết app; thứ làm chết app là **hai app bundle** cùng tồn tại, và điều đó kiểm được **trước khi boot** nên không cần một vòng crash–restart.
+
+| Phép đo | Kết quả |
+|---|---|
+| Unit (`apps/desktop-host/tests/profile-lifecycle.spec.ts`) | 6/6 — tạo mới, idempotent (giữ nguyên byte), bỏ app bundle thứ hai, khôi phục web, profile không có app, và `dsh-base` không bị coi là app |
+| End-to-end trên cây production | Cài `dsh-headless@0.2.1-rc.2` (profile thành 2 app bundle) → khởi động lại: `ready=OK`, bundle sửa còn `[base, web-app]`, stderr `dsh: dropped incompatible application bundle(s) …: @deepseek-ai/dsh-headless`, không còn `unknown option '--no-open'` |
+| Toàn bộ `apps/desktop-host/tests` | 51/51 (đặt `TMPDIR` ngoài tmpfs) |
+
+Còn hở: hiện thông báo nằm ở stderr; chưa đưa lên UI (P4). Và chưa có khoá profile như `DesktopProjectManager.withLock` của Electron — dựa vào single-instance của shell.
+
 ### Làn đóng gói Linux (M1) — đã dựng và đo
 
 Bốn script thuộc fork, chỉ chạm `apps/desktop` một bản vá đường dẫn:
@@ -209,6 +227,7 @@ DSH_DESKTOP_PROJECT_DIR=$HOME/.dsh/profiles/web \
 | D20 | Directory picker **không cần Tauri dialog**: `directory-picker-auto` trong web bundle đã tự chọn chooser native của Host |
 | D21 | Product analytics đã cổng sẵn ở client bằng `'dshDesktop' in globalThis`; cầu của ta thoả cổng, không cần thêm gì |
 | D23 | Shim của cầu **nối tiếp** mọi lời gọi (một request một lúc): client đọc shortcut một lần cho mỗi command đăng ký, không await |
+| D24 | Vòng đời profile nằm trong **Host** (TS, dùng lại `@deepseek-ai/dsh-app-boot`), không viết lại bằng Rust: tạo profile + bỏ link projection + giữ đúng **một app bundle** (web). Feature bundle không bị đụng |
 | D22 | Welcome/onboarding v1 = **không tới được**: cửa sổ welcome là tài liệu native riêng cần copy của `locale.ts` (TS) và luồng đăng nhập Platform. Không chép choreography `hasApiKey` của `welcome-backend.ts` sang Host (sẽ là nhà thứ hai) |
 
 ## Số đo thật
@@ -459,6 +478,7 @@ Item đăng ký đủ (`Id`, `Status`, `IconName`, `Menu` trỏ tới `/org/ayat
 - Rust 1.98.1; webkit2gtk 2.54.1 + gtk3 + libsoup3 + appindicator **đầy đủ**, Tauri build được.
 - `CI=1` bỏ qua Lefthook postinstall.
 - Host `desktop` dùng được profile `~/.dsh/profiles/web` cho thí nghiệm: bỏ `skill-office`, đặt `runtimeDir=$HOME/.dsh/profiles`, `projectDir=$HOME/.dsh/profiles/web`.
+- `/tmp` là tmpfs 7,7 GB và chỉ còn ~1,6 GB: copy Node (120 MB) hay wheel vào đó chết với `Unknown system error -122` (EDQUOT). Đặt `TMPDIR` sang ổ lớn (`apps/desktop/.desktop-build/tmp` hoặc `~/.cache/…`) khi dựng primary runtime và khi chạy `apps/desktop-host/tests` (spec `office.spec.ts` copy Node).
 
 ## Lịch sử cập nhật
 

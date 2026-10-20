@@ -15,6 +15,7 @@ import { installDesktopBridge } from './desktop-bridge.ts'
 import { installDesktopUpdateTaskControl } from './update-tasks.ts'
 import { installDesktopQuitInspection } from './quit-inspection.ts'
 import { installPlatformSessionPublisher } from './platform-session.ts'
+import { prepareDesktopProfile } from './profile-lifecycle.ts'
 
 /** Control channel chosen once: stdio when the Tauri shell spawned this executable. */
 const transport = createHostTransport()
@@ -23,6 +24,13 @@ async function main(): Promise<void> {
   const runtimeDir = process.argv[2] as string
   const projectDir = process.argv[3] as string
   const installAnchor = join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')
+  const preparation = prepareDesktopProfile(projectDir)
+  if (preparation.droppedBundles.length > 0) {
+    console.error(`dsh: dropped incompatible application bundle(s) from the Desktop profile: ${preparation.droppedBundles.join(', ')}`)
+  }
+  if (preparation.restoredBundle) {
+    console.error('dsh: restored the Web application bundle in the Desktop profile')
+  }
   const profile = loadProfileDirectory('dsh', projectDir, installAnchor)
   reportSkippedBundles('dsh', profile)
   const application = runProfile({
