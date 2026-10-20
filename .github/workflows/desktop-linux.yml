@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   desktop:
-    name: Build, check, and size-gate the Linux desktop payload
+    name: Build, check, and compile the Linux desktop shell
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -22,14 +22,8 @@ jobs:
         with:
           bun-version: latest
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11
-
       - name: Install dependencies
-        run: |
-          bun install --frozen-lockfile
-          pnpm install --frozen-lockfile
+        run: bun install --frozen-lockfile
 
       - name: Install the desktop build dependencies
         run: |
@@ -40,8 +34,7 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
-            desktop-file-utils \
-            rpm
+            desktop-file-utils
 
       - name: Build the workspace
         run: bun run build
@@ -58,11 +51,11 @@ jobs:
       - name: Keyless recorded-session replay
         run: bun run test:snapshot
 
-      - name: Pack the Linux payload
-        run: apps/desktop-tauri/scripts/pack-linux.sh linux-x64
+      - name: Build the desktop shell
+        run: cargo build --release --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml
 
-      - name: Pack the AppImage
-        run: apps/desktop-tauri/scripts/pack-appimage.sh linux-x64
+      - name: Test the native provider crate
+        run: cargo test --manifest-path native/dsh-native/Cargo.toml --lib
 
-      - name: Size gate
-        run: apps/desktop-tauri/scripts/size-gate.sh linux-x64
+      - name: Desktop Host tests
+        run: bunx vitest run apps/desktop-host --pool=forks
