@@ -11,7 +11,9 @@
     "lib/cli.js",
     "lib/tauri.js",
     "native/node-pty.cjs",
-    "native/pty-loader.mjs",
+    "native/native-loader.mjs",
+    "native/flock.cjs",
+    "native/koffi.cjs",
     "native/dsh-native.node"
   ],
   "dependencies": {

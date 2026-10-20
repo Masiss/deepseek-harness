@@ -427,7 +427,7 @@ DSH_DESKTOP_PROJECT_DIR=$HOME/.dsh/profiles/web \
 | D27 | Linux phát hành dạng **AppImage**: ảnh read-only nên profile seed vào `$DSH_HOME/desktop-project` ở lần chạy đầu; `AppRun` giữ hợp đồng env của tree (thêm `DSH_CLIENT_VERSION` vì telemetry đọc nó) |
 | D26 | Update: manifest tự mô tả theo `platform-arch`, tải + verify sha256/size, cài bằng **rename nguyên tử** lên `$APPIMAGE`; Q3 = **AppImage self-update**, gói `.deb` để trình quản lý gói (`unsupported`) |
 | D22 | Welcome/onboarding v1 = **không tới được**: cửa sổ welcome là tài liệu native riêng cần copy của `locale.ts` (TS) và luồng đăng nhập Platform. Không chép choreography `hasApiKey` của `welcome-backend.ts` sang Host (sẽ là nhà thứ hai) |
-| D29 | Provider native của Desktop nằm trong **một crate napi-rs duy nhất** `native/dsh-native` (D4), bắt đầu bằng PTY. Thay provider **không sửa `packages/`**: `apps/desktop-host/native/pty-loader.mjs` đăng ký resolve hook trỏ `node-pty` sang wrapper `node-pty.cjs`; launcher Tauri nạp hook bằng `--import` trước khi profile boot. Thiếu `.node` ⇒ hook no-op ⇒ lane Electron giữ node-pty |
+| D29 | Provider native của Desktop nằm trong **một crate napi-rs duy nhất** `native/dsh-native` (D4): PTY (`portable-pty`), flock của session lease, và binding `execve`/`fcntl` của bootstrap. Thay provider **không sửa `packages/`**: `apps/desktop-host/native/native-loader.mjs` đăng ký resolve hook trỏ `node-pty` → `node-pty.cjs`, `@deepseek-ai/node-addon-system/flock` → `flock.cjs`, `koffi` → `koffi.cjs`; launcher Tauri nạp hook bằng `--import` trước khi profile boot. Thiếu `.node` ⇒ hook no-op ⇒ payload giữ addon gốc ⇒ lane Electron không đổi |
 
 ## Số đo thật
 
@@ -660,6 +660,18 @@ Thêm `"native/dsh-native.node"` vào `files` của `apps/desktop-host` không l
 
 `handle.done` resolve khi tiến trình con thoát, còn chunk cuối cùng của pty vẫn còn trong buffer của stream. Probe đọc `output` ngay sau `done` thì ra chuỗi rỗng. Phải chờ thêm `output` phát `'end'`.
 
+### B28 — `Vec<String>` của napi không nhận phần tử `null`
+
+`linux-execve.ts` truyền mảng C-string đã có null terminator (`[...argv, null]`). Binding `Vec<String>` của napi từ chối `null` (`ArrayExpected` / `Failed to convert napi value Null`). Shim phải lọc null trước khi gọi binding.
+
+### B29 — `execve` đóng fd có `FD_CLOEXEC`, và điều đó là bình thường
+
+fd 0/1/2 của tiến trình Node trong shell của agent là **socket** và mang `FD_CLOEXEC`; sau `execve` chúng biến mất nên chương trình mới không in được gì (exit 1, không có output) dù exec thành công. Đó chính là lý do `linux-execve.ts` xóa cờ `FD_CLOEXEC` trước khi exec. Probe phải làm y vậy, nếu không sẽ tưởng binding hỏng.
+
+### B30 — `koffi` **có** dùng trên Linux, không chỉ Windows
+
+`packages/subprocess/subprocess-local/src/linux-execve.ts` (bootstrap một lần) bind `execve` + `fcntl` của libc qua koffi. Nếu prune koffi khỏi payload Linux mà chưa thay binding, bootstrap chết và terminal không bao giờ ra `READY`. Đã thay bằng crate Rust + shim `koffi.cjs` (chỉ nhận đúng hai signature, signature lạ thì báo lỗi tường minh).
+
 ### B15 — Không chụp được cửa sổ Tauri bằng `import` trên phiên Wayland
 
 `import -window root` fail (`missing an image filename`); `grim` chụp được toàn màn hình nhưng cửa sổ Tauri không nằm trong khung hình chụp. Cách kiểm chứng đáng tin là `ss -tnp`: thấy `WebKitNetworkProcess` mở kết nối ESTAB tới cổng Host.
@@ -677,6 +689,7 @@ Thêm `"native/dsh-native.node"` vào `files` của `apps/desktop-host` không l
 | M7 | Đo lại cold start/RSS với Node 24.21 đóng gói | P1 | **xong** — 1,27–1,31 s; 309–318 MiB (cây production thật) |
 | M8 | Đo RSS + cold start của shell Tauri có webview | P0 | chưa |
 | M9 | Đo parity provider Rust cho PTY | P5-posix | **xong** — `native-pty-probe.sh`: `provider=rust`, `size="33 111"`, `write_echo=2`, `signal="SIGTERM"`; 546 test (`terminal` + `tool-bash-persistent` + `subprocess-local`) xanh khi chạy qua loader |
+| M10 | Đo parity provider Rust cho flock + execve | P5-posix | **xong** — `native-flock-probe.sh`: `flock_provider=rust`, `koffi_provider=rust`, `contention=EAGAIN/11/flock`, `fcntl=ok`, `execve-ok`; `lease.two-process.e2e.ts` xanh; payload Linux không còn `koffi`/`node-pty`/`system.node`; AppImage 143.759.864 B (137,1 MiB) |
 
 ## Câu hỏi mở
 
@@ -705,3 +718,4 @@ Thêm `"native/dsh-native.node"` vào `files` của `apps/desktop-host` không l
 | 2026-10-19 | Tạo bộ tài liệu; chốt D1–D10; ghi B1–B7 |
 | 2026-10-19 | P0: bác bỏ D2 (Bun) bằng chứng `B8`; sửa `B4`; thêm `B9`–`B12`; đo cold start/RSS Host Node; dựng `apps/desktop-tauri` + Tauri 2.12.4 build được |
 | 2026-10-20 | P5-posix (1): crate napi-rs `native/dsh-native` thay `node-pty` bằng `portable-pty`; loader resolve hook `node-pty`; thêm D29, B25–B27 |
+| 2026-10-20 | P5-posix (2): crate `native/dsh-native` thêm flock của session lease và binding `execve`/`fcntl` (thay koffi trên Linux); payload Linux không còn `koffi`/`node-pty`/`system.node`; thêm B28–B30, M10 |

@@ -1,10 +1,14 @@
-//! Native PTY provider for the Desktop runtime.
+//! Native providers for the Desktop runtime.
 //!
 //! The Harness terminal service calls a small slice of `node-pty`:
 //! `spawn`, `pid`, `write`, `resize`, `pause`, `resume`, `kill`, `onData`, and
 //! `onExit`. This crate implements exactly that slice on top of `portable-pty`
 //! so the Desktop payload carries one Rust native module instead of the
 //! node-pty C++ addon, and so `packages/` keeps its existing provider.
+//!
+//! The session lease takes an exclusive, nonblocking POSIX flock on a
+//! descriptor the caller owns. [`try_lock_exclusive`] performs that syscall
+//! and reports the errno the kernel returned.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -50,6 +54,112 @@ pub struct Pty {
 
 fn reason(error: impl std::fmt::Display) -> Error {
     Error::from_reason(error.to_string())
+}
+
+/// Attempt an exclusive, nonblocking POSIX flock on the caller's descriptor.
+///
+/// The descriptor stays the caller's: the syscall neither opens, duplicates,
+/// nor closes it. Closing the locked descriptor releases the lock once every
+/// descriptor for its open file description is closed.
+/// @param fd - Open file descriptor to lock.
+/// @returns `0` when the lock was taken, otherwise the positive errno the
+///   kernel reported. `EAGAIN` means another descriptor holds the lock.
+#[napi]
+pub fn try_lock_exclusive(fd: i32) -> Result<i32> {
+    // The lock lives with the descriptor: it is released when every
+    // descriptor for its open file description is closed, so the syscall runs
+    // without the guard that would unlock on drop.
+    let locked = unsafe { nix::libc::flock(fd, nix::libc::LOCK_EX | nix::libc::LOCK_NB) };
+    if locked == 0 {
+        return Ok(0);
+    }
+    Ok(std::io::Error::last_os_error()
+        .raw_os_error()
+        .unwrap_or(libc_errno_fallback()))
+}
+
+/// Errno the kernel reported when the error carries none.
+fn libc_errno_fallback() -> i32 {
+    nix::libc::EIO
+}
+
+// Errno of the last failed syscall on this thread.
+thread_local! {
+    static LAST_ERRNO: std::cell::Cell<i32> = const { std::cell::Cell::new(0) };
+}
+
+/// Record the errno the kernel reported and return it.
+fn record_errno() -> i32 {
+    let errno = std::io::Error::last_os_error()
+        .raw_os_error()
+        .unwrap_or(libc_errno_fallback());
+    LAST_ERRNO.with(|cell| cell.set(errno));
+    errno
+}
+
+/// Errno of the last failed syscall on this thread.
+/// @returns The positive errno, or `0` when no syscall failed yet.
+#[napi]
+pub fn last_errno() -> i32 {
+    LAST_ERRNO.with(|cell| cell.get())
+}
+
+/// Replace the process image with the given program.
+///
+/// The call replaces the process when the kernel accepts it, so the caller
+/// never returns. A failure leaves the process running and reports the errno
+/// through {@link last_errno}.
+/// @param file - Path of the program to execute.
+/// @param argv - Arguments, without the terminating null the caller passes.
+/// @param envp - Environment entries in `key=value` form.
+/// @returns `-1` when the kernel refused the exec.
+#[napi]
+pub fn execve(file: String, argv: Vec<String>, envp: Vec<String>) -> Result<i32> {
+    let path = std::ffi::CString::new(file).map_err(|_| Error::from_reason("execve: path contains a null byte"))?;
+    let arguments = c_string_array(argv)?;
+    let environment = c_string_array(envp)?;
+    let mut argument_pointers: Vec<*const std::ffi::c_char> =
+        arguments.iter().map(|value| value.as_ptr()).collect();
+    argument_pointers.push(std::ptr::null());
+    let mut environment_pointers: Vec<*const std::ffi::c_char> =
+        environment.iter().map(|value| value.as_ptr()).collect();
+    environment_pointers.push(std::ptr::null());
+    let replaced = unsafe {
+        nix::libc::execve(
+            path.as_ptr(),
+            argument_pointers.as_ptr(),
+            environment_pointers.as_ptr(),
+        )
+    };
+    if replaced == -1 {
+        record_errno();
+    }
+    Ok(replaced as i32)
+}
+
+/// Control a file descriptor's flags.
+/// @param fd - Descriptor to control.
+/// @param cmd - `fcntl` command, such as `F_GETFD` or `F_SETFD`.
+/// @param arg - Command argument.
+/// @returns The command's result, or `-1` when the kernel refused it.
+#[napi]
+pub fn fcntl(fd: i32, cmd: i32, arg: i32) -> Result<i32> {
+    let result = unsafe { nix::libc::fcntl(fd, cmd, arg) };
+    if result == -1 {
+        record_errno();
+    }
+    Ok(result as i32)
+}
+
+/// Null-terminated C strings for the argument and environment arrays.
+fn c_string_array(values: Vec<String>) -> Result<Vec<std::ffi::CString>> {
+    values
+        .into_iter()
+        .map(|value| {
+            std::ffi::CString::new(value)
+                .map_err(|_| Error::from_reason("execve: argument contains a null byte"))
+        })
+        .collect()
 }
 
 fn signal_from_name(name: Option<&str>) -> Signal {
@@ -102,7 +212,7 @@ pub fn spawn(
             command.env(name, value);
         }
     }
-    let mut child = pair.slave.spawn_command(command).map_err(reason)?;
+    let child = pair.slave.spawn_command(command).map_err(reason)?;
     // Closing the slave keeps the master's reads ending at child exit.
     drop(pair.slave);
     let pid = child.process_id().unwrap_or(0) as i32;

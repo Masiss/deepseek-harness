@@ -12,7 +12,7 @@ set -u
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 target=${1:-linux-x64}
 tree="$repo/apps/desktop/.desktop-build/targets/$target"
-loader="$tree/dsh/node_modules/@deepseek-ai/dsh-desktop-host/native/pty-loader.mjs"
+loader="$tree/dsh/node_modules/@deepseek-ai/dsh-desktop-host/native/native-loader.mjs"
 [ -f "$loader" ] || { echo "RESULT provider=missing"; exit 1; }
 
 script="$tree/dsh/probe/pty-probe.mjs"

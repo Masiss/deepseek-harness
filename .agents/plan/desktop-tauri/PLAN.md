@@ -512,10 +512,10 @@ Cài → chạy → update → gỡ, tất cả trên máy sạch.
 
 ### P5-posix (làm cùng Linux)
 
-- `flock` (C → `rustix`).
-- `landlock-run` (C → `landlock`).
-- `execve` (koffi → `nix`).
-- [x] PTY (node-pty → `portable-pty`) — crate `native/dsh-native`, wrapper `apps/desktop-host/native/node-pty.cjs`, loader `apps/desktop-host/native/pty-loader.mjs`.
+- [x] `flock` (C → `rustix`) — crate `native/dsh-native`, entry `apps/desktop-host/native/flock.cjs`.
+- [ ] `landlock-run` (C → `landlock`).
+- [x] `execve` (koffi → `nix`) — crate `native/dsh-native`, entry `apps/desktop-host/native/koffi.cjs`.
+- [x] PTY (node-pty → `portable-pty`) — crate `native/dsh-native`, wrapper `apps/desktop-host/native/node-pty.cjs`, loader `apps/desktop-host/native/native-loader.mjs`.
 - Directory picker (→ `rfd`).
 - Image (sharp/libvips → `image` + `fast_image_resize`).
 
@@ -528,8 +528,10 @@ Cài → chạy → update → gỡ, tất cả trên máy sạch.
 
 ### Acceptance Criteria (P5-posix)
 
-- [ ] Không còn `require('koffi')` cho Linux.
+- [x] Không còn `require('koffi')` cho Linux — payload Linux không còn koffi/node-pty/system.node; loader trỏ sang crate `native/dsh-native`.
 - [x] PTY parity: resize, signal, exit code — `native-pty-probe.sh` báo `size="33 111"`, `write_echo=2`, `signal="SIGTERM"`; bộ test `terminal` + `tool-bash-persistent` + `subprocess-local` (546 test) xanh khi chạy qua loader.
+- [x] Flock parity: `native-flock-probe.sh` báo `contention=EAGAIN/11/flock`; `lease.two-process.e2e.ts` xanh.
+- [x] Execve parity: `native-flock-probe.sh` báo `fcntl=ok` + `execve-ok`; 381 test `subprocess-local` xanh trên loader.
 - [ ] Landlock enforcement giữ nguyên test.
 - [ ] Image output khớp sharp trong sai số cho phép (hoặc test so sánh).
 - [x] Provider parity suite xanh — `packages/subprocess/subprocess-local` (381 test) xanh trên provider Rust.

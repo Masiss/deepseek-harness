@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-与 DeepSeek Harness 一同维护的原生源码和公开包。[`system/` workspace](system/README.zh.md) 负责 Landlock 启动器、POSIX flock 绑定、平台包和[发布流程](system/docs/release.md)。[`dsh-native/` crate](dsh-native/README.zh.md) 负责 Desktop 运行时随包分发的原生提供方，终端是第一个。
+与 DeepSeek Harness 一同维护的原生源码和公开包。[`system/` workspace](system/README.zh.md) 负责 Landlock 启动器、POSIX flock 绑定、平台包和[发布流程](system/docs/release.md)。[`dsh-native/` crate](dsh-native/README.zh.md) 负责 Desktop 运行时随包分发的原生提供方：终端、session lease 和进程 bootstrap。
 
 ## Workspace 与发布边界
 

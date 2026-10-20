@@ -47,6 +47,7 @@ import { desktopTargetPlatform, resolveDesktopTargetBuildPaths } from '../../des
 import { prepareDesktopPackageSet } from '../../desktop/scripts/prepare-package-set.ts'
 import { prepareRuntimePatches, verifyRuntimePatches } from '../../desktop/scripts/prepare-runtime-patches.ts'
 import { desktopRuntimeFileExclusion } from '../../desktop/scripts/runtime-file-policy.ts'
+import { linuxRuntimeFileExclusion, rustProviderPresent } from './linux-runtime-file-policy.ts'
 import { selectOfficeEngine } from '../../../scripts/libreoffice-packages.mjs'
 import { buildOfficeComponent, type BuiltOfficeComponent } from './office-component.ts'
 import { prunePythonPayload, verifyPythonPayload } from './prune-python-payload.ts'
@@ -76,7 +77,7 @@ set -e
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 runtime=$1
 exec "$here/../runtime/bin/node" \${DSH_DESKTOP_NODE_FLAGS---optimize-for-size} \
-  --import="$runtime/node_modules/@deepseek-ai/dsh-desktop-host/native/pty-loader.mjs" \
+  --import="$runtime/node_modules/@deepseek-ai/dsh-desktop-host/native/native-loader.mjs" \
   "$runtime/node_modules/@deepseek-ai/dsh-desktop-host/lib/tauri.js" "$@"
 `
 
@@ -210,11 +211,17 @@ async function main(): Promise<void> {
   }
   const officeEngine = selectOfficeEngine(office, target)
   const packageSet = readDesktopCorePackageSet(staging, release.version)
+  const rustProvider = rustProviderPresent(modules)
+  console.error(`linux runtime: Rust provider present=${String(rustProvider)}`)
   rmSync(paths.dsh, { recursive: true, force: true })
   cpSync(modules, join(paths.dsh, 'node_modules'), {
     recursive: true,
     dereference: true,
-    filter: source => desktopRuntimeFileExclusion(relative(modules, source), target, officeEngine) === undefined,
+    filter: (source) => {
+      const relativePath = relative(modules, source)
+      if (desktopRuntimeFileExclusion(relativePath, target, officeEngine) !== undefined) return false
+      return linuxRuntimeFileExclusion(relativePath, { platform: target.platform, rustProvider }) === undefined
+    },
   })
   writeFileSync(join(paths.dsh, 'package.json'), `${JSON.stringify({
     name: '@deepseek-ai/dsh-desktop-runtime',
