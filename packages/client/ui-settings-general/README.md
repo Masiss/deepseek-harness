@@ -43,6 +43,8 @@ Settings visibility and section selection live in the shell owner store. The she
 
 The current release version appears at the bottom of General Settings in Web and Desktop, using the build’s `DSH_CLIENT_VERSION` metadata and the active language. Partial builds without version metadata omit the row.
 
+On the Tauri Desktop carrier, an **Office document support** row reports the on-demand Python and Office payload: absent, downloading with a percentage, verifying, preparing, installed with its version, or failed with a class the locale turns into retry guidance. Installing downloads about 58 MB and the Host verifies the archive digest before extracting it; a finished install offers a restart when a turn kept the shell from relaunching on its own. The row does not render in browsers or on the Electron carrier, where Office ships in the bundle and no component API exists.
+
 The Coding Tools switch controls the shared `ui-settings.enabled` preference described by [ui-settings](../ui-settings/README.md#use-this-package). It is available in both Web and desktop, follows accepted changes immediately, and disables duplicate input while a write settles. A failed write displays localized retry guidance.
 
 The General section holds the built-in Coding Tools and Current version rows alongside rows registered into `settings.general.item` by feature packages. Each registrant owns its row copy and behavior. The Appearance row, for example, lives in ui-theme.

@@ -142,11 +142,33 @@ async function main(): Promise<void> {
   control.updates = createDesktopUpdates(() => control.updateTasks)
   control.desktopBridge = installDesktopBridge(ctx, {
     ...(control.updates === undefined ? {} : { updates: control.updates }),
-    components: officeComponent,
+    components: {
+      get presentation() { return officeComponent.presentation },
+      subscribe: listener => officeComponent.subscribe(listener),
+      install: () => officeComponent.install(),
+      restart: () => restartOffice(false),
+    },
   })
   installPlatformSessionPublisher(ctx, (session) => {
     void transport.send({ type: 'platform-session', session }).catch((error: unknown) => { console.error(error) })
   })
+  /**
+   * Ask the shell to relaunch.
+   *
+   * @param admit - Refuse while a turn runs; the automatic path uses it, the
+   * user-requested restart does not.
+   * @returns Resolves once the request settled.
+   */
+  const restartOffice = async (admit: boolean): Promise<void> => {
+    if (admit) {
+      const decide = control.updateTasks
+      if (decide !== undefined && await decide('lock')) {
+        await decide('unlock')
+        return
+      }
+    }
+    await transport.send({ type: 'restart' })
+  }
   const installedOffice = officeComponent.installed()
   if (installedOffice !== undefined) {
     await ctx.plugin(desktopOffice, {
@@ -158,20 +180,10 @@ async function main(): Promise<void> {
   } else {
     // A finished install becomes visible only after the Host composes the
     // plugin, so the shell is asked to relaunch — the same restart the plugin
-    // installer asks for. An active turn keeps running: the client restarts.
+    // installer asks for. An active turn keeps running; the client can ask.
     officeComponent.subscribe((state) => {
       if (!state.installed || state.phase !== 'ready' || state.active) return
-      const decide = control.updateTasks
-      if (decide === undefined) return
-      void (async () => {
-        try {
-          if (await decide('lock')) {
-            await decide('unlock')
-            return
-          }
-          await transport.send({ type: 'restart' })
-        } catch (error: unknown) { console.error(error) }
-      })()
+      void restartOffice(true).catch((error: unknown) => { console.error(error) })
     })
   }
   const url = ctx.connection.authenticatedUrl(`${ctx.webServer.protocol}//127.0.0.1:${String(ctx.webServer.port)}`)

@@ -186,6 +186,14 @@ Kiểm chứng thật:
 
 Còn mở: tên gói cho Fedora (RPM) và cài trên máy thật có GUI.
 
+### Card cài Office trong Settings (P6, đã làm)
+
+`packages/client/ui-settings-general` có thêm `DesktopOfficeSource` và `OfficeComponentRow` đăng ký vào `settings.general.item` (order 20, chỉ render khi carrier có `window.dshDesktop.components` — browser và Electron không thấy). Trạng thái: chưa cài → **Install**; downloading/verifying/installing → nút disabled kèm % hoặc nhãn bước; lỗi → câu theo nhóm (`network`, `integrity`, `python`, còn lại generic) + **Retry**; đã cài nhưng chưa `active` → **Restart to finish**; đã cài và active → mô tả kèm version, không nút. Copy nằm trong dictionary `settings` (en/zh).
+
+Host: `DesktopOfficeChannel.restart` + route `POST /__dsh-desktop/components-restart`, nối vào `restartOffice(false)` (người dùng chủ động, bỏ qua admission); đường tự động sau khi cài vẫn là `restartOffice(true)` (chỉ restart khi không có turn chạy). Shim có `components.status/install/restart/subscribe`.
+
+Test: `office-component.client.spec.tsx` (20 test, gồm từng loại lỗi, dispose giữa chừng, coalescing) + `desktop-bridge-components.spec.ts` (status/install/restart/503/SSE). Coverage `office-component-source.ts` 100%. Chưa quay GIF: phiên này cấm mở cửa sổ GUI trên máy người dùng.
+
 ### Office/Python theo nhu cầu (P6, đã đo)
 
 Bundle core **không còn** `runtime/primary-runtime/dependencies/python` lẫn `office-skills`. `prepare-linux-runtime.ts` prune + verify Python như cũ, rồi **chuyển** nó (cùng `packages/skill/skill-office/assets`) vào `components/office-<version>-<target>.tar.zst` và ghi `components/components.json` (id, version, file, bytes, sha256). `runtime.json` vẫn giữ bản ghi Python — installer chép nó vào runtime ghép.
@@ -211,6 +219,18 @@ status_restarted={"installed":true,"active":true,"phase":"ready"}
 ```
 
 Bẫy: project seed **không có `cordis.yml`** — Host tạo nó khi boot; mọi check đóng gói phải nhìn `project/package.json` (đã sửa ở `pack-appimage.sh`, `pack-deb.sh`, hai probe). `bin/desktop-host` là script sinh bởi `prepare-linux-runtime.ts`, nên đổi flag Node phải sửa ở đó rồi chạy lại.
+
+### Gói .rpm cho Fedora (P4b, đã đo)
+
+Host build là Arch, **không có** rpm/rpmbuild, nên `pack-rpm.sh` dựng bằng `rpmbuild` trong container `fedora:41` (mount thư mục build, chown trả lại uid host). Spec tắt `__os_install_post` (đừng strip Node trong payload), `AutoReqProv: no`, payload `w19.zstdio`. Layout và launcher dùng chung `stage-payload.sh` với `.deb`.
+
+| Số đo | Giá trị |
+|---|---|
+| gói | **119.926.560 byte** (114 MiB) |
+| cài đặt | 558 MB, **20.857 file** |
+| Requires | `gtk3`, `webkit2gtk4.1`; Recommends `libayatana-appindicator-gtk3` |
+
+`rpm-probe.sh` trên **Fedora 41 sạch**: `dnf install` OK, `rpm -V` OK, launcher đúng hợp đồng env + seed `$DSH_HOME`, Host boot (`RESULT host=OK`). Bẫy: probe phải export **cả `DSH_CLIENT_VERSION`**, không chỉ `DSH_DESKTOP_VERSION` — thiếu nó telemetry báo `$.serviceVersion missing` và Host dừng.
 
 ### A4 — RSS idle của Host (đã đo, đạt)
 
@@ -354,7 +374,7 @@ Menu Application: About, (dev) Reload Page + Toggle Developer Tools `F12`, Quit 
 | `apps/desktop-tauri/scripts/appimage-probe.sh` | AppImage headless isolated: hợp đồng `AppRun`, seed profile, Host boot từ ảnh read-only |
 | `apps/desktop-tauri/scripts/update-flow-probe.mjs` + `isolated-run.sh` | N → N+1 thật: feed HTTP, prompt qua stdio, thay `$APPIMAGE`, frame `restart` — trong sandbox bwrap |
 | `apps/desktop-tauri/scripts/isolated-run.sh` | Chạy bất kỳ lệnh nào không chạm phiên: PID/UTS/IPC ns, `/run` rỗng, no TTY, env sạch |
-| `apps/desktop-tauri/scripts/pack-deb.sh` + `deb-probe.sh` | Đóng gói `.deb` (ar+tar+zstd) và kiểm tra headless: launcher, seed, Host boot từ bản giải nén read-only |\n| `apps/desktop-tauri/scripts/office-component-probe.sh` | Cài Office theo nhu cầu từ feed loopback, kiểm import Python, restart để Office compose |\n| `apps/desktop-tauri/scripts/rss-probe.sh` | Đo RSS idle của Host headless (A4) |
+| `apps/desktop-tauri/scripts/pack-deb.sh` + `deb-probe.sh` | Đóng gói `.deb` (ar+tar+zstd) và kiểm tra headless: launcher, seed, Host boot từ bản giải nén read-only |\n| `apps/desktop-tauri/scripts/office-component-probe.sh` | Cài Office theo nhu cầu từ feed loopback, kiểm import Python, restart để Office compose |\n| `apps/desktop-tauri/scripts/rss-probe.sh` | Đo RSS idle của Host headless (A4) |\n| `apps/desktop-tauri/scripts/pack-rpm.sh` + `rpm-probe.sh` | Đóng gói `.rpm` bằng rpmbuild trong fedora:41 và kiểm tra cài đặt + Host boot trên Fedora sạch |
 
 `render.mjs` cần chạy trong `apps/web` (nơi có `playwright`):
 

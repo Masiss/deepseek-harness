@@ -478,8 +478,9 @@ Update không làm mất dữ liệu và không cài bản sai nền tảng.
 
 ### Công việc
 
-- [x] Linux **AppImage** (`apps/desktop-tauri/scripts/pack-appimage.sh`): shell release + payload chuẩn bị sẵn, `AppRun` giữ đúng hợp đồng env, profile seed vào `$DSH_HOME` vì ảnh là read-only. Đo: 200.698.360 byte; boot headless từ bản giải nén read-only, cầu trả `{"phase":"idle"}`, `image_writable_files=0`.
-- [x] Linux `.deb` (`apps/desktop-tauri/scripts/pack-deb.sh`): payload ở `/usr/lib/deepseek-harness`, launcher `/usr/bin/deepseek-harness` tự suy đường dẫn từ `$0`, seed profile vào `$DSH_HOME`. 147 MiB / cài 750 MB.
+- [x] Linux **AppImage** (`apps/desktop-tauri/scripts/pack-appimage.sh`): shell release + payload chuẩn bị sẵn, `AppRun` giữ đúng hợp đồng env, profile seed vào `$DSH_HOME` vì ảnh là read-only. Đo: 143.735.288 byte; boot headless từ bản giải nén read-only, cầu trả `{"phase":"idle"}`, `image_writable_files=0`.
+- [x] Linux `.rpm` (`apps/desktop-tauri/scripts/pack-rpm.sh`): rpmbuild trong `fedora:41`, cài 558 MB, 114 MiB; `rpm-probe.sh` cài + `rpm -V` + Host boot trên Fedora 41 sạch.
+- [x] Linux `.deb` (`apps/desktop-tauri/scripts/pack-deb.sh`): payload ở `/usr/lib/deepseek-harness`, launcher `/usr/bin/deepseek-harness` tự suy đường dẫn từ `$0`, seed profile vào `$DSH_HOME`. 108 MiB / cài 558 MB.
 - macOS `.app`/`.dmg`, universal.
 - Windows NSIS/MSI (không port installer UI tùy biến ở v1).
 - CI matrix 5 target; cache Rust.
@@ -565,7 +566,7 @@ Provider Rust pass parity; code cũ chỉ bị xoá sau một chu kỳ phát hà
 ### Acceptance Criteria
 
 - [ ] Core ≤ 105 MB — hiện 558 MB cài đặt (`dsh/` 414 MB + runtime 144 MB), AppImage 137 MiB / .deb 108 MiB; ngưỡng 105 MB không thể đạt nếu chỉ cắt payload, cần quyết định lại ngân sách.
-- [x] Office cài lần đầu chạy được, có progress + lỗi rõ ràng (status + SSE; UI card còn mở).
+- [x] Office cài lần đầu chạy được, có progress + lỗi rõ ràng (status + SSE + card trong Settings).
 - [x] Python cài lần đầu chạy được (import check trước khi publish).
 - [x] Không có Office/Python trong bundle core.
 - [ ] Size gate trong CI.
@@ -623,7 +624,7 @@ Chỉ coi là hoàn thành khi **tất cả** đạt:
 |---|---|---|
 | A1 | 10 bất biến giữ nguyên | gate §6 `AGENTS.md` |
 | A2 | Không sửa `packages/` upstream | `git diff upstream/master...HEAD -- packages/` rỗng |
-| A3 | Core ≤ 105 MB | CI size gate — **chưa đạt**: 558 MB cài đặt, AppImage 137 MiB, .deb 108 MiB |
+| A3 | Core ≤ 105 MB | CI size gate — **chưa đạt**: 558 MB cài đặt, AppImage 137 MiB, .deb 108 MiB, .rpm 114 MiB |
 | A4 | RSS idle ≤ 250 MB | **đạt**: 170–179 MiB (`rss-probe.sh`, Host headless) |
 | A5 | Cold start → first paint ≤ 1,5 s | benchmark |
 | A6 | Update N→N+1 pass trên 3 nền tảng | e2e máy sạch |

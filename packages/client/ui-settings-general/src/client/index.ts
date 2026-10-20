@@ -31,8 +31,10 @@ import type { ShortcutCommandId } from '@deepseek-ai/dsh-client-shortcuts/client
 import { createSettingsShellStore } from './shell-store.ts'
 import { SettingsRoot } from './SettingsRoot.tsx'
 import { DesktopUpdateBadge } from './DesktopUpdateIndicator.tsx'
-import type { DesktopUpdateBridge } from '../types.ts'
+import type { DesktopOfficeBridge, DesktopUpdateBridge } from '../types.ts'
 import { DesktopUpdateSource } from './desktop-update-source.ts'
+import { DesktopOfficeSource } from './office-component-source.ts'
+import { OfficeComponentRow } from './OfficeComponentRow.tsx'
 import { CloseLabel, HeaderContent, TriggerContent } from './chrome.tsx'
 import { GeneralSection } from './GeneralSection.tsx'
 import { CurrentVersionRow } from './CurrentVersionRow.tsx'
@@ -84,15 +86,28 @@ export function apply(ctx: ClientContext): void {
       setEnabled: enabled => ctx.configForms.developerTools.setEnabled(enabled),
     }),
   }, DeveloperToolsRow))
+  ctx.slots.inject('settings.general.item', () => ctx.slots.register({
+    name: 'settings.general.item', id: 'office-component', order: 20, locale: NS,
+    inject: () => ({
+      available: office.available,
+      hooks: { office: office.store },
+      install: () => { office.install() },
+      restart: () => { office.restart() },
+    }),
+  }, OfficeComponentRow))
   // Version information follows the core preferences.
   ctx.slots.inject('settings.general.item', () => ctx.slots.register({
     name: 'settings.general.item', id: 'current-version', order: 100, locale: NS,
   }, CurrentVersionRow))
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-settings-general: dictionaries')
   const connection = ctx.get('connection') as ConnectionHandle
-  const carrier = (globalThis as typeof globalThis & { dshDesktop?: { protocolVersion: number; updates?: DesktopUpdateBridge } }).dshDesktop
+  const carrier = (globalThis as typeof globalThis & {
+    dshDesktop?: { protocolVersion: number; updates?: DesktopUpdateBridge; components?: DesktopOfficeBridge }
+  }).dshDesktop
   const desktopUpdate = new DesktopUpdateSource(carrier?.protocolVersion === 1 ? carrier.updates : undefined)
   ctx.effect(() => () => { desktopUpdate.dispose() }, 'ui-settings-general: desktop update carrier')
+  const office = new DesktopOfficeSource(carrier?.components)
+  ctx.effect(() => () => { office.dispose() }, 'ui-settings-general: desktop office component')
   ctx.slots.inject('sidebar.toggle.badge', () => ctx.slots.register({
     name: 'sidebar.toggle.badge', locale: NS,
     inject: () => ({ hooks: { desktopUpdate: desktopUpdate.store, connectionState: connection.state } }),

@@ -15,6 +15,7 @@ import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
 import { LOCALE_SETTINGS_NAMESPACE, LocaleSettingsSchema } from '@deepseek-ai/dsh-client-locale/src/locale-settings.ts'
 import { inject } from '../src/client/index.ts'
 import type { DeveloperToolsRowInjected } from '../src/client/DeveloperToolsRow.tsx'
+import type { OfficeComponentRowInjected } from '../src/client/OfficeComponentRow.tsx'
 import { HostReleasePrompt, type HostReleasePromptInjected } from '../src/client/HostReleasePrompt.tsx'
 import { CloseLabel, HeaderContent, TriggerContent } from '../src/client/chrome.tsx'
 import { GeneralSection } from '../src/client/GeneralSection.tsx'
@@ -104,7 +105,7 @@ describe('ui-settings-general apply', () => {
     expect(generalLabel(c)).toBe('通用设置')
     expect(c.ctx.slots.spec('settings.general.item')).toEqual({ kind: 'list', scope: 'root' })
     // The shared developer-tool control belongs to General; onboarding remains feature-owned.
-    expect(c.ctx.slots.entries('settings.general.item').filter(row => row.locale === NS).map(row => row.options.id)).toEqual(['developer-tools', 'current-version'])
+    expect(c.ctx.slots.entries('settings.general.item').filter(row => row.locale === NS).map(row => row.options.id)).toEqual(['developer-tools', 'office-component', 'current-version'])
     expect(c.ctx.slots.entries('settings.onboarding').filter(row => row.locale === NS)).toEqual([])
     const developerRow = c.ctx.slots.entries('settings.general.item').find(row => row.options.id === 'developer-tools')!
     const developer = (developerRow.inject as unknown as () => DeveloperToolsRowInjected)()
@@ -113,6 +114,14 @@ describe('ui-settings-general apply', () => {
     const setEnabled = vi.spyOn(c.ctx.configForms.developerTools, 'setEnabled').mockResolvedValue(undefined)
     await developer.setEnabled(true)
     expect(setEnabled).toHaveBeenCalledExactlyOnceWith(true)
+    // The Office row exists on every carrier; without the Desktop component API
+    // it renders nothing and its actions are no-ops.
+    const officeRow = c.ctx.slots.entries('settings.general.item').find(row => row.options.id === 'office-component')!
+    const office = (officeRow.inject as unknown as () => OfficeComponentRowInjected)()
+    expect(office.available).toBe(false)
+    expect(office.hooks.office.getSnapshot()).toEqual({ failed: false, busy: false })
+    office.install()
+    office.restart()
     const { controller, hooks } = actionInjectedOf(c)
     expect(controller.store.getSnapshot().status).toBe('idle')
     expect(hooks.snapshot).toBe(controller.store)
@@ -253,7 +262,7 @@ describe('ui-settings-general apply', () => {
       expect(ownEntries(c, name)[0]).not.toBe(before[index])
     })
     expect(c.ctx.slots.spec('settings.general.item')).toEqual({ kind: 'list', scope: 'root' })
-    expect(c.ctx.slots.entries('settings.general.item').filter(row => row.locale === NS).map(row => row.options.id)).toEqual(['developer-tools', 'current-version'])
+    expect(c.ctx.slots.entries('settings.general.item').filter(row => row.locale === NS).map(row => row.options.id)).toEqual(['developer-tools', 'office-component', 'current-version'])
     // The recovered registrations still ride the locale path.
     const english = localeView('en', 1)
     const chinese = localeView('zh', 2)

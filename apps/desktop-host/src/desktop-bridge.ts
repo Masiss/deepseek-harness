@@ -109,6 +109,11 @@ export interface DesktopOfficeChannel {
    * @returns The settled status; failures are part of it, not exceptions.
    */
   install(): Promise<DesktopOfficeStatus>
+  /**
+   * Relaunch the application so an installed component becomes active.
+   * @returns Resolves once the shell was asked.
+   */
+  restart?(): Promise<void>
 }
 
 /**
@@ -264,6 +269,11 @@ async function dispatch(
       // settled status so the caller need not poll for the outcome.
       if (components === undefined) return { status: 503, payload: { error: 'components-unavailable' } }
       return { status: 200, payload: await components.install() }
+    case '/components-restart':
+      // The user asked to finish an install now; the shell owns the relaunch.
+      if (components?.restart === undefined) return { status: 503, payload: { error: 'components-unavailable' } }
+      await components.restart()
+      return { status: 204, payload: undefined }
     default:
       return undefined
   }
@@ -462,6 +472,7 @@ function renderShim(platform: ShortcutPlatform): string {
     components: {
       status: () => post('components-status'),
       install: () => post('components-install'),
+      restart: () => post('components-restart').then(() => undefined),
       subscribe: (listener) => {
         const source = new EventSource(base + '/components-events')
         source.onmessage = (event) => {
