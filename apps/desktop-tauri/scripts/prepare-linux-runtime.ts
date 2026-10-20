@@ -30,7 +30,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { delimiter, dirname, join, relative, resolve } from 'node:path'
 import {
   DESKTOP_HOST_PACKAGE,
@@ -232,6 +232,24 @@ async function main(): Promise<void> {
   }, undefined, 2)}\n`)
   for (const file of DESKTOP_HOST_RUNTIME_FILES) {
     readFileSync(join(paths.dsh, 'node_modules', DESKTOP_HOST_PACKAGE, file))
+  }
+
+  // The Rust Landlock launcher replaces the C one the platform package ships.
+  // Its CLI contract is the same, so the sandbox consumer needs no change.
+  const builtLauncher = join(paths.root, 'native', 'landlock-run')
+  if (existsSync(builtLauncher)) {
+    const platformPackage = join(
+      paths.dsh,
+      'node_modules',
+      '@deepseek-ai',
+      `node-addon-system-${target.platform}-${target.arch}`,
+    )
+    const installedLauncher = join(platformPackage, 'bin', 'landlock-run')
+    if (!existsSync(installedLauncher)) {
+      throw new Error(`linux runtime: the platform package has no Landlock launcher at ${installedLauncher}`)
+    }
+    copyFileSync(builtLauncher, installedLauncher)
+    console.error(`linux runtime: Landlock launcher replaced with the Rust build (${String(statSync(installedLauncher).size)} bytes)`)
   }
 
   // 4. The profile the Host edits. The Desktop application owns this directory

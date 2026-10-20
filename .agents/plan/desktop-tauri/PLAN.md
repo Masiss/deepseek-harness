@@ -513,11 +513,11 @@ Cài → chạy → update → gỡ, tất cả trên máy sạch.
 ### P5-posix (làm cùng Linux)
 
 - [x] `flock` (C → `rustix`) — crate `native/dsh-native`, entry `apps/desktop-host/native/flock.cjs`.
-- [ ] `landlock-run` (C → `landlock`).
+- [x] `landlock-run` (C → Rust, UAPI trực tiếp) — crate `native/dsh-native`, binary `landlock-run` thay bản C trong payload.
 - [x] `execve` (koffi → `nix`) — crate `native/dsh-native`, entry `apps/desktop-host/native/koffi.cjs`.
 - [x] PTY (node-pty → `portable-pty`) — crate `native/dsh-native`, wrapper `apps/desktop-host/native/node-pty.cjs`, loader `apps/desktop-host/native/native-loader.mjs`.
 - Directory picker (→ `rfd`).
-- Image (sharp/libvips → `image` + `fast_image_resize`).
+- [x] Image (sharp/libvips → `image` + `fast_image_resize` + `zune-png` + libwebp tĩnh) — crate `native/dsh-native`, entry `apps/desktop-host/native/sharp.cjs`.
 
 ### P5-win32 (chỉ khi Windows vào phạm vi)
 
@@ -532,8 +532,8 @@ Cài → chạy → update → gỡ, tất cả trên máy sạch.
 - [x] PTY parity: resize, signal, exit code — `native-pty-probe.sh` báo `size="33 111"`, `write_echo=2`, `signal="SIGTERM"`; bộ test `terminal` + `tool-bash-persistent` + `subprocess-local` (546 test) xanh khi chạy qua loader.
 - [x] Flock parity: `native-flock-probe.sh` báo `contention=EAGAIN/11/flock`; `lease.two-process.e2e.ts` xanh.
 - [x] Execve parity: `native-flock-probe.sh` báo `fcntl=ok` + `execve-ok`; 381 test `subprocess-local` xanh trên loader.
-- [ ] Landlock enforcement giữ nguyên test.
-- [ ] Image output khớp sharp trong sai số cho phép (hoặc test so sánh).
+- [x] Landlock enforcement giữ nguyên test — `landlock-parity-probe.sh`: ma trận hành vi giống hệt bản C; `landlock-sandbox-probe.sh`: read-only chặn ghi, `/dev/null` ghi được, workspace-write ghi được.
+- [x] Image output khớp sharp trong sai số cho phép — `image-parity-probe.sh`: facts giống hệt 5/5 định dạng, WebP lệch 0–6%; 93 test `attachment-local` xanh trên provider Rust.
 - [x] Provider parity suite xanh — `packages/subprocess/subprocess-local` (381 test) xanh trên provider Rust.
 - [x] `git diff -- packages/` = 0.
 

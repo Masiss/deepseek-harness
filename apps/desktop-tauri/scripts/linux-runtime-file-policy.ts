@@ -43,6 +43,9 @@ export function linuxRuntimeFileExclusion(
   // library stays in the payload until the Rust provider replaces it.
   if (name === 'koffi' && options.rustProvider) return 'Koffi FFI library replaced by the Rust provider'
   if (name === 'node-pty' && options.rustProvider) return 'node-pty addon replaced by the Rust provider'
+  if ((name === 'sharp' || name.startsWith('@img/')) && options.rustProvider) {
+    return 'sharp package replaced by the Rust provider'
+  }
   if (name.startsWith('@deepseek-ai/node-addon-system-') && /^bin\/(?:glibc|musl)\/system\.node$/u.test(entry)) {
     return 'C flock addon replaced by the Rust provider'
   }

@@ -2,7 +2,7 @@
 
 English | [中文](README.zh.md)
 
-Native source and public packages maintained with DeepSeek Harness. The [`system/` workspace](system/README.md) owns the Landlock launcher and POSIX flock binding, their platform packages, and the [release procedure](system/docs/release.md). The [`dsh-native/` crate](dsh-native/README.md) owns the native providers the Desktop runtime ships: the terminal, the session lease, and the process bootstrap.
+Native source and public packages maintained with DeepSeek Harness. The [`system/` workspace](system/README.md) owns the Landlock launcher and POSIX flock binding, their platform packages, and the [release procedure](system/docs/release.md). The [`dsh-native/` crate](dsh-native/README.md) owns the native providers the Desktop runtime ships: the terminal, the session lease, the process bootstrap, the image pipeline, and the Landlock launcher.
 
 ## Workspace and release boundary
 

@@ -427,7 +427,7 @@ DSH_DESKTOP_PROJECT_DIR=$HOME/.dsh/profiles/web \
 | D27 | Linux phát hành dạng **AppImage**: ảnh read-only nên profile seed vào `$DSH_HOME/desktop-project` ở lần chạy đầu; `AppRun` giữ hợp đồng env của tree (thêm `DSH_CLIENT_VERSION` vì telemetry đọc nó) |
 | D26 | Update: manifest tự mô tả theo `platform-arch`, tải + verify sha256/size, cài bằng **rename nguyên tử** lên `$APPIMAGE`; Q3 = **AppImage self-update**, gói `.deb` để trình quản lý gói (`unsupported`) |
 | D22 | Welcome/onboarding v1 = **không tới được**: cửa sổ welcome là tài liệu native riêng cần copy của `locale.ts` (TS) và luồng đăng nhập Platform. Không chép choreography `hasApiKey` của `welcome-backend.ts` sang Host (sẽ là nhà thứ hai) |
-| D29 | Provider native của Desktop nằm trong **một crate napi-rs duy nhất** `native/dsh-native` (D4): PTY (`portable-pty`), flock của session lease, và binding `execve`/`fcntl` của bootstrap. Thay provider **không sửa `packages/`**: `apps/desktop-host/native/native-loader.mjs` đăng ký resolve hook trỏ `node-pty` → `node-pty.cjs`, `@deepseek-ai/node-addon-system/flock` → `flock.cjs`, `koffi` → `koffi.cjs`; launcher Tauri nạp hook bằng `--import` trước khi profile boot. Thiếu `.node` ⇒ hook no-op ⇒ payload giữ addon gốc ⇒ lane Electron không đổi |
+| D29 | Provider native của Desktop nằm trong **một crate napi-rs duy nhất** `native/dsh-native` (D4): PTY (`portable-pty`), flock của session lease, binding `execve`/`fcntl` của bootstrap, và pipeline ảnh (`image` + `zune-png` + `fast_image_resize` + libwebp tĩnh). Cùng crate build binary `landlock-run` (UAPI Landlock viết thẳng trong Rust). Thay provider **không sửa `packages/`**: `apps/desktop-host/native/native-loader.mjs` đăng ký resolve hook trỏ `node-pty` → `node-pty.cjs`, `@deepseek-ai/node-addon-system/flock` → `flock.cjs`, `koffi` → `koffi.cjs`, `sharp` → `sharp.cjs`; launcher Tauri nạp hook bằng `--import` trước khi profile boot. Thiếu `.node` ⇒ hook no-op ⇒ payload giữ addon gốc ⇒ lane Electron không đổi |
 
 ## Số đo thật
 
@@ -668,6 +668,22 @@ Thêm `"native/dsh-native.node"` vào `files` của `apps/desktop-host` không l
 
 fd 0/1/2 của tiến trình Node trong shell của agent là **socket** và mang `FD_CLOEXEC`; sau `execve` chúng biến mất nên chương trình mới không in được gì (exit 1, không có output) dù exec thành công. Đó chính là lý do `linux-execve.ts` xóa cờ `FD_CLOEXEC` trước khi exec. Probe phải làm y vậy, nếu không sẽ tưởng binding hỏng.
 
+### B31 — `landlock-run` viết lại bằng Rust: dùng UAPI trực tiếp, không dùng crate `landlock`
+
+Crate `landlock` có API khác hẳn (ruleset/ABI negotiation của riêng nó), còn hợp đồng CLI của launcher đã ghim (`native/system/docs/cli-contract.md`): exit 125, dòng báo cáo `landlock: fully enforced` / `partially enforced (older ABI)`, mọi lỗi chết kèm `landlock-run: ` trên stderr. Viết thẳng UAPI trong Rust (như bản C) giữ **bề mặt kiểm toán giống hệt** và bảo đảm ma trận hành vi khớp từng dòng. `nix::fcntl::flock` cũng bị deprecate (guard `Flock` **unlock khi drop** — sai với ngữ nghĩa "giữ khoá tới khi fd đóng") nên phải gọi `libc::flock` trực tiếp.
+
+### B32 — `Vec<u8>` của napi là **Array** số, không phải Uint8Array
+
+Binding `Vec<u8>` nhận mảng JS và trả mảng JS; truyền `Buffer` vào sẽ lỗi `ArrayExpected`, và mảng số 12 MP là rất chậm. Dùng `napi::bindgen_prelude::Buffer` cho cả tham số lẫn giá trị trả về.
+
+### B33 — Decoder PNG của crate `image` chậm hơn sharp ~80 lần
+
+Bộ giải mã PNG của crate `image` (dựa trên crate `png`) mất ~2,1 s cho ảnh 12 MP, còn libspng của sharp ~27 ms. Thay bằng `zune-png` (SIMD) và `fast_image_resize` cho resize: còn ~198 ms cho decode+resize+encode (sharp 99 ms). `zune-png` cần gọi `decode_headers()` trước khi đọc `get_colorspace()`/`get_info()`, và `decode()` trả `DecodingResult` (U8/U16/F32) chứ không phải buffer.
+
+### B34 — Ảnh 16-bit và JPEG CMYK phải giữ đúng sự thật, không nâng về 8-bit
+
+`sharp` báo `depth: 'ushort'`/`space: 'rgb16'` cho PNG 16-bit và `space: 'cmyk'` cho JPEG 4 kênh. Nếu hạ về 8-bit sRGB ngay lúc decode, ảnh 16-bit **được pass-through** (sai) và JPEG CMYK **được coi là hợp lệ** trong cache (sai). Số kênh của SOF JPEG cho biết CMYK; PNG 16-bit phải giữ buffer `u16` để báo đúng depth.
+
 ### B30 — `koffi` **có** dùng trên Linux, không chỉ Windows
 
 `packages/subprocess/subprocess-local/src/linux-execve.ts` (bootstrap một lần) bind `execve` + `fcntl` của libc qua koffi. Nếu prune koffi khỏi payload Linux mà chưa thay binding, bootstrap chết và terminal không bao giờ ra `READY`. Đã thay bằng crate Rust + shim `koffi.cjs` (chỉ nhận đúng hai signature, signature lạ thì báo lỗi tường minh).
@@ -689,7 +705,9 @@ fd 0/1/2 của tiến trình Node trong shell của agent là **socket** và man
 | M7 | Đo lại cold start/RSS với Node 24.21 đóng gói | P1 | **xong** — 1,27–1,31 s; 309–318 MiB (cây production thật) |
 | M8 | Đo RSS + cold start của shell Tauri có webview | P0 | chưa |
 | M9 | Đo parity provider Rust cho PTY | P5-posix | **xong** — `native-pty-probe.sh`: `provider=rust`, `size="33 111"`, `write_echo=2`, `signal="SIGTERM"`; 546 test (`terminal` + `tool-bash-persistent` + `subprocess-local`) xanh khi chạy qua loader |
-| M10 | Đo parity provider Rust cho flock + execve | P5-posix | **xong** — `native-flock-probe.sh`: `flock_provider=rust`, `koffi_provider=rust`, `contention=EAGAIN/11/flock`, `fcntl=ok`, `execve-ok`; `lease.two-process.e2e.ts` xanh; payload Linux không còn `koffi`/`node-pty`/`system.node`; AppImage 143.759.864 B (137,1 MiB) |
+| M10 | Đo parity provider Rust cho flock + execve | P5-posix | **xong** — `native-flock-probe.sh`: `flock_provider=rust`, `koffi_provider=rust`, `contention=EAGAIN/11/flock`, `fcntl=ok`, `execve-ok`; `lease.two-process.e2e.ts` xanh; payload Linux không còn `koffi`/`node-pty`/`system.node` |
+| M11 | Đo parity launcher Landlock Rust vs C | P5-posix | **xong** — `landlock-parity-probe.sh`: `parity=identical` trên 20 dòng ma trận (usage error, exit code, thông điệp, hiệu ứng ràng buộc); `landlock-sandbox-probe.sh`: read-only chặn ghi, `/dev/null` ghi được, workspace-write ghi được, `enforcement=full` |
+| M12 | Đo parity provider Rust cho ảnh vs sharp | P5-posix | **xong** — `image-parity-probe.sh`: facts giống hệt 5/5 định dạng, WebP lệch 0–6% (ví dụ 734/724 B); 93 test `attachment-local` xanh trên provider Rust; resize+encode 198 ms so với sharp 99 ms (4000×3000); AppImage 138.004.984 B (131,6 MiB) sau khi bỏ `sharp` + `@img` |
 
 ## Câu hỏi mở
 
@@ -719,3 +737,5 @@ fd 0/1/2 của tiến trình Node trong shell của agent là **socket** và man
 | 2026-10-19 | P0: bác bỏ D2 (Bun) bằng chứng `B8`; sửa `B4`; thêm `B9`–`B12`; đo cold start/RSS Host Node; dựng `apps/desktop-tauri` + Tauri 2.12.4 build được |
 | 2026-10-20 | P5-posix (1): crate napi-rs `native/dsh-native` thay `node-pty` bằng `portable-pty`; loader resolve hook `node-pty`; thêm D29, B25–B27 |
 | 2026-10-20 | P5-posix (2): crate `native/dsh-native` thêm flock của session lease và binding `execve`/`fcntl` (thay koffi trên Linux); payload Linux không còn `koffi`/`node-pty`/`system.node`; thêm B28–B30, M10 |
+| 2026-10-20 | P5-posix (3): launcher `landlock-run` bằng Rust (UAPI trực tiếp) thay bản C trong payload — ma trận hành vi giống hệt; thêm B31, M11 |
+| 2026-10-20 | P5-posix (4): pipeline ảnh bằng Rust thay `sharp` (decode `zune-png`, resize `fast_image_resize`, WebP libwebp tĩnh, JPEG zune) — facts giống hệt, WebP lệch 0–6%, 93 test `attachment-local` xanh; payload không còn `sharp`/`@img`; thêm B32–B34, M12 |

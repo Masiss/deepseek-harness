@@ -16,6 +16,7 @@ addon. Each provider exposes the surface the Harness already declares, so
 | PTY | `node-pty` | `spawn`, `pid`, `write`, `resize`, `pause`, `resume`, `kill`, `onData`, `onExit` |
 | Session lease | `@deepseek-ai/node-addon-system/flock` | `tryLockExclusive` |
 | Process bootstrap | `koffi` | `execve`, `fcntl` |
+| Image pipeline | `sharp` | decode, metadata, orientation, scale, WebP and JPEG encoding |
 
 The PTY exit report carries the signal number the child died from, and the
 terminal's process group receives the signal when one is named. The lease
@@ -24,13 +25,24 @@ leaves it in place until the descriptor closes. The bootstrap replaces the
 process image with the given program, argv, and environment, and reports the
 errno of a refused exec.
 
+The image provider reports the same intrinsic facts as the package it
+replaces — format, dimensions, frame count, sample depth, colour space, alpha,
+and the metadata a container carries — and encodes WebP and JPEG at the same
+quality target. Every other operation of the image package is delegated to it
+when the payload still carries it.
+
+The crate also builds the Landlock launcher the sandbox uses: the same
+argument grammar, exit codes, report lines, and confinement effects as the C
+launcher it replaces, with the Landlock UAPI defined in Rust.
+
 ## How the runtime reaches it
 
 `apps/desktop-host/native/native-loader.mjs` registers a resolve hook that
 points `node-pty` at `apps/desktop-host/native/node-pty.cjs`, the session
 lease's `@deepseek-ai/node-addon-system/flock` entry at
-`apps/desktop-host/native/flock.cjs`, and `koffi` at
-`apps/desktop-host/native/koffi.cjs`. The Desktop launcher loads that hook
+`apps/desktop-host/native/flock.cjs`, `koffi` at
+`apps/desktop-host/native/koffi.cjs`, and `sharp` at
+`apps/desktop-host/native/sharp.cjs`. The Desktop launcher loads that hook
 with `--import` before the profile boots; the Electron carrier keeps the
 bundled addons.
 
@@ -46,23 +58,28 @@ nothing.
 ## Build
 
 ```sh
-apps/desktop-tauri/scripts/build-native-pty.sh
+apps/desktop-tauri/scripts/build-native.sh
 ```
 
 The script runs `cargo build --release` and copies the result to
-`apps/desktop-host/native/dsh-native.node`. The Desktop packaging step
-(`apps/desktop-tauri/scripts/pack-linux.sh`) runs it before the Host package is
-packed, so the module ships inside the payload.
+`apps/desktop-host/native/dsh-native.node`, then builds the Landlock launcher
+and copies it to the target tree, where the runtime preparation puts it in
+place of the C launcher. The Desktop packaging step
+(`apps/desktop-tauri/scripts/pack-linux.sh`) runs the script before the Host
+package is packed, so the module ships inside the payload.
 
 ## Verify
 
 ```sh
 apps/desktop-tauri/scripts/native-pty-probe.sh
 apps/desktop-tauri/scripts/native-flock-probe.sh
+apps/desktop-tauri/scripts/image-parity-probe.sh
+apps/desktop-tauri/scripts/landlock-parity-probe.sh
+apps/desktop-tauri/scripts/landlock-sandbox-probe.sh
 ```
 
-The first probe drives the packaged runtime's terminal service on this
-provider and reports the resolved provider, the pty window size, the echoed
-input, and the termination signal. The second resolves the lease and libc
-entries through the same hook and reports the lock contention, the errno, and
-the replaced process image.
+The probes report the resolved provider for the terminal, the session lease,
+and the image pipeline; the image probe compares the intrinsic facts and the
+encoded sizes with the package it replaces; the Landlock probes compare the
+launcher's whole observable behavior with the C launcher and confine real
+commands through the sandbox provider.

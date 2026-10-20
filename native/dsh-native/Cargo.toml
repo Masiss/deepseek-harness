@@ -9,11 +9,26 @@ description = "Native providers (PTY first) for the DeepSeek Harness Desktop run
 [lib]
 crate-type = ["cdylib"]
 
+[[bin]]
+name = "landlock-run"
+path = "src/bin/landlock-run.rs"
+required-features = ["landlock-bin"]
+
+[features]
+# The launcher is a plain binary: the napi bindings are stubs in this build.
+landlock-bin = ["napi/noop"]
+
 [dependencies]
 napi = { version = "3", default-features = false, features = ["napi8"] }
 napi-derive = "3"
 portable-pty = "0.9"
 nix = { version = "0.28", features = ["signal", "process"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+webp-rs = "26.10"
+kamadak-exif = "0.6"
+fast_image_resize = "6"
+zune-png = "0.2"
+zune-core = "0.2"
 
 [build-dependencies]
 napi-build = "2"

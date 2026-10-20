@@ -25,6 +25,11 @@ use nix::sys::wait::{waitpid, WaitStatus};
 use nix::unistd::Pid;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 
+mod image;
+mod image_scan;
+#[cfg(test)]
+mod image_scan_tests;
+
 /// Fork options the terminal service passes to `node-pty`.
 #[napi(object)]
 pub struct PtyOptions {

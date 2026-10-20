@@ -24,6 +24,7 @@ const replacements = new Map([
   ['node-pty', join(here, 'node-pty.cjs')],
   ['@deepseek-ai/node-addon-system/flock', join(here, 'flock.cjs')],
   ['koffi', join(here, 'koffi.cjs')],
+  ['sharp', join(here, 'sharp.cjs')],
 ])
 
 if (process.platform !== 'win32' && existsSync(binary)) {
