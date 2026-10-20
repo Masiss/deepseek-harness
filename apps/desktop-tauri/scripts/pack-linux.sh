@@ -28,6 +28,8 @@ cd "$repo"
 mkdir -p "$out/dsh" "$out/vendor" "$out/landlock"
 
 pnpm run build:official
+# The Desktop Host package carries the Rust PTY provider.
+"$repo/apps/desktop-tauri/scripts/build-native-pty.sh"
 pnpm run release:pack --family dsh --out "$out/dsh"
 pnpm --dir apps/desktop-host pack --pack-destination "$out/dsh"
 pnpm run release:pack --family vendor --out "$out/vendor"

@@ -9,7 +9,10 @@
   "files": [
     "lib/index.js",
     "lib/cli.js",
-    "lib/tauri.js"
+    "lib/tauri.js",
+    "native/node-pty.cjs",
+    "native/pty-loader.mjs",
+    "native/dsh-native.node"
   ],
   "dependencies": {
     "koffi": "3.1.1",

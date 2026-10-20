@@ -427,6 +427,7 @@ DSH_DESKTOP_PROJECT_DIR=$HOME/.dsh/profiles/web \
 | D27 | Linux phát hành dạng **AppImage**: ảnh read-only nên profile seed vào `$DSH_HOME/desktop-project` ở lần chạy đầu; `AppRun` giữ hợp đồng env của tree (thêm `DSH_CLIENT_VERSION` vì telemetry đọc nó) |
 | D26 | Update: manifest tự mô tả theo `platform-arch`, tải + verify sha256/size, cài bằng **rename nguyên tử** lên `$APPIMAGE`; Q3 = **AppImage self-update**, gói `.deb` để trình quản lý gói (`unsupported`) |
 | D22 | Welcome/onboarding v1 = **không tới được**: cửa sổ welcome là tài liệu native riêng cần copy của `locale.ts` (TS) và luồng đăng nhập Platform. Không chép choreography `hasApiKey` của `welcome-backend.ts` sang Host (sẽ là nhà thứ hai) |
+| D29 | Provider native của Desktop nằm trong **một crate napi-rs duy nhất** `native/dsh-native` (D4), bắt đầu bằng PTY. Thay provider **không sửa `packages/`**: `apps/desktop-host/native/pty-loader.mjs` đăng ký resolve hook trỏ `node-pty` sang wrapper `node-pty.cjs`; launcher Tauri nạp hook bằng `--import` trước khi profile boot. Thiếu `.node` ⇒ hook no-op ⇒ lane Electron giữ node-pty |
 
 ## Số đo thật
 
@@ -642,6 +643,23 @@ Phiên là Wayland, nên cửa sổ GTK không phải cửa sổ X11. Ép `GDK_B
 
 Item đăng ký đủ (`Id`, `Status`, `IconName`, `Menu` trỏ tới `/org/ayatana/NotificationItem/tray_icon_tray_app_main/Menu`), nhưng object đó chỉ expose `Properties`/`Introspectable`/`Peer` — không có `com.canonical.dbusmenu`. Muốn test bấm menu phải làm tay trên phiên desktop thật.
 
+### B25 — napi `ThreadsafeFunction` gọi callback kiểu callee-handled, và `portable-pty` trả tên tín hiệu theo locale
+
+Hai lỗi âm thầm khi viết binding napi:
+
+1. `ThreadsafeFunction<T>` mặc định dùng `ErrorStrategy::CalleeHandled`: callback JS nhận **`(err, value)`**, không phải `(value)`. Viết `(data) => ...` thì `data` là `err` (luôn `null`) ⇒ mọi chunk dữ liệu thành chuỗi `"null"`.
+2. `portable_pty::ExitStatus::signal()` trả **`Option<&str>` từ `strsignal()`** — tên tín hiệu *theo locale* (`"Terminated"`, có thể dịch). Muốn **số tín hiệu** (service dùng `signalName(exitSignal)`) thì phải tự `waitpid()`: crate giữ `Child` nhưng ta thả nó ngay sau `spawn` và tự reap bằng `nix::sys::wait::waitpid` (`Exited` → code, `Signaled` → `128 + sig` + `signal: Some(sig)`).
+
+Ngoài ra `kill` phải gửi cho **process group** (`killpg`) rồi fallback `kill(pid)`, vì `node-pty` giết cả nhóm; và `pause()` chỉ là cờ: thread đọc ngủ 5 ms mỗi vòng, backpressure do buffer pty đảm nhiệm.
+
+### B26 — `pnpm pack` bỏ qua mục `files` không tồn tại
+
+Thêm `"native/dsh-native.node"` vào `files` của `apps/desktop-host` không làm hỏng lane Electron: `pnpm pack` bỏ qua file thiếu và vẫn exit 0. Nhờ vậy payload Tauri (có `.node`) và payload Electron (không có) dùng chung một manifest.
+
+### B27 — Đọc output của terminal phải chờ `end`, không chỉ `done`
+
+`handle.done` resolve khi tiến trình con thoát, còn chunk cuối cùng của pty vẫn còn trong buffer của stream. Probe đọc `output` ngay sau `done` thì ra chuỗi rỗng. Phải chờ thêm `output` phát `'end'`.
+
 ### B15 — Không chụp được cửa sổ Tauri bằng `import` trên phiên Wayland
 
 `import -window root` fail (`missing an image filename`); `grim` chụp được toàn màn hình nhưng cửa sổ Tauri không nằm trong khung hình chụp. Cách kiểm chứng đáng tin là `ss -tnp`: thấy `WebKitNetworkProcess` mở kết nối ESTAB tới cổng Host.
@@ -658,6 +676,7 @@ Item đăng ký đủ (`Id`, `Status`, `IconName`, `Menu` trỏ tới `/org/ayat
 | M6 | So sánh DACL/token provider Rust vs koffi (Windows) | P5-win32 | chưa |
 | M7 | Đo lại cold start/RSS với Node 24.21 đóng gói | P1 | **xong** — 1,27–1,31 s; 309–318 MiB (cây production thật) |
 | M8 | Đo RSS + cold start của shell Tauri có webview | P0 | chưa |
+| M9 | Đo parity provider Rust cho PTY | P5-posix | **xong** — `native-pty-probe.sh`: `provider=rust`, `size="33 111"`, `write_echo=2`, `signal="SIGTERM"`; 546 test (`terminal` + `tool-bash-persistent` + `subprocess-local`) xanh khi chạy qua loader |
 
 ## Câu hỏi mở
 
@@ -685,3 +704,4 @@ Item đăng ký đủ (`Id`, `Status`, `IconName`, `Menu` trỏ tới `/org/ayat
 |---|---|
 | 2026-10-19 | Tạo bộ tài liệu; chốt D1–D10; ghi B1–B7 |
 | 2026-10-19 | P0: bác bỏ D2 (Bun) bằng chứng `B8`; sửa `B4`; thêm `B9`–`B12`; đo cold start/RSS Host Node; dựng `apps/desktop-tauri` + Tauri 2.12.4 build được |
+| 2026-10-20 | P5-posix (1): crate napi-rs `native/dsh-native` thay `node-pty` bằng `portable-pty`; loader resolve hook `node-pty`; thêm D29, B25–B27 |

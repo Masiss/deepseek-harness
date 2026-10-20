@@ -515,7 +515,7 @@ Cài → chạy → update → gỡ, tất cả trên máy sạch.
 - `flock` (C → `rustix`).
 - `landlock-run` (C → `landlock`).
 - `execve` (koffi → `nix`).
-- PTY (node-pty → `portable-pty`).
+- [x] PTY (node-pty → `portable-pty`) — crate `native/dsh-native`, wrapper `apps/desktop-host/native/node-pty.cjs`, loader `apps/desktop-host/native/pty-loader.mjs`.
 - Directory picker (→ `rfd`).
 - Image (sharp/libvips → `image` + `fast_image_resize`).
 
@@ -529,11 +529,11 @@ Cài → chạy → update → gỡ, tất cả trên máy sạch.
 ### Acceptance Criteria (P5-posix)
 
 - [ ] Không còn `require('koffi')` cho Linux.
-- [ ] PTY parity: resize, signal, exit code.
+- [x] PTY parity: resize, signal, exit code — `native-pty-probe.sh` báo `size="33 111"`, `write_echo=2`, `signal="SIGTERM"`; bộ test `terminal` + `tool-bash-persistent` + `subprocess-local` (546 test) xanh khi chạy qua loader.
 - [ ] Landlock enforcement giữ nguyên test.
 - [ ] Image output khớp sharp trong sai số cho phép (hoặc test so sánh).
-- [ ] Provider parity suite xanh.
-- [ ] `git diff -- packages/` = 0.
+- [x] Provider parity suite xanh — `packages/subprocess/subprocess-local` (381 test) xanh trên provider Rust.
+- [x] `git diff -- packages/` = 0.
 
 ### Acceptance Criteria (P5-win32)
 

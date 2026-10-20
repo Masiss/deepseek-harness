@@ -75,7 +75,9 @@ const HOST_LAUNCHER = `#!/bin/sh
 set -e
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 runtime=$1
-exec "$here/../runtime/bin/node" \${DSH_DESKTOP_NODE_FLAGS---optimize-for-size} "$runtime/node_modules/@deepseek-ai/dsh-desktop-host/lib/tauri.js" "$@"
+exec "$here/../runtime/bin/node" \${DSH_DESKTOP_NODE_FLAGS---optimize-for-size} \
+  --import="$runtime/node_modules/@deepseek-ai/dsh-desktop-host/native/pty-loader.mjs" \
+  "$runtime/node_modules/@deepseek-ai/dsh-desktop-host/lib/tauri.js" "$@"
 `
 
 function targetName(value: string | undefined): 'linux-x64' | 'linux-arm64' {

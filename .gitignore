@@ -47,3 +47,7 @@ worktrees/
 .agents/worktrees/
 .typert-*/
 native/system/test/bin/
+
+# Built Rust PTY provider (see apps/desktop-tauri/scripts/build-native-pty.sh)
+native/dsh-native/target/
+apps/desktop-host/native/dsh-native.node
