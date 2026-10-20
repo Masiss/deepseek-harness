@@ -690,6 +690,10 @@ Bộ giải mã PNG của crate `image` (dựa trên crate `png`) mất ~2,1 s c
 
 Harness snapshot chạy agent trong một thư mục tạm; nếu thư mục tạm nằm **trong repo** (ví dụ `TMPDIR=apps/desktop/.desktop-build/tmp`), phần dò hướng dẫn đi ngược lên tìm thấy `AGENTS.md` của repo và chèn thêm một message `agent-instructions` vào transcript ⇒ **173 test snapshot đỏ** dù không có thay đổi nào trong sản phẩm. Đặt `TMPDIR` ngoài repo (ví dụ `/tmp/…`) thì lane xanh trở lại. Đừng sửa fixture để dập triệu chứng này.
 
+### B44 — Runner CI không có sẵn backend sandbox: lane snapshot đỏ vì "no sandbox backend is usable"
+
+Trên máy phát triển có `bwrap` nên lane snapshot xanh. Runner `ubuntu-latest` của GitHub **không** có `bwrap`, và package npm `@deepseek-ai/node-addon-system-<platform>` **không** chứa binary `landlock-run` (chỉ có `system.node`) ⇒ backend sandbox không khả dụng ⇒ `sandbox-local` từ chối chạy lệnh ⇒ các ca snapshot gọi tool (SDK, PTC) khác transcript đã ghi. Lane CI phải cài `bubblewrap` (hoặc dựng launcher Landlock của lane Tauri).
+
 ### B43 — Đọc output của PTY theo chunk sẽ cắt UTF-8; và exit phải báo sau khi reader ráo hết
 
 `String::from_utf8_lossy` trên từng chunk biến một code point bị cắt giữa hai lần đọc thành ký tự thay thế. Reader phải giữ đuôi chưa hoàn chỉnh và chỉ giải mã phần là trọn vẹn. Tương tự, frame `exit` phải báo **sau** khi reader đã ráo hết, nếu không người tiêu dùng có thể thấy exit trước output cuối. Cả hai đều là hợp đồng của `node-pty` mà provider Rust phải giữ.
