@@ -491,7 +491,7 @@ Update không làm mất dữ liệu và không cài bản sai nền tảng.
 ### Acceptance Criteria
 
 - [~] Cài trên Ubuntu 24.04 sạch: container `apt-get install` **thành công** (`Status: install ok installed`, deps resolve), launcher seed đúng profile, Host boot từ bản giải nén read-only. Chưa mở GUI/chat trong container (không có display).
-- [ ] Cài trên Fedora sạch.
+- [x] Cài trên Fedora sạch — `rpm-probe.sh` trong container `fedora:41`: `dnf install` OK, `rpm -V` OK, launcher seed `DSH_HOME`, Host boot OK.
 - [ ] macOS: mở từ Applications, không bị Gatekeeper chặn.
 - [ ] Windows: cài, mở, PTY chạy.
 - [ ] Uninstall không để lại file ngoài `$DSH_HOME` do user tạo.
