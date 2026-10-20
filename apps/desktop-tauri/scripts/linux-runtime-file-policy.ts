@@ -46,6 +46,8 @@ export function linuxRuntimeFileExclusion(
   if ((name === 'sharp' || name.startsWith('@img/')) && options.rustProvider) {
     return 'sharp package replaced by the Rust provider'
   }
+  // The Office engine travels with the on-demand Office component.
+  if (name.startsWith('@deepseek-ai/libreoffice-kit')) return 'Office engine moved to the Office component'
   if (name.startsWith('@deepseek-ai/node-addon-system-') && /^bin\/(?:glibc|musl)\/system\.node$/u.test(entry)) {
     return 'C flock addon replaced by the Rust provider'
   }

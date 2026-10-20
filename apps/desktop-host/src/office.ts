@@ -1,6 +1,6 @@
 /** Desktop Office skills and bundled authoring dependencies. */
 
-import { realpathSync } from 'node:fs'
+import { existsSync, realpathSync } from 'node:fs'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runtimeArchivePath } from './office-engine.ts'
@@ -27,12 +27,27 @@ export interface Config {
  */
 export async function apply(ctx: Context, config: Config): Promise<void> {
   await ctx.plugin(workspaceDependencies, config)
-  const archive = runtimeArchivePath(config.runtimeDir) === undefined ? undefined : dirname(realpathSync(config.runtimeDir))
-  const manifest = fileURLToPath(import.meta.resolve('@deepseek-ai/libreoffice-kit/package.json'))
-  const packageRoot = dirname(archive === undefined ? manifest : join(`${archive}.unpacked`, relative(archive, manifest)))
   await ctx.plugin(officeSkills, {
     assetRoot: join(dirname(config.source), 'office-skills'),
     node: join(config.source, 'dependencies', 'node', 'bin', process.platform === 'win32' ? 'node.exe' : 'node'),
-    cli: join(packageRoot, 'lib', 'cli.js'),
+    cli: officeEngineCli(config),
   })
+}
+
+/**
+ * Locate the Office engine command.
+ *
+ * The engine travels with the Office component, so the component's runtime
+ * holds it; a bundle that still carries the engine in the application
+ * directory keeps using that copy.
+ * @param config - Composed Office payload and application runtime directories.
+ * @returns The command that runs the engine.
+ */
+function officeEngineCli(config: Config): string {
+  const composed = join(config.source, 'node_modules', '@deepseek-ai', 'libreoffice-kit', 'lib', 'cli.js')
+  if (existsSync(composed)) return composed
+  const archive = runtimeArchivePath(config.runtimeDir) === undefined ? undefined : dirname(realpathSync(config.runtimeDir))
+  const manifest = fileURLToPath(import.meta.resolve('@deepseek-ai/libreoffice-kit/package.json'))
+  const packageRoot = dirname(archive === undefined ? manifest : join(`${archive}.unpacked`, relative(archive, manifest)))
+  return join(packageRoot, 'lib', 'cli.js')
 }

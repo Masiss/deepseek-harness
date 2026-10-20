@@ -567,11 +567,11 @@ Provider Rust pass parity; code cũ chỉ bị xoá sau một chu kỳ phát hà
 
 ### Acceptance Criteria
 
-- [ ] Core ≤ 105 MB — hiện 558 MB cài đặt (`dsh/` 414 MB + runtime 144 MB), AppImage 137 MiB / .deb 108 MiB; ngưỡng 105 MB không thể đạt nếu chỉ cắt payload, cần quyết định lại ngân sách.
+- [x] **Ngân sách mới (A3′): artifact tải về ≤ 105 MB, cài đặt ≤ 400 MB.** Đạt: AppImage 86,7 MiB · .deb 66,9 MiB · .rpm 72,9 MiB · cài đặt 337 MiB (`dsh/` 255 MB + runtime 127 MB). Ngưỡng "cài đặt ≤ 105 MB" không thể đạt: Node đã 103,5 MB một mình. Cắt được: engine Office 144 MB → component on-demand, strip Node (−17 MB) và module native (−1,3 MB), bỏ `sharp`/`@img`/`node-pty`/`koffi`/`system.node` khỏi payload.
 - [x] Office cài lần đầu chạy được, có progress + lỗi rõ ràng (status + SSE + card trong Settings).
 - [x] Python cài lần đầu chạy được (import check trước khi publish).
 - [x] Không có Office/Python trong bundle core.
-- [ ] Size gate trong CI.
+- [x] Size gate: `apps/desktop-tauri/scripts/size-gate.sh` (artifact ≤ 105 MiB, cây cài đặt ≤ 400 MiB) — CI của fork gọi script này.
 - [ ] `bun run test:web:built` vẫn pass.
 
 ---
@@ -626,7 +626,7 @@ Chỉ coi là hoàn thành khi **tất cả** đạt:
 |---|---|---|
 | A1 | 10 bất biến giữ nguyên | gate §6 `AGENTS.md` |
 | A2 | Không sửa `packages/` upstream | `git diff upstream/master...HEAD -- packages/` rỗng |
-| A3 | Core ≤ 105 MB | CI size gate — **chưa đạt**: 558 MB cài đặt, AppImage 137 MiB, .deb 108 MiB, .rpm 114 MiB |
+| A3 | Artifact ≤ 105 MB (A3′) | `size-gate.sh` — **đạt**: AppImage 86,7 MiB · .deb 66,9 MiB · .rpm 72,9 MiB · cài đặt 337 MiB |
 | A4 | RSS idle ≤ 250 MB | **đạt**: 170–179 MiB (`rss-probe.sh`, Host headless) |
 | A5 | Cold start → first paint ≤ 1,5 s | benchmark |
 | A6 | Update N→N+1 pass trên 3 nền tảng | e2e máy sạch |

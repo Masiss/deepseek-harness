@@ -427,6 +427,8 @@ DSH_DESKTOP_PROJECT_DIR=$HOME/.dsh/profiles/web \
 | D27 | Linux phát hành dạng **AppImage**: ảnh read-only nên profile seed vào `$DSH_HOME/desktop-project` ở lần chạy đầu; `AppRun` giữ hợp đồng env của tree (thêm `DSH_CLIENT_VERSION` vì telemetry đọc nó) |
 | D26 | Update: manifest tự mô tả theo `platform-arch`, tải + verify sha256/size, cài bằng **rename nguyên tử** lên `$APPIMAGE`; Q3 = **AppImage self-update**, gói `.deb` để trình quản lý gói (`unsupported`) |
 | D22 | Welcome/onboarding v1 = **không tới được**: cửa sổ welcome là tài liệu native riêng cần copy của `locale.ts` (TS) và luồng đăng nhập Platform. Không chép choreography `hasApiKey` của `welcome-backend.ts` sang Host (sẽ là nhà thứ hai) |
+| D30 | **Engine Office đi theo component on-demand** (ADR-0008 mở rộng): `libreoffice-kit` + `libreoffice-kit-wasm` (144 MB) nằm trong archive component, không trong payload lõi. Loader trỏ `@deepseek-ai/libreoffice-kit` (và subpath `package.json`, `cli`) vào bản đã cài, đọc từ `$DSH_HOME/components/current.json`; plugin `office-to-pdf` trong profile vẫn import được. Payload Python được **di chuyển** ra khỏi primary runtime sang `.office-python` trong build tree để archive dựng lại được khi engine đổi |
+| D31 | **Ngân sách kích thước được đặt lại (A3′)**: artifact tải về ≤ 105 MB (AppImage/.deb/.rpm) và cây cài đặt ≤ 400 MB. Ngưỡng cũ "cài đặt ≤ 105 MB" bất khả thi: Node 24.21 stripped một mình đã 103,5 MB, phần còn lại là chính các package của harness |
 | D29 | Provider native của Desktop nằm trong **một crate napi-rs duy nhất** `native/dsh-native` (D4): PTY (`portable-pty`), flock của session lease, binding `execve`/`fcntl` của bootstrap, và pipeline ảnh (`image` + `zune-png` + `fast_image_resize` + libwebp tĩnh). Cùng crate build binary `landlock-run` (UAPI Landlock viết thẳng trong Rust). Thay provider **không sửa `packages/`**: `apps/desktop-host/native/native-loader.mjs` đăng ký resolve hook trỏ `node-pty` → `node-pty.cjs`, `@deepseek-ai/node-addon-system/flock` → `flock.cjs`, `koffi` → `koffi.cjs`, `sharp` → `sharp.cjs`; launcher Tauri nạp hook bằng `--import` trước khi profile boot. Thiếu `.node` ⇒ hook no-op ⇒ payload giữ addon gốc ⇒ lane Electron không đổi |
 
 ## Số đo thật
@@ -684,6 +686,14 @@ Bộ giải mã PNG của crate `image` (dựa trên crate `png`) mất ~2,1 s c
 
 `sharp` báo `depth: 'ushort'`/`space: 'rgb16'` cho PNG 16-bit và `space: 'cmyk'` cho JPEG 4 kênh. Nếu hạ về 8-bit sRGB ngay lúc decode, ảnh 16-bit **được pass-through** (sai) và JPEG CMYK **được coi là hợp lệ** trong cache (sai). Số kênh của SOF JPEG cho biết CMYK; PNG 16-bit phải giữ buffer `u16` để báo đúng depth.
 
+### B35 — Payload Python có symlink **tuyệt đối** trỏ vào máy build
+
+`python-build-standalone` để lại `bin/python`, `bin/python3`, `lib/libpython3.12.so` là symlink tuyệt đối trỏ vào thư mục build. Tar reader của Host từ chối link rời khỏi thư mục giải nén ⇒ archive fail với `failure: "archive"`. Bước build phải **tương đối hoá** symlink (đổi thành tên file trong cùng thư mục) trước khi đóng gói.
+
+### B36 — Component phải dựng lại được sau khi payload Python rời primary runtime
+
+P6 chuyển Python khỏi primary runtime vào archive ⇒ lần prepare sau không còn Python để đóng gói lại, nên engine Office mới không vào được archive. Payload Python được giữ ở `.office-python` trong build tree (không thuộc release) và archive dựng lại từ đó mỗi lần prepare.
+
 ### B30 — `koffi` **có** dùng trên Linux, không chỉ Windows
 
 `packages/subprocess/subprocess-local/src/linux-execve.ts` (bootstrap một lần) bind `execve` + `fcntl` của libc qua koffi. Nếu prune koffi khỏi payload Linux mà chưa thay binding, bootstrap chết và terminal không bao giờ ra `READY`. Đã thay bằng crate Rust + shim `koffi.cjs` (chỉ nhận đúng hai signature, signature lạ thì báo lỗi tường minh).
@@ -707,6 +717,8 @@ Bộ giải mã PNG của crate `image` (dựa trên crate `png`) mất ~2,1 s c
 | M9 | Đo parity provider Rust cho PTY | P5-posix | **xong** — `native-pty-probe.sh`: `provider=rust`, `size="33 111"`, `write_echo=2`, `signal="SIGTERM"`; 546 test (`terminal` + `tool-bash-persistent` + `subprocess-local`) xanh khi chạy qua loader |
 | M10 | Đo parity provider Rust cho flock + execve | P5-posix | **xong** — `native-flock-probe.sh`: `flock_provider=rust`, `koffi_provider=rust`, `contention=EAGAIN/11/flock`, `fcntl=ok`, `execve-ok`; `lease.two-process.e2e.ts` xanh; payload Linux không còn `koffi`/`node-pty`/`system.node` |
 | M11 | Đo parity launcher Landlock Rust vs C | P5-posix | **xong** — `landlock-parity-probe.sh`: `parity=identical` trên 20 dòng ma trận (usage error, exit code, thông điệp, hiệu ứng ràng buộc); `landlock-sandbox-probe.sh`: read-only chặn ghi, `/dev/null` ghi được, workspace-write ghi được, `enforcement=full` |
+| M13 | Đo kích thước sau A3 (engine Office → component + strip) | A3 | **xong** — AppImage 90.966.520 B (86,7 MiB), .deb 70.182.036 B (66,9 MiB), .rpm 76.423.369 B (72,9 MiB), cây cài đặt 353.180.656 B (337 MiB); trước: 138/108/114 MB artifact, 546 MB cài đặt |
+| M14 | Xác minh .deb/.rpm sau A3 | A3 | **xong** — `deb-probe.sh`: cài + Host boot OK; `rpm-probe.sh`: `rpm -V` OK, `size=381M`, Host boot OK |
 | M12 | Đo parity provider Rust cho ảnh vs sharp | P5-posix | **xong** — `image-parity-probe.sh`: facts giống hệt 5/5 định dạng, WebP lệch 0–6% (ví dụ 734/724 B); 93 test `attachment-local` xanh trên provider Rust; resize+encode 198 ms so với sharp 99 ms (4000×3000); AppImage 138.004.984 B (131,6 MiB) sau khi bỏ `sharp` + `@img` |
 
 ## Câu hỏi mở
@@ -738,4 +750,5 @@ Bộ giải mã PNG của crate `image` (dựa trên crate `png`) mất ~2,1 s c
 | 2026-10-20 | P5-posix (1): crate napi-rs `native/dsh-native` thay `node-pty` bằng `portable-pty`; loader resolve hook `node-pty`; thêm D29, B25–B27 |
 | 2026-10-20 | P5-posix (2): crate `native/dsh-native` thêm flock của session lease và binding `execve`/`fcntl` (thay koffi trên Linux); payload Linux không còn `koffi`/`node-pty`/`system.node`; thêm B28–B30, M10 |
 | 2026-10-20 | P5-posix (3): launcher `landlock-run` bằng Rust (UAPI trực tiếp) thay bản C trong payload — ma trận hành vi giống hệt; thêm B31, M11 |
+| 2026-10-20 | A3: engine Office (144 MB) chuyển vào component on-demand; strip Node và module native; bỏ `sharp`/`@img`/`node-pty`/`koffi`/`system.node`; size gate `size-gate.sh`; artifact ≤ 105 MiB; thêm D30–D31, B35–B36, M13–M14 |
 | 2026-10-20 | P5-posix (4): pipeline ảnh bằng Rust thay `sharp` (decode `zune-png`, resize `fast_image_resize`, WebP libwebp tĩnh, JPEG zune) — facts giống hệt, WebP lệch 0–6%, 93 test `attachment-local` xanh; payload không còn `sharp`/`@img`; thêm B32–B34, M12 |

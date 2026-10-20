@@ -105,6 +105,8 @@ python="$home/components/versions/$version/runtime/dependencies/python/bin/pytho
 echo "installed_version=$version python_exec=$([ -x "$python" ] && echo yes || echo no)"
 echo "python_imports=$("$python" -c 'import numpy, pandas, openpyxl, docx, pptx, PIL, lxml' >/dev/null 2>&1 && echo ok || echo FAIL)"
 echo "composed_runtime_json=$([ -f "$home/components/versions/$version/runtime/runtime.json" ] && echo yes || echo no)"
+echo "composed_engine=$([ -f "$home/components/versions/$version/runtime/node_modules/@deepseek-ai/libreoffice-kit/lib/cli.js" ] && echo yes || echo no)"
+echo "bundle_engine=$([ -d "$root/dsh/node_modules/@deepseek-ai/libreoffice-kit-wasm" ] && echo present || echo absent)"
 echo "node_link=$(readlink "$home/components/versions/$version/runtime/dependencies/node")"
 stop_host
 

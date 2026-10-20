@@ -29,7 +29,7 @@
  * ```
  */
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { delimiter, dirname, join, relative, resolve } from 'node:path'
 import {
@@ -95,6 +95,21 @@ function manifestVersion(path: string, subject: string): string {
   return manifest.version
 }
 
+/**
+ * Strip the release binaries the payload ships.
+ * @param paths - Files to strip; missing files are skipped.
+ * @returns The files that were stripped.
+ */
+function stripReleaseBinaries(paths: readonly string[]): string[] {
+  const stripped: string[] = []
+  for (const path of paths) {
+    if (!existsSync(path)) continue
+    const result = spawnSync('strip', [path], { stdio: 'ignore' })
+    if (result.status === 0) stripped.push(path)
+  }
+  return stripped
+}
+
 /** Run the bundled pnpm under the bundled Node, in the given directory. */
 function runPnpm(pnpm: string, node: string, cwd: string, args: readonly string[]): Promise<void> {
   return new Promise((resolvePromise, reject) => {
@@ -154,21 +169,18 @@ async function main(): Promise<void> {
   // copies it into the composed runtime.
   const pythonDir = join(primaryRuntime, 'dependencies', 'python')
   const components = join(paths.root, 'components')
-  let officeComponent: BuiltOfficeComponent
+  let officeComponent: BuiltOfficeComponent | undefined
+  // The pruned Python payload leaves the primary runtime and waits beside the
+  // build tree, so the component archive can be packed again whenever the
+  // Office engine changes. The build tree is not part of the release.
+  const officePython = join(paths.root, '.office-python')
   if (existsSync(pythonDir)) {
     const pruned = prunePythonPayload(pythonDir)
     verifyPythonPayload(pythonDir)
     console.error(`linux runtime: pruned ${String(pruned.removed.length)} Python path(s), deduplicated library=${String(pruned.deduplicatedLibrary)}`)
-    mkdirSync(components, { recursive: true })
-    officeComponent = buildOfficeComponent({
-      pythonDir,
-      assetsDir: join(REPOSITORY_ROOT, 'packages', 'skill', 'skill-office', 'assets'),
-      outDir: components,
-      version: release.version,
-      target: name,
-    })
-    console.error(`linux runtime: office component ${officeComponent.file} (${String(officeComponent.bytes)} bytes)`)
-  } else {
+    rmSync(officePython, { recursive: true, force: true })
+    renameSync(pythonDir, officePython)
+  } else if (!existsSync(officePython)) {
     const published = join(components, 'components.json')
     if (!existsSync(published)) {
       throw new Error('linux runtime: the primary runtime has no Python payload and no published component')
@@ -203,6 +215,21 @@ async function main(): Promise<void> {
     readDesktopCorePackageSet(staging, release.version),
   )
   await runPnpm(pnpm, node, staging, [...pnpmFlags, 'install', '--prod', '--frozen-lockfile', '--trust-lockfile'])
+
+  // The Office component carries the Python payload, the Office skill assets,
+  // and the Office engine. The engine comes from the installed runtime tree,
+  // so the archive is packed once that tree exists.
+  if (officeComponent === undefined && existsSync(officePython)) {
+    officeComponent = buildOfficeComponent({
+      pythonDir: officePython,
+      assetsDir: join(REPOSITORY_ROOT, 'packages', 'skill', 'skill-office', 'assets'),
+      modulesDir: join(staging, 'node_modules'),
+      outDir: components,
+      version: release.version,
+      target: name,
+    })
+    console.error(`linux runtime: office component ${officeComponent.file} (${String(officeComponent.bytes)} bytes)`)
+  }
 
   // 3. Copy the resolved modules into the immutable runtime directory.
   const modules = join(staging, 'node_modules')
@@ -257,7 +284,18 @@ async function main(): Promise<void> {
   rmSync(project, { recursive: true, force: true })
   createPluginProfile(project)
 
-  // 5. Publish the launcher contract the shell reads.
+  // 5. Strip the release binaries the payload ships. Node and the native
+  // module carry symbols the runtime never reads; the Python payload keeps
+  // its symbols, because stripping that interpreter breaks its loader.
+  const stripped = stripReleaseBinaries([
+    join(primaryRuntime, 'dependencies', 'node', 'bin', 'node'),
+    join(paths.dsh, 'node_modules', DESKTOP_HOST_PACKAGE, 'native', 'dsh-native.node'),
+  ])
+  if (stripped.length > 0) {
+    console.error(`linux runtime: stripped ${stripped.length} release binary(ies)`)
+  }
+
+  // 6. Publish the launcher contract the shell reads.
   const bin = join(paths.runtime, 'bin')
   mkdirSync(bin, { recursive: true })
   rmSync(join(bin, 'node'), { force: true })

@@ -329,9 +329,11 @@ export class DesktopOfficeComponent {
       await symlink(join(this.primaryRuntime, 'dependencies', name), link, 'dir')
     }
     const python = join(runtime, 'dependencies', 'python', 'bin', 'python3')
+    const engine = join(runtime, 'node_modules', '@deepseek-ai', 'libreoffice-kit', 'lib', 'cli.js')
     try {
       await stat(python)
       await stat(join(root, 'office-skills'))
+      await stat(engine)
     } catch (error) {
       throw new ComponentFailure('archive', error)
     }

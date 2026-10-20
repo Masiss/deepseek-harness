@@ -143,6 +143,15 @@ describe.skipIf(process.platform === 'win32')('office component install', () => 
       { name: 'runtime/dependencies/python', type: 'dir' },
       { name: 'runtime/dependencies/python/bin', type: 'dir' },
       { name: 'runtime/dependencies/python/bin/python3', type: 'file', content: '#!/bin/sh\nexit 0\n', mode: 0o755 },
+      { name: 'runtime/node_modules', type: 'dir' },
+      { name: 'runtime/node_modules/@deepseek-ai', type: 'dir' },
+      { name: 'runtime/node_modules/@deepseek-ai/libreoffice-kit', type: 'dir' },
+      { name: 'runtime/node_modules/@deepseek-ai/libreoffice-kit/lib', type: 'dir' },
+      {
+        name: 'runtime/node_modules/@deepseek-ai/libreoffice-kit/lib/cli.js',
+        type: 'file',
+        content: 'export default {}\n',
+      },
       { name: 'office-skills', type: 'dir' },
       { name: 'office-skills/SKILL.md', type: 'file', content: '# office' },
     ]))
