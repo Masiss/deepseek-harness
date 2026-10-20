@@ -2,6 +2,8 @@
 
 Tài liệu này gộp **ADR** và **kế hoạch chi tiết theo phase**. Quy tắc làm việc: [`AGENTS.md`](AGENTS.md). Số đo và bẫy: [`MEMORY.md`](MEMORY.md).
 
+Kế hoạch **cắt nhỏ phần mềm** nằm riêng ở [`PLAN-SHRINK.md`](PLAN-SHRINK.md) và chỉ mở **sau khi** tài liệu này xanh.
+
 - Trạng thái: kế hoạch, chưa implement.
 - Ngày: 2026-10-19.
 - Phạm vi: chỉ `apps/desktop-tauri`, `native/dsh-native`, provider packages và glue tối thiểu.
