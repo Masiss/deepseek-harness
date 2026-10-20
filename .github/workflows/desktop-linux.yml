@@ -1,0 +1,68 @@
+name: Desktop Linux lane
+on:
+  pull_request:
+  push:
+    branches:
+      - chore/web-bun-migration
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    name: Build, check, and size-gate the Linux desktop payload
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Install dependencies
+        run: |
+          bun install --frozen-lockfile
+          pnpm install --frozen-lockfile
+
+      - name: Install the desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            desktop-file-utils \
+            rpm
+
+      - name: Build the workspace
+        run: bun run build
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Unit tests
+        run: bun run test
+
+      - name: Keyless recorded-session replay
+        run: bun run test:snapshot
+
+      - name: Pack the Linux payload
+        run: apps/desktop-tauri/scripts/pack-linux.sh linux-x64
+
+      - name: Pack the AppImage
+        run: apps/desktop-tauri/scripts/pack-appimage.sh linux-x64
+
+      - name: Size gate
+        run: apps/desktop-tauri/scripts/size-gate.sh linux-x64

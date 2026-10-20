@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 //! The Landlock launcher: self-restrict-then-exec, in Rust.
 //!
 //! The Landlock rung of a consuming sandbox seam, for Linux hosts where `bwrap`
