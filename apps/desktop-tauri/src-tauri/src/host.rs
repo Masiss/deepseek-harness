@@ -35,15 +35,20 @@ pub struct HostClient {
 }
 
 impl HostClient {
-    /// Spawn the Host and read frames until it reports `ready`.
+    /// Spawn the Host and report its authenticated Web URL when it is ready.
+    ///
+    /// The Host answers on its own thread, so the shell can show its window
+    /// before the Host is ready and navigate to the URL when it arrives.
     ///
     /// @param binary - Host executable or launcher script.
     /// @param args - positional arguments after the executable name.
-    /// @returns the client and the authenticated Web URL.
+    /// @param on_ready - called with the authenticated Web URL.
+    /// @returns the client.
     pub fn spawn(
         binary: &str,
         args: &[String],
-    ) -> Result<(Arc<Self>, String), Box<dyn std::error::Error>> {
+        on_ready: impl Fn(String) + Send + 'static,
+    ) -> Result<Arc<Self>, Box<dyn std::error::Error>> {
         let mut child = Command::new(binary)
             .args(args)
             .stdin(Stdio::piped())
@@ -63,7 +68,7 @@ impl HostClient {
 
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
-        let url = loop {
+        loop {
             line.clear();
             if reader.read_line(&mut line)? == 0 {
                 return Err("desktop host closed before reporting a URL".into());
@@ -75,7 +80,8 @@ impl HostClient {
                         .get("url")
                         .and_then(Value::as_str)
                         .ok_or("desktop host ready frame has no URL")?;
-                    break url.to_owned();
+                    on_ready(url.to_owned());
+                    break;
                 }
                 Some("fatal") => {
                     let message = frame
@@ -86,11 +92,11 @@ impl HostClient {
                 }
                 _ => {}
             }
-        };
+        }
 
         let dispatch = Arc::clone(&client);
         std::thread::spawn(move || HostClient::read_frames(&dispatch, reader));
-        Ok((client, url))
+        Ok(client)
     }
 
     /// Give the reader thread an application handle for native update dialogs.

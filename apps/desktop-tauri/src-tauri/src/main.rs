@@ -425,17 +425,16 @@ fn main() {
         })
         .setup(|app| {
             let (binary, args) = host_command()?;
-            let (host, url) = HostClient::spawn(&binary, &args)?;
-            report_startup("host-url");
-            host.attach(app.handle().clone());
-            app.manage(AppState { host });
 
-            let target = tauri::Url::parse(&url)?;
-            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(target))
-                .on_page_load(|_, payload| {
-                    if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
-                        report_startup("page-load-finished");
-                    }
+            // The window shows the bundled start page first, so the application
+            // is on screen while the Host boots. The Host's URL arrives later
+            // and replaces the start page.
+            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App(PathBuf::from("index.html")))
+                .on_page_load(move |_, payload| {
+                    report_startup(match payload.event() {
+                        tauri::webview::PageLoadEvent::Started => "page-load-started",
+                        tauri::webview::PageLoadEvent::Finished => "page-load-finished",
+                    });
                 })
                 .title(PRODUCT)
                 .inner_size(1280.0, 860.0)
@@ -443,6 +442,24 @@ fn main() {
                 .theme(None)
                 .build()?;
             report_startup("window-created");
+
+            let handle = app.handle().clone();
+            let splash = window.clone();
+            let host = HostClient::spawn(&binary, &args, move |url| {
+                report_startup("host-url");
+                match tauri::Url::parse(&url) {
+                    Ok(target) => {
+                        if let Err(error) = splash.navigate(target) {
+                            eprintln!("desktop shell: navigation to the Host failed: {error}");
+                        }
+                    }
+                    Err(error) => eprintln!("desktop shell: the Host URL is not a URL: {error}"),
+                }
+            })?;
+            host.attach(handle.clone());
+            app.manage(AppState { host });
+
+            let window = window.clone();
             let hide_target = window.clone();
             window.on_window_event(move |event| {
                 if let WindowEvent::CloseRequested { api, .. } = event {

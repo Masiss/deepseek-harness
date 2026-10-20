@@ -66,13 +66,21 @@ env -i PATH=/usr/bin:/bin HOME="$work/home" TMPDIR="$work/tmp" \
   "$shell" > "$work/out" 2> "$work/err" &
 shell_pid=$!
 
-for _ in $(seq 1 200); do
+for _ in $(seq 1 300); do
   grep -q '"event":"page-load-finished"' "$work/err" 2>/dev/null && break
   kill -0 "$shell_pid" 2>/dev/null || break
   sleep 0.1
 done
 
 echo "RESULT milestones=$(grep -c '"event"' "$work/err" 2>/dev/null || echo 0)"
+# The application the Host serves must answer on the URL the shell navigated
+# to; the start page alone would not prove the desktop lane works.
+url=$(grep -o 'http://127\.0\.0\.1:[0-9]*/?token=[A-Za-z0-9_-]*' "$work/err" 2>/dev/null | head -1)
+base=$(printf '%s' "$url" | sed -E 's#.*:([0-9]+)/.*#http://127.0.0.1:\1#')
+if [ -n "$url" ]; then
+  curl -s -L -c "$work/cookies" -b "$work/cookies" -o /dev/null "$url"
+  echo "RESULT bridge=$(curl -s -m 20 -b "$work/cookies" -H 'content-type: application/json' -X POST "$base/__dsh-desktop/updates-status" -d null 2>/dev/null | head -c 120)"
+fi
 grep -o '{"event":"[^"]*","ms":[0-9]*}' "$work/err" 2>/dev/null | while read -r line; do
   echo "MILESTONE $line"
 done

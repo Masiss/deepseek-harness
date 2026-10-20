@@ -690,6 +690,10 @@ Bộ giải mã PNG của crate `image` (dựa trên crate `png`) mất ~2,1 s c
 
 Harness snapshot chạy agent trong một thư mục tạm; nếu thư mục tạm nằm **trong repo** (ví dụ `TMPDIR=apps/desktop/.desktop-build/tmp`), phần dò hướng dẫn đi ngược lên tìm thấy `AGENTS.md` của repo và chèn thêm một message `agent-instructions` vào transcript ⇒ **173 test snapshot đỏ** dù không có thay đổi nào trong sản phẩm. Đặt `TMPDIR` ngoài repo (ví dụ `/tmp/…`) thì lane xanh trở lại. Đừng sửa fixture để dập triệu chứng này.
 
+### B39 — Start page của Tauri: `WebviewUrl::App` + `navigate`, và Host phải spawn không chặn
+
+Cửa sổ start: dựng bằng `WebviewUrl::App(PathBuf::from("index.html"))` (Tauri nhúng `frontendDist` vào binary ✓ nên không cần đóng gói thêm), rồi `window.navigate(url)` khi Host báo `ready`. `HostClient::spawn` phải **không chặn**: nó đọc frame `ready` trên một thread riêng và gọi callback `on_ready` (URL) — nếu `setup()` chặn chờ URL thì event loop không chạy ⇒ start page không bao giờ vẽ. Nhánh `on_page_load` phải báo **mọi** sự kiện (`Started`/`Finished`): nếu điều hướng tới URL xảy ra trước khi trang start nạp xong, sự kiện `Finished` đầu tiên thuộc về trang ứng dụng chứ không phải trang start.
+
 ### B37 — Đo "first paint" của app Tauri: cần weston headless, và milestone phải có mốc thời gian thật
 
 `registerHooks`/`LazyLock` trong Rust khởi tạo **lần dùng đầu tiên** ⇒ mốc `Instant` phải được ép (`LazyLock::force`) ở đầu `main()`, nếu không mọi milestone báo 0 ms. Weston headless tạo socket `wayland-<N>` (không phải luôn `wayland-0`) và đường dẫn socket phải **≤ 108 byte** ⇒ thư mục làm việc phải ngắn (dùng `/tmp` riêng của sandbox, không dùng đường dẫn cây build). Shell cần `DSH_DESKTOP_HOST_BIN` (không có thì spawn Host fail) và profile đã seed sẵn (không đo lần chạy đầu).
@@ -738,7 +742,7 @@ Mọi thay đổi còn lại nằm ở L1 (thêm mới): `apps/desktop-tauri/**`
 | M10 | Đo parity provider Rust cho flock + execve | P5-posix | **xong** — `native-flock-probe.sh`: `flock_provider=rust`, `koffi_provider=rust`, `contention=EAGAIN/11/flock`, `fcntl=ok`, `execve-ok`; `lease.two-process.e2e.ts` xanh; payload Linux không còn `koffi`/`node-pty`/`system.node` |
 | M11 | Đo parity launcher Landlock Rust vs C | P5-posix | **xong** — `landlock-parity-probe.sh`: `parity=identical` trên 20 dòng ma trận (usage error, exit code, thông điệp, hiệu ứng ràng buộc); `landlock-sandbox-probe.sh`: read-only chặn ghi, `/dev/null` ghi được, workspace-write ghi được, `enforcement=full` |
 | M16 | Đọc session cũ + transcript diff (A8/A9) | A8/A9 | **A8 đạt**: `session-read-probe.sh` đọc `~/.dsh/sessions` thật → 7 session (5 `.v4` + 2 legacy `migration-required`), `list_ok=1 list_items=7`. **A9 đạt phần keyless**: `test:snapshot` 211/211 + `test:expected` 122/122 xanh. Phần model thật còn mở (không có key) |
-| M15 | Đo cold start của shell (A5) | A5 | **xong — chưa đạt ngân sách** — `cold-start-probe.sh` (weston headless trong sandbox): `host-url` 1529–2332 ms · `window-created` +191–232 ms · `page-load-finished` **4358–5084 ms** (3 lần chạy) |
+| M15 | Đo cold start của shell (A5) | A5 | **xong — sau start page: 2722–3186 ms** (weston headless trong sandbox; `window-created` 131–259 ms · `host-url` 1343–1810 ms · `page-load-finished` 2722–3186 ms; bridge trả `{"phase":"idle"}`). Trước start page: 4358–5084 ms ⇒ −40%. Vẫn chưa đạt ngân sách 1,5 s: đường găng còn lại là thời gian tải bundle client |
 | M13 | Đo kích thước sau A3 (engine Office → component + strip) | A3 | **xong** — AppImage 90.966.520 B (86,7 MiB), .deb 70.182.036 B (66,9 MiB), .rpm 76.423.369 B (72,9 MiB), cây cài đặt 353.180.656 B (337 MiB); trước: 138/108/114 MB artifact, 546 MB cài đặt |
 | M14 | Xác minh .deb/.rpm sau A3 | A3 | **xong** — `deb-probe.sh`: cài + Host boot OK; `rpm-probe.sh`: `rpm -V` OK, `size=381M`, Host boot OK |
 | M12 | Đo parity provider Rust cho ảnh vs sharp | P5-posix | **xong** — `image-parity-probe.sh`: facts giống hệt 5/5 định dạng, WebP lệch 0–6% (ví dụ 734/724 B); 93 test `attachment-local` xanh trên provider Rust; resize+encode 198 ms so với sharp 99 ms (4000×3000); AppImage 138.004.984 B (131,6 MiB) sau khi bỏ `sharp` + `@img` |
@@ -772,6 +776,7 @@ Mọi thay đổi còn lại nằm ở L1 (thêm mới): `apps/desktop-tauri/**`
 | 2026-10-20 | P5-posix (1): crate napi-rs `native/dsh-native` thay `node-pty` bằng `portable-pty`; loader resolve hook `node-pty`; thêm D29, B25–B27 |
 | 2026-10-20 | P5-posix (2): crate `native/dsh-native` thêm flock của session lease và binding `execve`/`fcntl` (thay koffi trên Linux); payload Linux không còn `koffi`/`node-pty`/`system.node`; thêm B28–B30, M10 |
 | 2026-10-20 | P5-posix (3): launcher `landlock-run` bằng Rust (UAPI trực tiếp) thay bản C trong payload — ma trận hành vi giống hệt; thêm B31, M11 |
+| 2026-10-20 | A5: thêm start page (cửa sổ mở ngay, webview chạy song song với Host, điều hướng khi `ready`) — first paint 4,4–5,1 s → **2,7–3,2 s**; thêm B39 |
 | 2026-10-20 | A8/A9: đọc session cũ thật (7 session, `list_ok=1`) + transcript diff không cần key (snapshot 211/211, expected 122/122); thêm M16, B38 |
 | 2026-10-20 | A5: đo cold start bằng weston headless trong sandbox (shell báo milestone JSON) — 4,4–5,1 s tới `page-load-finished`, **chưa đạt** ngân sách 1,5 s; thêm M15, B37 |
 | 2026-10-20 | Audit toàn diện: A1–A10 được kiểm lại bằng bằng chứng chạy được; 3 lỗi `test:web:built` chứng minh **có sẵn** (checkout `f8d5be74c2^` → vẫn đỏ); danh sách file L2 được ghi; mục A5/A6/A9 ghi rõ điều kiện đóng |
