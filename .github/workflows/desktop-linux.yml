@@ -54,6 +54,11 @@ jobs:
       - name: Lint
         run: bun run lint
 
+      # The shell's copy is generated from the Electron shell's locale, so the
+      # generated Rust module must match the source it derives from.
+      - name: Check the generated shell copy
+        run: bun apps/desktop-tauri/scripts/generate-locale.ts --check
+
       # The repository-wide suite belongs to the upstream CI, which shards it
       # across runners; this lane covers the packages the desktop fork touches
       # and the desktop shell itself.

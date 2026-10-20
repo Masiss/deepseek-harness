@@ -10,6 +10,7 @@
 //! state once before hiding. Relaunching always surfaces the running window.
 
 mod host;
+mod locale;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -52,7 +53,7 @@ fn report_host_failure(app: &AppHandle, reported: &AtomicBool, reason: String) {
     let handle = app.clone();
     app.dialog()
         .message(reason)
-        .title(format!("{PRODUCT} cannot start"))
+        .title(locale::text("startupFailed"))
         .kind(MessageDialogKind::Error)
         .buttons(MessageDialogButtons::Ok)
         .show(move |_| {
@@ -313,12 +314,12 @@ fn request_quit(app: &AppHandle) {
 
     let handle = app.clone();
     app.dialog()
-        .message("Tasks are still running. Quit DeepSeek Harness anyway?")
-        .title(format!("Quit {PRODUCT}"))
+        .message(locale::text("quitActiveTasks"))
+        .title(locale::text("quitTitle"))
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom(
-            "Quit".to_owned(),
-            "Cancel".to_owned(),
+            locale::text("quit").to_owned(),
+            locale::text("cancel").to_owned(),
         ))
         .show(move |confirmed| {
             if confirmed {

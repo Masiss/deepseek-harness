@@ -165,15 +165,15 @@ impl HostClient {
         let Some(app) = self.app.lock().ok().and_then(|slot| slot.clone()) else { return };
         let (title, message, confirm) = if action == "install" {
             (
-                format!("DeepSeek Harness {version} is ready"),
-                format!("Restart the application to install version {version}?"),
-                "Restart",
+                crate::locale::text("updateDownloadedTitle").replace("{version}", version),
+                crate::locale::text("updateDownloadedDetail").to_owned(),
+                crate::locale::text("updateAcknowledge"),
             )
         } else {
             (
-                format!("DeepSeek Harness {version} is available"),
-                format!("Download version {version}? It is installed after you confirm a restart."),
-                "Download",
+                crate::locale::text("updateAvailable").replace("{version}", version),
+                crate::locale::text("updateDetail").to_owned(),
+                crate::locale::text("updateDownload"),
             )
         };
         let client = Arc::clone(self);
@@ -183,7 +183,7 @@ impl HostClient {
             .kind(MessageDialogKind::Info)
             .buttons(MessageDialogButtons::OkCancelCustom(
                 confirm.to_owned(),
-                "Cancel".to_owned(),
+                crate::locale::text("updateLater").to_owned(),
             ))
             .show(move |accepted| {
                 let _ = client.send(&json!({
