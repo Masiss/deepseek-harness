@@ -60,19 +60,52 @@ async function readEntry(handle: FileHandle, offset: number, size: number): Prom
   return buffer
 }
 
+/** Budgets one extraction may spend, so a malformed archive cannot fill the disk. */
+export interface TarLimits {
+  /** Total bytes the entries may write. */
+  readonly totalBytes: number
+  /** Number of entries the archive may hold. */
+  readonly entries: number
+  /** Deepest path the archive may name. */
+  readonly depth: number
+  /** Largest single file the archive may hold. */
+  readonly fileBytes: number
+}
+
+/**
+ * The budget the component extraction runs with.
+ *
+ * The Office component unpacks a Python runtime and the Office engine, so the
+ * ceiling leaves room for them while still bounding a decompression bomb.
+ */
+export const DEFAULT_TAR_LIMITS: TarLimits = {
+  totalBytes: 1024 * 1024 * 1024,
+  entries: 200_000,
+  depth: 64,
+  fileBytes: 512 * 1024 * 1024,
+}
+
 /**
  * Extract one tar archive into an empty directory.
  *
  * @param archive - Path to the uncompressed tar file.
  * @param destination - Existing directory the entries are written below.
+ * @param limits - Budget the extraction may spend.
  * @returns Resolves after every entry is written and its mode applied.
- * @throws When an entry escapes the destination, or its type is not supported.
+ * @throws When an entry escapes the destination, its type is not supported, or
+ *   the archive exceeds its budget.
  */
-export async function extractTar(archive: string, destination: string): Promise<void> {
+export async function extractTar(
+  archive: string,
+  destination: string,
+  limits: TarLimits = DEFAULT_TAR_LIMITS,
+): Promise<void> {
   const root = resolve(destination)
   const handle = await open(archive, 'r')
   try {
     let offset = 0
+    let entries = 0
+    let totalBytes = 0
     let pendingPath: string | undefined
     let pendingLink: string | undefined
     for (;;) {
@@ -87,6 +120,11 @@ export async function extractTar(archive: string, destination: string): Promise<
       const mode = octal(header, 100, 8) & 0o777
       const dataOffset = offset + BLOCK
       offset = dataOffset + Math.ceil(size / BLOCK) * BLOCK
+      entries += 1
+      totalBytes += size
+      if (entries > limits.entries) throw new Error('desktop components: the archive holds too many entries')
+      if (totalBytes > limits.totalBytes) throw new Error('desktop components: the archive exceeds its size budget')
+      if (size > limits.fileBytes) throw new Error('desktop components: an archive entry is too large')
 
       if (type === 'x') {
         const records = paxRecords(await readEntry(handle, dataOffset, size))
@@ -108,6 +146,7 @@ export async function extractTar(archive: string, destination: string): Promise<
       pendingLink = undefined
       if (entryPath === '' || entryPath === '.' || entryPath === './') continue
       if (!inside(root, entryPath)) throw new Error(`desktop components: archive entry escapes the destination: ${entryPath}`)
+      if (entryPath.split('/').length > limits.depth) throw new Error(`desktop components: archive entry is nested too deeply: ${entryPath}`)
       const target = resolve(root, entryPath)
 
       if (type === '5') {

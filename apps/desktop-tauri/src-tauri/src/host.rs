@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -32,22 +32,30 @@ pub struct HostClient {
     next_request: AtomicU64,
     /// Application handle for user-facing update decisions; attached after spawn.
     app: Mutex<Option<AppHandle>>,
+    /// Whether the Host reported its authenticated Web URL.
+    ready: AtomicBool,
+    /// Set when the Host confirms its shutdown; the process exits right after.
+    shutdown_complete: (Mutex<bool>, Condvar),
 }
 
 impl HostClient {
     /// Spawn the Host and report its authenticated Web URL when it is ready.
     ///
-    /// The Host answers on its own thread, so the shell can show its window
-    /// before the Host is ready and navigate to the URL when it arrives.
+    /// The Host answers on its own thread, so the shell shows its window before
+    /// the Host is ready and navigates to the URL when it arrives. A Host that
+    /// fails or never answers reaches `on_failure` instead of blocking the
+    /// shell.
     ///
     /// @param binary - Host executable or launcher script.
     /// @param args - positional arguments after the executable name.
     /// @param on_ready - called with the authenticated Web URL.
+    /// @param on_failure - called with the reason the Host cannot serve.
     /// @returns the client.
     pub fn spawn(
         binary: &str,
         args: &[String],
         on_ready: impl Fn(String) + Send + 'static,
+        on_failure: impl Fn(String) + Send + 'static,
     ) -> Result<Arc<Self>, Box<dyn std::error::Error>> {
         let mut child = Command::new(binary)
             .args(args)
@@ -64,39 +72,23 @@ impl HostClient {
             pending: Mutex::new(HashMap::new()),
             next_request: AtomicU64::new(1),
             app: Mutex::new(None),
+            ready: AtomicBool::new(false),
+            shutdown_complete: (Mutex::new(false), Condvar::new()),
         });
 
-        let mut reader = BufReader::new(stdout);
-        let mut line = String::new();
-        loop {
-            line.clear();
-            if reader.read_line(&mut line)? == 0 {
-                return Err("desktop host closed before reporting a URL".into());
-            }
-            let Some(frame) = parse_frame(&line) else { continue };
-            match frame.get("type").and_then(Value::as_str) {
-                Some("ready") => {
-                    let url = frame
-                        .get("url")
-                        .and_then(Value::as_str)
-                        .ok_or("desktop host ready frame has no URL")?;
-                    on_ready(url.to_owned());
-                    break;
-                }
-                Some("fatal") => {
-                    let message = frame
-                        .get("message")
-                        .and_then(Value::as_str)
-                        .unwrap_or("unknown failure");
-                    return Err(format!("desktop host failed: {message}").into());
-                }
-                _ => {}
-            }
-        }
-
         let dispatch = Arc::clone(&client);
-        std::thread::spawn(move || HostClient::read_frames(&dispatch, reader));
+        let reader = BufReader::new(stdout);
+        std::thread::spawn(move || {
+            HostClient::read_frames(&dispatch, reader, on_ready, on_failure);
+        });
         Ok(client)
+    }
+
+    /// Whether the Host reported its authenticated Web URL.
+    ///
+    /// @returns true once the Host is ready to serve.
+    pub fn ready(&self) -> bool {
+        self.ready.load(Ordering::SeqCst)
     }
 
     /// Give the reader thread an application handle for native update dialogs.
@@ -109,35 +101,56 @@ impl HostClient {
     }
 
     /// Drain frames for the rest of the Host lifetime.
-    fn read_frames(self: &Arc<Self>, mut reader: BufReader<ChildStdout>) {
+    fn read_frames(
+        self: &Arc<Self>,
+        mut reader: BufReader<ChildStdout>,
+        on_ready: impl Fn(String) + Send + 'static,
+        on_failure: impl Fn(String) + Send + 'static,
+    ) {
         let mut line = String::new();
         loop {
             line.clear();
             match reader.read_line(&mut line) {
-                Ok(0) | Err(_) => break,
+                Ok(0) | Err(_) => {
+                    if !self.ready.load(Ordering::SeqCst) {
+                        on_failure("the Host stopped before it was ready".to_owned());
+                    }
+                    break;
+                }
                 Ok(_) => {
                     let Some(frame) = parse_frame(&line) else { continue };
                     match frame.get("type").and_then(Value::as_str) {
-                        Some("fatal") => eprintln!("desktop host fatal: {}", line.trim()),
+                        Some("ready") => {
+                            let Some(url) = frame.get("url").and_then(Value::as_str) else {
+                                on_failure("the Host reported readiness without a URL".to_owned());
+                                break;
+                            };
+                            self.ready.store(true, Ordering::SeqCst);
+                            on_ready(url.to_owned());
+                        }
+                        Some("fatal") => {
+                            let message = frame
+                                .get("message")
+                                .and_then(Value::as_str)
+                                .unwrap_or("unknown failure");
+                            on_failure(format!("the Host failed: {message}"));
+                            break;
+                        }
+                        Some("shutdown-complete") => {
+                            let (lock, condvar) = &self.shutdown_complete;
+                            if let Ok(mut done) = lock.lock() {
+                                *done = true;
+                                condvar.notify_all();
+                            }
+                        }
                         Some("update-prompt") => self.prompt_update(&frame),
                         Some("restart") => self.relaunch(),
                         _ => {}
-                    }
-                    if let Some(id) = frame.get("requestId").and_then(Value::as_u64) {
-                        let waiter = self
-                            .pending
-                            .lock()
-                            .ok()
-                            .and_then(|mut pending| pending.remove(&id));
-                        if let Some(waiter) = waiter {
-                            let _ = waiter.send(frame);
-                        }
                     }
                 }
             }
         }
     }
-
     /// Ask the user to authorize one update step.
     ///
     /// The answer travels back over the same channel with `promptId`, which is
@@ -255,17 +268,38 @@ impl HostClient {
     /// Ask the Host to shut down, then bound the wait and kill it if needed.
     pub fn shutdown(&self) {
         let _ = self.send(&json!({ "type": "shutdown" }));
+        // The Host confirms its shutdown once the profile is disposed, and the
+        // process exits right after. A forced kill before that confirmation can
+        // cut a session write short, so the confirmation decides the wait.
+        let confirmed = self.wait_for_shutdown(SHUTDOWN_GRACE);
         let Ok(mut child) = self.child.lock() else { return };
-        let steps = SHUTDOWN_GRACE.as_millis() / 100;
-        for _ in 0..steps {
-            match child.try_wait() {
-                Ok(Some(_)) => return,
-                Ok(None) => std::thread::sleep(Duration::from_millis(100)),
-                Err(_) => break,
+        if confirmed {
+            for _ in 0..10 {
+                match child.try_wait() {
+                    Ok(Some(_)) => return,
+                    Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+                    Err(_) => break,
+                }
             }
         }
         let _ = child.kill();
         let _ = child.wait();
+    }
+
+    /// Wait for the Host's shutdown confirmation.
+    ///
+    /// @param limit - How long to wait for the confirmation.
+    /// @returns whether the Host confirmed before the limit.
+    fn wait_for_shutdown(&self, limit: Duration) -> bool {
+        let (lock, condvar) = &self.shutdown_complete;
+        let Ok(guard) = lock.lock() else { return false };
+        if *guard {
+            return true;
+        }
+        let (guard, _) = condvar
+            .wait_timeout(guard, limit)
+            .unwrap_or_else(|error| error.into_inner());
+        *guard
     }
 }
 

@@ -66,8 +66,10 @@ env -i PATH=/usr/bin:/bin HOME="$work/home" TMPDIR="$work/tmp" \
   "$shell" > "$work/out" 2> "$work/err" &
 shell_pid=$!
 
+# The first finished load is the bundled start page, the second the
+# application the Host serves.
 for _ in $(seq 1 300); do
-  grep -q '"event":"page-load-finished"' "$work/err" 2>/dev/null && break
+  [ "$(grep -c '"event":"page-load-finished"' "$work/err" 2>/dev/null || echo 0)" -ge 2 ] && break
   kill -0 "$shell_pid" 2>/dev/null || break
   sleep 0.1
 done
@@ -84,7 +86,7 @@ fi
 grep -o '{"event":"[^"]*","ms":[0-9]*}' "$work/err" 2>/dev/null | while read -r line; do
   echo "MILESTONE $line"
 done
-if grep -q '"event":"page-load-finished"' "$work/err" 2>/dev/null; then
+if [ "$(grep -c '"event":"page-load-finished"' "$work/err" 2>/dev/null || echo 0)" -ge 2 ]; then
   echo "RESULT cold_start=OK"
 else
   echo "RESULT cold_start=FAIL"

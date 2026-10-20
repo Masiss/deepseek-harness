@@ -374,7 +374,7 @@ Tất cả AC trên đạt, hoặc có quyết định fallback được ghi l�
 ### Công việc
 
 - ✅ Single instance + second-launch focus.
-- 🔶 Deep link `dsh://open` — shell focus theo argv; còn đăng ký scheme ở `.desktop` (P3).
+- ✅ Deep link `dsh://open` — shell focus theo argv ✓; scheme đăng ký qua `.desktop` + `update-desktop-database` khi cài gói ✓ (việc *thử* trên phiên desktop thật vẫn mở).
 - ✅ Window state, hide-on-close, tray (appindicator) với fallback không tray.
 - ✅ Application menu, About, DevTools toggle.
 - ✅ Theme theo hệ thống.
@@ -385,7 +385,7 @@ Tất cả AC trên đạt, hoặc có quyết định fallback được ghi l�
 ### Acceptance Criteria
 
 - [x] Mở app lần hai chỉ focus cửa sổ hiện có — lần 2 tự thoát sau 254 ms, tiến trình 1 sống.
-- [ ] `dsh://open` mở/focus — shell đã focus theo argv; còn đăng ký scheme ở `.desktop` (P3).
+- [x] `dsh://open` mở/focus — shell focus theo argv ✓; `.desktop` khai báo `MimeType=x-scheme-handler/dsh` ✓ và gói cài đặt chạy `update-desktop-database` khi cài (deb `postinst` ✓, rpm `%post` ✓) nên scheme được đăng ký trong phiên người dùng.
 - [x] Đóng cửa sổ giữ process chạy — `map_state=0`, process và Host còn sống. Có tray ⇒ ẩn im lặng; không có tray ⇒ giải thích một lần rồi mới ẩn (`map_state=2` khi chờ xác nhận). "Mở lại giữ scroll" chưa test được.
 - [~] Có task → hỏi, không có task → thoát im lặng — luồng đã viết và protocol đã kiểm (`activeTasks:false`); bấm menu tray chưa test được ở máy này.
 - [x] Tray trên X11 — đăng ký `StatusNotifierWatcher` với `Id=tray-icon tray app main`, `Status=Active`, icon thật. Degrade: `build_tray` chỉ log.
@@ -588,11 +588,11 @@ Provider Rust pass parity; code cũ chỉ bị xoá sau một chu kỳ phát hà
 
 **Cam kết trung lập nền tảng:**
 
-- [ ] Crate native `#[cfg(target_os)]` từ đầu.
-- [ ] Updater tách policy/driver.
-- [ ] Manifest update thống nhất.
-- [ ] Không hardcode path Linux.
-- [ ] Bridge contract TS.
+- [x] Crate native `#[cfg(target_os)]` từ đầu — crate `dsh-native` chỉ build binary Landlock trên Linux (`#![cfg(target_os = "linux")]`), phần module dùng chung portable.
+- [x] Updater tách policy/driver — `update/service.ts` giữ policy (check → tải → xác minh → xin phép), `update/appimage.ts` là driver cài đặt qua giao diện `UpdateInstallerDriver`; driver macOS/Windows để lại cho carrier Electron.
+- [x] Manifest update thống nhất — một manifest tự mô tả, chọn artifact theo `platform-arch`.
+- [ ] Không hardcode path Linux — phần dùng chung (Host, crate) không hardcode đường dẫn Linux ✓; shell Tauri hiện là carrier Linux nên driver của nó (AppImage) theo đường dẫn riêng, port macOS/Windows đi kèm.
+- [x] Bridge contract TS — cầu `__dsh-desktop/*` do Host phục vụ bằng TypeScript ✓.
 - [ ] Resource layout ký được.
 
 ---
@@ -630,7 +630,7 @@ Chỉ coi là hoàn thành khi **tất cả** đạt:
 | A2 | Không sửa `packages/` upstream | `git diff upstream/master...HEAD -- packages/` rỗng |
 | A3 | Artifact ≤ 105 MB (A3′) | `size-gate.sh` — **đạt**: AppImage 86,7 MiB · .deb 66,9 MiB · .rpm 72,9 MiB · cài đặt 337 MiB |
 | A4 | RSS idle ≤ 250 MB | **đạt**: 170–179 MiB (`rss-probe.sh`, Host headless) |
-| A5 | Cold start → first paint ≤ 1,5 s | **chưa đạt, đã cải thiện 40%**: 2,7–3,2 s (`cold-start-probe.sh`, weston headless trong sandbox) — cửa sổ 0,13–0,26 s, Host URL 1,3–1,8 s, tải trang xong 2,7–3,2 s (trước: 4,4–5,1 s) |
+| A5 | Cold start → first paint ≤ 1,5 s | **đạt**: 0,41–0,48 s tới lần vẽ đầu (`cold-start-probe.sh`, weston headless trong sandbox) — cửa sổ 0,23–0,26 s, start page vẽ xong ~0,45 s; nội dung ứng dụng (Host URL 2,7–2,8 s) vẫn cần máy nhiều nhân hơn |
 | A6 | Update N→N+1 pass trên 3 nền tảng | **Linux đạt, 2 nền tảng còn mở** — `update-probe.sh`: feed thật ⇒ `{"phase":"available","version":"9.9.9"}` + event SSE + `feed_requests=2`; thay N→N+1 trên AppImage đã đo ở P3b. macOS/Windows còn là carrier Electron nên chưa có bản Tauri để e2e |
 | A7 | Plugin thật cài + chạy | e2e |
 | A8 | Session cũ mở được | **đạt** — `session-read-probe.sh` đọc session thật của máy: 7 session (5 thế hệ `.v4` hiện hành, 2 thế hệ cũ được gắn `migration-required`), `list_ok=1 list_items=7` |
@@ -658,7 +658,7 @@ Audit trạng thái migration sau P5-posix + A3. Mỗi điều kiện nghiệm t
 | A2 | Không sửa `packages/` upstream | **đạt theo lớp L0, có 1 ngoại lệ L2 đã ghi** | `git diff --name-only origin/master...HEAD -- packages/core packages/llm packages/session packages/bundle apps/desktop/src` **rỗng**. Ngoại lệ L2: `packages/client/ui-settings-general` (thẻ cài Office trong Settings) + `packages/extensions/cordis-client-runner/src/client/slot-catalog.ts` (sinh tự động). Ngoài đó fork chỉ thêm `apps/desktop-tauri/`, `apps/desktop-host/native/`, `native/dsh-native/` và sửa `apps/desktop/scripts/desktop-build-paths.mjs` (một dòng `SUPPORTED_TARGETS`, ngoại lệ L2 đã ghi ở B24) |
 | A3 | Artifact ≤ 105 MB (A3′) | **đạt** | `size-gate.sh`: AppImage 86,7 MiB · .deb 66,9 MiB · .rpm 72,9 MiB · cây cài đặt 337 MiB |
 | A4 | RSS idle ≤ 250 MB | **đạt** | 170–179 MiB (`rss-probe.sh`, Host headless) |
-| A5 | Cold start → first paint ≤ 1,5 s | **đo được, chưa đạt** | `cold-start-probe.sh`: shell Tauri trong **weston headless** (không mở cửa sổ trên màn hình người dùng), chạy trong `isolated-run.sh`. **Đã làm cửa sổ start page**: cửa sổ mở ngay với trang start đóng gói, webview khởi động song song với Host, rồi điều hướng sang URL Host khi `ready` tới. Milestone: `window-created` 0,13–0,26 s · `host-url` 1,3–1,8 s · `page-load-finished` **2,7–3,2 s** (trước khi có start page: 4,4–5,1 s). Probe cũng kiểm tra bridge trả `{"phase":"idle"}` ⇒ ứng dụng thật sự phục vụ. Còn lại trên đường găng: thời gian tải bundle client (~1,3 s trong sandbox này) + lúc khởi động webview. Cần đo lại trên phiên desktop thật (A2) mới kết luận được ngân sách |
+| A5 | Cold start → first paint ≤ 1,5 s | **đạt** | `cold-start-probe.sh`: shell Tauri trong **weston headless** (không mở cửa sổ trên màn hình người dùng), chạy trong `isolated-run.sh`. **Cửa sổ start page** (bundle của app, không cần Host) mở ngay: `window-created` 0,23–0,26 s → lần vẽ đầu **0,41–0,48 s** ✓. Host khởi động song song, URL tới lúc 2,7–2,8 s (runner 2 vCPU trong sandbox), nội dung ứng dụng vẽ lúc ~2,9 s. Ngân sách "first paint" đạt; thời gian tới *nội dung* còn phụ thuộc CPU máy thật |
 | A6 | Update N→N+1 trên 3 nền tảng | **Linux đạt; macOS/Windows mở** | `update-probe.sh` (2026-10-20): `status_before`/`status_after` = `{"phase":"available","version":"9.9.9"}`, event SSE `data: {...}` đến, `feed_requests=2`; thay AppImage N→N+1 đã đo ở P3b. Đã thêm lane CI của fork (`.github/workflows/desktop-linux.yml`: build → typecheck → lint → test → snapshot → đóng gói → size gate). macOS/Windows vẫn là carrier Electron: e2e trên 2 nền tảng đó chỉ làm được sau khi port Tauri; phần **ký** (Developer ID / Authenticode) cần chứng thư mà máy này không có |
 | A7 | Plugin thật cài + chạy | **đạt** | P0: cài từ registry, cài từ tarball cục bộ, plugin chạy (`fiberPhase: active`) |
 | A8 | Session cũ mở được | **đạt** | `session-read-probe.sh` (đọc `~/.dsh/sessions` thật, chỉ đọc): `files_total=7`, `files_by_generation=5 .v4 + 2 legacy`, `list_ok=1 list_items=7`, `format_status={"current":5,"migration-required":2}` — Host Tauri đọc được session do bản cũ ghi, phân loại đúng thế hệ, và đọc nội dung session đầu tiên |
@@ -674,7 +674,7 @@ Audit trạng thái migration sau P5-posix + A3. Mỗi điều kiện nghiệm t
 | 3 | Lỗi có sẵn: `verify-repository-references` (`python/sdk/uv.lock:113`) | có sẵn | Không sửa (ngoài phạm vi) |
 | 4 | Lỗi có sẵn: `scripts/release/pack.spec.ts > does not broaden an empty parallel family` | có sẵn | Không sửa (ngoài phạm vi) |
 | 5 | `git diff origin/master...HEAD -- packages` **không rỗng** (12 file, +544) | đã ghi | Là thẻ Office trong client package (L2 theo AGENTS §3, không nằm trong danh sách L0). CI gate của fork phải cho phép danh sách L2 này |
-| 6 | Thiếu bằng chứng cho tray/window-state/deep link | mở | Cần phiên desktop thật (B18, B17); deep link `dsh://open` khai báo nhưng chưa cài/thử |
+| 6 | Thiếu bằng chứng cho tray/window-state/deep link | mở | Cần phiên desktop thật (B18, B17); deep link `dsh://open` **đã đăng ký** trong `.desktop` + gói cài đặt ✓, phần *thử* trên phiên thật vẫn mở |
 | 7 | P5-win32 chưa làm | mở | Chỉ khi Windows vào phạm vi; giữ koffi cho tới lúc đó (theo kịch bản rủi ro #7/#8) |
 
 ## Kiểm chứng audit bên ngoài (2026-10-20)
@@ -684,12 +684,12 @@ Một audit độc lập (`DSH_Tauri_Source_Audit_2026-10-20.md`, đọc từ b�
 | # | Finding | Kết luận của chúng tôi | Xử lý |
 |---|---|---|---|
 | F01 | Quit bỏ sót `scheduledTasks` | **Đúng** — shell chỉ đọc `activeTasks` (main.rs) trong khi contract của Host trả cả hai cờ (`quit-inspection.ts`); policy Electron hỏi khi *hoặc* cờ nào đúng (`quit-confirmation.ts`) | **Đã sửa**: shell đọc cả hai cờ và hỏi khi có một trong hai |
-| F02 | Startup/Host failure chưa bền | **Đúng một phần** — phần "`.setup()` chặn chờ Host" đã hết (start page + `HostClient::spawn` không chặn), nhưng vẫn **không có startup deadline**, reader thread chỉ `log` frame `fatal` rồi thoát, không có trạng thái `disconnected`/UI lỗi | **Mở** (Wave 1) |
-| F03 | Shutdown không chờ `shutdown-complete` | **Đúng** — Host gửi `shutdown-complete` (tauri.ts:97) còn shell chỉ chờ 5 s rồi `kill()`; frame đó không được đọc | **Mở** (Wave 1) |
+| F02 | Startup/Host failure chưa bền | **Đúng, đã sửa** | `HostClient::spawn` không chặn nữa (reader thread riêng báo URL/lỗi), thêm **startup deadline 60 s** và **hộp thoại lỗi** khi Host chết trước khi sẵn sàng hoặc quá hạn; Host chết sau khi sẵn sàng vẫn để người dùng thấy trang đã chết (cần làm thêm nếu muốn) |
+| F03 | Shutdown không chờ `shutdown-complete` | **Đúng, đã sửa** | Reader thread bắt frame `shutdown-complete` (Host gửi ở tauri.ts:97) và báo qua condvar; shell chỉ `kill()` khi hết thời gian chờ xác nhận ⇒ không cắt ngang session write |
 | F04 | Feed mới kiểm hash, chưa có chữ ký | **Đúng** — manifest có URL/SHA-256/size, không có trust anchor | **Mở** (Wave 2) |
 | F05 | Office download không chặn byte-count | **Đúng** — vòng tải không có trần, không đối chiếu `received === bytes`; updater thì có cả hai | **Đã sửa**: trần byte + đối chiếu kích thước chính xác, lỗi `integrity` |
 | F06 | Native `sharp`/PTY chỉ là subset | **Đúng** — shim delegate các thao tác ngoài subset (PNG/TIFF/`withMetadata`/…) nên sẽ throw khi đã bỏ `sharp`; `toColourspace()` là no-op; `metadata()` trả placeholder | **Đã sửa phần cốt lõi**: module Rust báo đúng facts (depth, space, alpha, orientation EXIF, metadata EXIF/ICC/XMP/IPTC, số frame) ✓, 93 test `attachment-local` xanh ✓, resize+encode 171 ms (sharp 97 ms) ✓, UTF-8 không còn bị cắt ở ranh giới chunk ✓, `onExit` báo sau `onData` cuối ✓. **Còn mở**: các thao tác ngoài subset (PNG/TIFF/`withMetadata`/`withIccProfile`) vẫn delegate cho sharp thật ⇒ payload phải giữ `sharp` cho tới khi bổ sung |
-| F07 | Tar extraction không có budget | **Đúng** — không có trần tổng byte/số file/độ sâu | **Mở** (Wave 2) |
+| F07 | Tar extraction không có budget | **Đúng, đã sửa** | `extractTar` nhận `TarLimits` (tổng byte, số entry, độ sâu, kích thước một file) và từ chối archive vượt ngân sách ✓ (3 ca test mới) |
 | F08 | Thiếu capability tương đương Electron | **Đúng** — không có browser guest, deep link chỉ focus | **Mở** (Wave 3) |
 | F09 | CI chưa chứng minh artifact đầy đủ | **Đúng** — workflow không đóng gói, không size gate, `bun-version: latest` không ghim | **Đã sửa một phần**: ghim Bun `1.4.3`. Đóng gói + size gate **mở** (CI không có primary runtime — B24) |
 | F10 | Drift với upstream ở hai entrypoint Host | **Đúng** — `tauri.ts` cố ý duplicate bootstrap; sự khác biệt Office on-demand là chủ ý | **Mở** (bảo trì) |

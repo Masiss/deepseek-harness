@@ -14,7 +14,7 @@ mod host;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
@@ -36,6 +36,29 @@ static QUITTING: AtomicBool = AtomicBool::new(false);
 
 /// Start of the shell's own run, the reference every startup milestone reports.
 static STARTED: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+/// How long the shell waits for the Host to report its URL.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Tell the user that the Host cannot serve, once per failure.
+///
+/// The window keeps showing the start page, so a silent failure would look
+/// like a hung application.
+fn report_host_failure(app: &AppHandle, reported: &AtomicBool, reason: String) {
+    if reported.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    eprintln!("desktop shell: {reason}");
+    let handle = app.clone();
+    app.dialog()
+        .message(reason)
+        .title(format!("{PRODUCT} cannot start"))
+        .kind(MessageDialogKind::Error)
+        .buttons(MessageDialogButtons::Ok)
+        .show(move |_| {
+            let _ = &handle;
+        });
+}
 
 /// Report one startup milestone as a structured line.
 ///
@@ -449,17 +472,43 @@ fn main() {
 
             let handle = app.handle().clone();
             let splash = window.clone();
-            let host = HostClient::spawn(&binary, &args, move |url| {
-                report_startup("host-url");
-                match tauri::Url::parse(&url) {
-                    Ok(target) => {
-                        if let Err(error) = splash.navigate(target) {
-                            eprintln!("desktop shell: navigation to the Host failed: {error}");
+            let reported = Arc::new(AtomicBool::new(false));
+            let failure_handle = handle.clone();
+            let failure_reported = Arc::clone(&reported);
+            let host = HostClient::spawn(
+                &binary,
+                &args,
+                move |url| {
+                    report_startup("host-url");
+                    match tauri::Url::parse(&url) {
+                        Ok(target) => {
+                            if let Err(error) = splash.navigate(target) {
+                                eprintln!("desktop shell: navigation to the Host failed: {error}");
+                            }
                         }
+                        Err(error) => eprintln!("desktop shell: the Host URL is not a URL: {error}"),
                     }
-                    Err(error) => eprintln!("desktop shell: the Host URL is not a URL: {error}"),
+                },
+                move |reason| {
+                    report_host_failure(&failure_handle, &failure_reported, reason);
+                },
+            )?;
+
+            // A Host that never answers must not leave the window on the start
+            // page forever.
+            let watchdog_host = Arc::clone(&host);
+            let watchdog_handle = handle.clone();
+            let watchdog_reported = Arc::clone(&reported);
+            std::thread::spawn(move || {
+                std::thread::sleep(STARTUP_TIMEOUT);
+                if !watchdog_host.ready() {
+                    report_host_failure(
+                        &watchdog_handle,
+                        &watchdog_reported,
+                        "the Host did not become ready in time".to_owned(),
+                    );
                 }
-            })?;
+            });
             host.attach(handle.clone());
             app.manage(AppState { host });
 

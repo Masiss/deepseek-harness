@@ -65,6 +65,12 @@ profile packaged together. User data lives in \$DSH_HOME.
 mkdir -p %{buildroot}
 cp -a /rpm/stage/. %{buildroot}/
 
+%post
+# The desktop entry carries the `dsh://` scheme handler.
+if command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database || true
+fi
+
 %files
 %defattr(-,root,root,-)
 %attr(0755,root,root) /usr/bin/deepseek-harness

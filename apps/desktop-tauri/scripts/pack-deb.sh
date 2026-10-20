@@ -55,6 +55,18 @@ Description: DeepSeek Harness desktop application
  profile packaged together. User data lives in \$DSH_HOME.
 EOF
 
+# The desktop entry carries the `dsh://` scheme handler, so the package
+# refreshes the desktop database on install.
+cat > "$stage/DEBIAN/postinst" <<'EOF'
+#!/bin/sh
+set -e
+if [ "$1" = "configure" ] && command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database || true
+fi
+exit 0
+EOF
+chmod 0755 "$stage/DEBIAN/postinst"
+
 # The build host has no dpkg (this fork builds on Arch), so assemble the
 # ar archive the Debian format defines: debian-binary, control, then data.
 echo "pack-deb: packing $out"

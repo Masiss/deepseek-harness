@@ -121,6 +121,39 @@ describe('tar extraction', () => {
     mkdirSync(destination)
     await expect(extractTar(archive, destination)).rejects.toThrow('escapes')
   })
+
+  it('refuses an archive that exceeds its entry budget', async () => {
+    const root = scratch()
+    const archive = join(root, 'a.tar')
+    writeFileSync(archive, tarArchive([
+      { name: 'one', type: 'file', content: 'x' },
+      { name: 'two', type: 'file', content: 'x' },
+    ]))
+    const destination = join(root, 'out')
+    mkdirSync(destination)
+    await expect(extractTar(archive, destination, { totalBytes: 1024, entries: 1, depth: 8, fileBytes: 1024 }))
+      .rejects.toThrow('too many entries')
+  })
+
+  it('refuses an archive that exceeds its size budget', async () => {
+    const root = scratch()
+    const archive = join(root, 'a.tar')
+    writeFileSync(archive, tarArchive([{ name: 'big', type: 'file', content: 'x'.repeat(64) }]))
+    const destination = join(root, 'out')
+    mkdirSync(destination)
+    await expect(extractTar(archive, destination, { totalBytes: 16, entries: 8, depth: 8, fileBytes: 1024 }))
+      .rejects.toThrow('size budget')
+  })
+
+  it('refuses an entry nested deeper than the budget allows', async () => {
+    const root = scratch()
+    const archive = join(root, 'a.tar')
+    writeFileSync(archive, tarArchive([{ name: 'a/b/c/d', type: 'file', content: 'x' }]))
+    const destination = join(root, 'out')
+    mkdirSync(destination)
+    await expect(extractTar(archive, destination, { totalBytes: 1024, entries: 8, depth: 2, fileBytes: 1024 }))
+      .rejects.toThrow('nested too deeply')
+  })
 })
 
 describe.skipIf(process.platform === 'win32')('office component install', () => {
