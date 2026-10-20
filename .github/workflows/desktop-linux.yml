@@ -20,7 +20,9 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          # Pinned: a moving Bun version makes the lane's environment drift
+          # even though the lockfile freezes the dependencies.
+          bun-version: 1.4.3
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

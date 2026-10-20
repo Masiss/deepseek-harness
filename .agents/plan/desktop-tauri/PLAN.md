@@ -675,6 +675,27 @@ Audit trạng thái migration sau P5-posix + A3. Mỗi điều kiện nghiệm t
 | 6 | Thiếu bằng chứng cho tray/window-state/deep link | mở | Cần phiên desktop thật (B18, B17); deep link `dsh://open` khai báo nhưng chưa cài/thử |
 | 7 | P5-win32 chưa làm | mở | Chỉ khi Windows vào phạm vi; giữ koffi cho tới lúc đó (theo kịch bản rủi ro #7/#8) |
 
+## Kiểm chứng audit bên ngoài (2026-10-20)
+
+Một audit độc lập (`DSH_Tauri_Source_Audit_2026-10-20.md`, đọc từ bản public của nhánh tại `upstream/master...HEAD = 0/34, 137 file, +34.830/−678`) đã được kiểm lại từng finding trên source hiện tại. Kết quả: **9/12 đúng**, 3 đã lỗi thời do thay đổi của chính lane, và 4 finding đã sửa ngay.
+
+| # | Finding | Kết luận của chúng tôi | Xử lý |
+|---|---|---|---|
+| F01 | Quit bỏ sót `scheduledTasks` | **Đúng** — shell chỉ đọc `activeTasks` (main.rs) trong khi contract của Host trả cả hai cờ (`quit-inspection.ts`); policy Electron hỏi khi *hoặc* cờ nào đúng (`quit-confirmation.ts`) | **Đã sửa**: shell đọc cả hai cờ và hỏi khi có một trong hai |
+| F02 | Startup/Host failure chưa bền | **Đúng một phần** — phần "`.setup()` chặn chờ Host" đã hết (start page + `HostClient::spawn` không chặn), nhưng vẫn **không có startup deadline**, reader thread chỉ `log` frame `fatal` rồi thoát, không có trạng thái `disconnected`/UI lỗi | **Mở** (Wave 1) |
+| F03 | Shutdown không chờ `shutdown-complete` | **Đúng** — Host gửi `shutdown-complete` (tauri.ts:97) còn shell chỉ chờ 5 s rồi `kill()`; frame đó không được đọc | **Mở** (Wave 1) |
+| F04 | Feed mới kiểm hash, chưa có chữ ký | **Đúng** — manifest có URL/SHA-256/size, không có trust anchor | **Mở** (Wave 2) |
+| F05 | Office download không chặn byte-count | **Đúng** — vòng tải không có trần, không đối chiếu `received === bytes`; updater thì có cả hai | **Đã sửa**: trần byte + đối chiếu kích thước chính xác, lỗi `integrity` |
+| F06 | Native `sharp`/PTY chỉ là subset | **Đúng** — shim delegate các thao tác ngoài subset (PNG/TIFF/`withMetadata`/…) nên sẽ throw khi đã bỏ `sharp`; `toColourspace()` là no-op; `metadata()` trả placeholder | **Mở** (Wave 2) cho phần subset; **đã sửa** hai lỗi cụ thể: UTF-8 bị cắt ở ranh giới chunk (giữ đuôi chưa hoàn chỉnh) và thứ tự `onExit` trước `onData` cuối (báo exit sau khi reader đã ráo) |
+| F07 | Tar extraction không có budget | **Đúng** — không có trần tổng byte/số file/độ sâu | **Mở** (Wave 2) |
+| F08 | Thiếu capability tương đương Electron | **Đúng** — không có browser guest, deep link chỉ focus | **Mở** (Wave 3) |
+| F09 | CI chưa chứng minh artifact đầy đủ | **Đúng** — workflow không đóng gói, không size gate, `bun-version: latest` không ghim | **Đã sửa một phần**: ghim Bun `1.4.3`. Đóng gói + size gate **mở** (CI không có primary runtime — B24) |
+| F10 | Drift với upstream ở hai entrypoint Host | **Đúng** — `tauri.ts` cố ý duplicate bootstrap; sự khác biệt Office on-demand là chủ ý | **Mở** (bảo trì) |
+| F11 | Test isolation cần budget | **Đúng một phần** — `isolated-run.sh` có namespace/clearenv/ro-bind nhưng chưa có budget CPU/RAM/disk; loopback vẫn dùng chung | **Mở** (Wave 1) |
+| F12 | Coexistence Tauri/Electron trên cùng state | **Đúng** — single-instance của Tauri không bảo vệ profile khỏi Electron | **Mở** (Wave 2) |
+
+Ba finding đã lỗi thời khi kiểm chứng: F02 phần "`.setup()` chặn" (start page đã tách phần chờ), và các dòng trích dẫn trong audit lệch số dòng so với HEAD hiện tại (nhánh đã đi 35 commit).
+
 ## Việc còn lại theo thứ tự ưu tiên
 
 1. **A5** — đo first paint với weston headless trong sandbox (không mở cửa sổ trên màn hình người dùng).

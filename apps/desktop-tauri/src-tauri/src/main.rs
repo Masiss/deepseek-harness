@@ -253,14 +253,18 @@ fn close_to_background(app: &AppHandle) {
 
 /// Whether the Host reports interruptible work.
 ///
-/// An unreachable Host counts as active: the shell has no proof that a quit is
-/// safe, so it asks instead of discarding work.
+/// The Host answers with two flags: running work and armed scheduled
+/// reminders. Either one means quitting interrupts something the user can
+/// still see, so both are asked about. An unreachable Host counts as active:
+/// the shell has no proof that a quit is safe, so it asks instead of
+/// discarding work.
 fn host_has_active_tasks(state: &AppState) -> bool {
     match state.host.request("quit-inspection") {
-        Ok(frame) => frame
-            .get("activeTasks")
-            .and_then(Value::as_bool)
-            .unwrap_or(true),
+        Ok(frame) => {
+            let active = frame.get("activeTasks").and_then(Value::as_bool).unwrap_or(true);
+            let scheduled = frame.get("scheduledTasks").and_then(Value::as_bool).unwrap_or(true);
+            active || scheduled
+        }
         Err(error) => {
             eprintln!("desktop quit: {error}");
             true

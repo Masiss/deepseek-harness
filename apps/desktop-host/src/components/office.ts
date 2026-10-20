@@ -112,6 +112,7 @@ async function boundedText(response: Response, limit: number): Promise<string> {
  * @param fetchImpl - Fetch implementation.
  * @param signal - Deadline shared with the request.
  * @param onProgress - Receives bytes received so far.
+ * @param limit - Exact byte length the artifact must have.
  * @returns The lowercase SHA-256 of the received bytes.
  */
 async function download(
@@ -120,6 +121,7 @@ async function download(
   fetchImpl: NonNullable<DesktopOfficeComponentOptions['fetch']>,
   signal: AbortSignal,
   onProgress: (received: number) => void,
+  limit: number,
 ): Promise<string> {
   let response: Response
   try {
@@ -138,6 +140,9 @@ async function download(
       if (done) break
       hash.update(value)
       received += value.byteLength
+      // The artifact cannot be larger than the manifest says: stop before an
+      // endless or oversized body fills the disk.
+      if (received > limit) throw new ComponentFailure('integrity')
       let offset = 0
       while (offset < value.byteLength) {
         const { bytesWritten } = await out.write(value, offset, value.byteLength - offset)
@@ -151,6 +156,7 @@ async function download(
   } finally {
     await out.close()
   }
+  if (received !== limit) throw new ComponentFailure('integrity')
   return hash.digest('hex')
 }
 
@@ -272,7 +278,7 @@ export class DesktopOfficeComponent {
           id: 'office', installed: false, active: false, phase: 'downloading', version: artifact.version,
           percent: Math.max(0, Math.min(100, Math.floor((received / artifact.bytes) * 100))),
         })
-      })
+      }, artifact.bytes)
       if (digest !== artifact.sha256) throw new ComponentFailure('integrity')
       this.publish({ id: 'office', installed: false, active: false, phase: 'verifying', version: artifact.version, percent: 100 })
       await mkdir(staging, { recursive: true })

@@ -690,6 +690,10 @@ Bộ giải mã PNG của crate `image` (dựa trên crate `png`) mất ~2,1 s c
 
 Harness snapshot chạy agent trong một thư mục tạm; nếu thư mục tạm nằm **trong repo** (ví dụ `TMPDIR=apps/desktop/.desktop-build/tmp`), phần dò hướng dẫn đi ngược lên tìm thấy `AGENTS.md` của repo và chèn thêm một message `agent-instructions` vào transcript ⇒ **173 test snapshot đỏ** dù không có thay đổi nào trong sản phẩm. Đặt `TMPDIR` ngoài repo (ví dụ `/tmp/…`) thì lane xanh trở lại. Đừng sửa fixture để dập triệu chứng này.
 
+### B43 — Đọc output của PTY theo chunk sẽ cắt UTF-8; và exit phải báo sau khi reader ráo hết
+
+`String::from_utf8_lossy` trên từng chunk biến một code point bị cắt giữa hai lần đọc thành ký tự thay thế. Reader phải giữ đuôi chưa hoàn chỉnh và chỉ giải mã phần là trọn vẹn. Tương tự, frame `exit` phải báo **sau** khi reader đã ráo hết, nếu không người tiêu dùng có thể thấy exit trước output cuối. Cả hai đều là hợp đồng của `node-pty` mà provider Rust phải giữ.
+
 ### B42 — Lane CI không được gộp toàn bộ bộ test toàn repo trong một job
 
 Chạy `bun run test` (toàn repo) trong một job của runner 2 vCPU làm ca *process-bound* `packages/workflow/workflow-ptc` vượt thời gian mặc định (upstream chạy chính ca đó với `--testTimeout 90000`). CI của upstream chia bộ test theo nhiều runner. Lane của fork chỉ chạy các package bị đụng + desktop shell, còn bộ test toàn repo thuộc CI upstream.
@@ -789,6 +793,7 @@ Mọi thay đổi còn lại nằm ở L1 (thêm mới): `apps/desktop-tauri/**`
 | 2026-10-20 | P5-posix (1): crate napi-rs `native/dsh-native` thay `node-pty` bằng `portable-pty`; loader resolve hook `node-pty`; thêm D29, B25–B27 |
 | 2026-10-20 | P5-posix (2): crate `native/dsh-native` thêm flock của session lease và binding `execve`/`fcntl` (thay koffi trên Linux); payload Linux không còn `koffi`/`node-pty`/`system.node`; thêm B28–B30, M10 |
 | 2026-10-20 | P5-posix (3): launcher `landlock-run` bằng Rust (UAPI trực tiếp) thay bản C trong payload — ma trận hành vi giống hệt; thêm B31, M11 |
+| 2026-10-20 | Kiểm chứng audit bên ngoài (`DSH_Tauri_Source_Audit_2026-10-20.md`): 9/12 finding đúng, 3 lỗi thời, **đã sửa F01** (quit đọc cả `scheduledTasks`), **F05** (trần byte khi tải component Office), **F06** (UTF-8 bị cắt ở ranh giới chunk + thứ tự exit trước data cuối) và **F09 một phần** (ghim Bun 1.4.3); thêm mục kiểm chứng trong PLAN |
 | 2026-10-20 | A6: lane CI Linux cho fork (`.github/workflows/desktop-linux.yml`) + đo lại update check trên Linux; crate `dsh-native` gate binary Landlock theo `target_os`; thêm M17, B40 |
 | 2026-10-20 | A5: thêm start page (cửa sổ mở ngay, webview chạy song song với Host, điều hướng khi `ready`) — first paint 4,4–5,1 s → **2,7–3,2 s**; thêm B39 |
 | 2026-10-20 | A8/A9: đọc session cũ thật (7 session, `list_ok=1`) + transcript diff không cần key (snapshot 211/211, expected 122/122); thêm M16, B38 |

@@ -29,6 +29,8 @@ mod image;
 mod image_scan;
 #[cfg(test)]
 mod image_scan_tests;
+#[cfg(test)]
+mod pty_tests;
 
 /// Fork options the terminal service passes to `node-pty`.
 #[napi(object)]
@@ -55,6 +57,46 @@ pub struct Pty {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     paused: Arc<AtomicBool>,
+}
+
+/// The length of the leading bytes that form complete UTF-8 sequences.
+/// @param bytes - Bytes read so far.
+/// @returns The byte count that can be decoded without splitting a code point.
+fn utf8_complete_prefix(bytes: &[u8]) -> usize {
+    let mut index = bytes.len();
+    let mut inspected = 0;
+    while index > 0 && inspected < 4 {
+        index -= 1;
+        inspected += 1;
+        let byte = bytes[index];
+        if byte & 0b1100_0000 == 0b1000_0000 {
+            // A continuation byte: the sequence starts earlier.
+            continue;
+        }
+        let width = if byte < 0x80 {
+            1
+        } else if byte >= 0xF0 {
+            4
+        } else if byte >= 0xE0 {
+            3
+        } else {
+            2
+        };
+        let end = index + width;
+        if end > bytes.len() {
+            // The sequence is incomplete: keep it for the next read.
+            return index;
+        }
+        if bytes[index + 1..end]
+            .iter()
+            .all(|value| value & 0b1100_0000 == 0b1000_0000)
+        {
+            return end;
+        }
+        // Not a valid sequence: the lossy decoder reports it as it is.
+        return bytes.len();
+    }
+    bytes.len()
 }
 
 fn reason(error: impl std::fmt::Display) -> Error {
@@ -229,9 +271,15 @@ pub fn spawn(
     let master: Arc<Mutex<Box<dyn MasterPty + Send>>> = Arc::new(Mutex::new(pair.master));
     let paused = Arc::new(AtomicBool::new(false));
 
+    // The terminal's output is drained before the exit is reported, so a
+    // consumer never sees the exit ahead of the last output.
+    let (drained, drained_waiter) = std::sync::mpsc::channel::<()>();
     let reader_paused = Arc::clone(&paused);
     thread::spawn(move || {
         let mut buffer = [0u8; 8192];
+        // A read can end inside a UTF-8 sequence; the incomplete tail waits for
+        // the next read so a split code point is not decoded twice.
+        let mut pending: Vec<u8> = Vec::new();
         loop {
             while reader_paused.load(Ordering::Relaxed) {
                 thread::sleep(Duration::from_millis(5));
@@ -239,10 +287,12 @@ pub fn spawn(
             match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(read) => {
-                    let text = String::from_utf8_lossy(&buffer[..read]).into_owned();
-                    if on_data
-                        .call(Ok(text), ThreadsafeFunctionCallMode::NonBlocking)
-                        != Status::Ok
+                    pending.extend_from_slice(&buffer[..read]);
+                    let complete = utf8_complete_prefix(&pending);
+                    let text = String::from_utf8_lossy(&pending[..complete]).into_owned();
+                    pending.drain(..complete);
+                    if !text.is_empty()
+                        && on_data.call(Ok(text), ThreadsafeFunctionCallMode::NonBlocking) != Status::Ok
                     {
                         break;
                     }
@@ -250,6 +300,11 @@ pub fn spawn(
                 Err(_) => break,
             }
         }
+        if !pending.is_empty() {
+            let text = String::from_utf8_lossy(&pending).into_owned();
+            let _ = on_data.call(Ok(text), ThreadsafeFunctionCallMode::NonBlocking);
+        }
+        let _ = drained.send(());
     });
 
     thread::spawn(move || {
@@ -267,6 +322,7 @@ pub fn spawn(
                 signal: None,
             },
         };
+        let _ = drained_waiter.recv_timeout(Duration::from_secs(5));
         let _ = on_exit.call(Ok(exit), ThreadsafeFunctionCallMode::NonBlocking);
     });
 
