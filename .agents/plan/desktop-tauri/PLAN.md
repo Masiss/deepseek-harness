@@ -631,8 +631,8 @@ Chỉ coi là hoàn thành khi **tất cả** đạt:
 | A5 | Cold start → first paint ≤ 1,5 s | **chưa đạt**: 4,4–5,1 s (`cold-start-probe.sh`, weston headless trong sandbox) — Host boot 1,5–2,3 s + cửa sổ +0,2 s + webview tải trang 2,5–2,8 s |
 | A6 | Update N→N+1 pass trên 3 nền tảng | e2e máy sạch |
 | A7 | Plugin thật cài + chạy | e2e |
-| A8 | Session cũ mở được | e2e |
-| A9 | Transcript diff = 0 | snapshot/expected |
+| A8 | Session cũ mở được | **đạt** — `session-read-probe.sh` đọc session thật của máy: 7 session (5 thế hệ `.v4` hiện hành, 2 thế hệ cũ được gắn `migration-required`), `list_ok=1 list_items=7` |
+| A9 | Transcript diff = 0 | **đạt phần không cần key** — `bun run test:snapshot` 211/211 xanh (replay session ghi sẵn khớp từng byte) + `bun run test:expected` 122/122 xanh. Phần cần model thật (transcript của một phiên sống) vẫn **mở**: không có `DEEPSEEK_API_KEY` |
 | A10 | Không còn Electron trong app mới | kiểm tra bundle |
 
 ---
@@ -659,8 +659,8 @@ Audit trạng thái migration sau P5-posix + A3. Mỗi điều kiện nghiệm t
 | A5 | Cold start → first paint ≤ 1,5 s | **đo được, chưa đạt** | `cold-start-probe.sh`: shell Tauri trong **weston headless** (không mở cửa sổ trên màn hình người dùng), chạy trong `isolated-run.sh`. Milestone JSON trên stderr của shell: `host-url` 1,5–2,3 s · `window-created` +0,2 s · `page-load-finished` **4,4–5,1 s**. Chênh lệch so với ngân sách: Host boot (1,3–2,3 s) + webview tải trang (2,5–2,8 s). Cách chữa: cửa sổ splash ngay (P1 chưa làm) để *first paint* thật sớm, cắt bundle client, và đo lại trên phiên desktop thật (sandbox + compositor phần mềm làm chậm) |
 | A6 | Update N→N+1 trên 3 nền tảng | **mở — chỉ Linux** | `update-probe.sh` chạy N→N+1 trên AppImage ✓ (P3b). macOS/Windows vẫn do carrier Electron phục vụ, chưa port |
 | A7 | Plugin thật cài + chạy | **đạt** | P0: cài từ registry, cài từ tarball cục bộ, plugin chạy (`fiberPhase: active`) |
-| A8 | Session cũ mở được | **đạt theo cấu trúc** | Định dạng session không đổi (A1/A2); snapshot/expected xanh. Bằng chứng end-to-end với session cũ cần API key → cùng điều kiện với A9 |
-| A9 | Transcript diff = 0 | **mở — cần API key** | Không có `DEEPSEEK_API_KEY`/`.env` trong phiên này |
+| A8 | Session cũ mở được | **đạt** | `session-read-probe.sh` (đọc `~/.dsh/sessions` thật, chỉ đọc): `files_total=7`, `files_by_generation=5 .v4 + 2 legacy`, `list_ok=1 list_items=7`, `format_status={"current":5,"migration-required":2}` — Host Tauri đọc được session do bản cũ ghi, phân loại đúng thế hệ, và đọc nội dung session đầu tiên |
+| A9 | Transcript diff = 0 | **đạt phần không cần key, mở phần cần model thật** | `bun run test:snapshot` 211/211 xanh + `bun run test:expected` 122/122 xanh ⇒ transcript của các session ghi sẵn khớp từng byte với đầu ra model đã ghi. Transcript của một phiên sống (model thật) vẫn cần `DEEPSEEK_API_KEY` |
 | A10 | Không còn Electron trong app mới | **đạt** | AppImage không chứa Electron (chỉ còn một thư mục *type* của browser sidebar); shell là Tauri 2 |
 
 ## Phát hiện audit khác

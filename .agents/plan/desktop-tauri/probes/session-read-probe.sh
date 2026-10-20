@@ -10,7 +10,8 @@ repo=/home/masis/deepseek-harness
 work=$(mktemp -d /tmp/opencode/sessions.XXXXXX)
 mkfifo "$work/in"
 
-node "$repo/apps/desktop-host/src/tauri.ts" \
+# The built Host, the same artifact the desktop application ships.
+node "$repo/apps/desktop-host/lib/tauri.js" \
   "$HOME/.dsh/profiles" "$HOME/.dsh/profiles/web" \
   < "$work/in" > "$work/out" 2> "$work/err" &
 pid=$!
