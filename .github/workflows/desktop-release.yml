@@ -1,0 +1,145 @@
+name: Desktop Linux release
+
+# Publish the prepared Linux Desktop build as a GitHub Release.
+#
+# The release is the update feed: the updater reads `manifest.json` and the
+# Office installer reads `components.json` from the release's download
+# directory, so one release carries the artifacts and the documents that
+# describe them. The lane is manual-only — publication is an explicit act from
+# a tag — and it never runs on a pull request or a branch push.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag: the release name and the feed path the artifacts point at'
+        type: string
+        required: true
+      draft:
+        description: 'Create the release as a draft instead of publishing it'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  PRIMARY_NODE_VERSION: '24'
+  DSH_TELEMETRY_DISABLED: '1'
+
+jobs:
+  release:
+    name: Build and publish the Linux desktop release
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned: a moving Bun version makes the lane's environment drift
+          # even though the lockfile freezes the dependencies.
+          bun-version: 1.4.3
+
+      - name: Install the desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            desktop-file-utils \
+            rpm
+
+      - name: Install the workspace
+        run: bun install --frozen-lockfile
+
+      # The payload carries the pinned primary runtime (Node, pnpm, and the
+      # Office skill assets) the Desktop Host supervises. The upstream CI
+      # prepares the same runtime for its own Office lane.
+      - name: Prepare the primary runtime
+        run: >
+          pnpm run prepare:primary-runtime
+          --target linux-x64
+          --output apps/desktop/.desktop-build/targets/linux-x64/runtime
+          --cache "$RUNNER_TEMP/primary-runtime-downloads"
+
+      - name: Build the workspace
+        run: bun run build
+
+      # The release tarballs are the payload's only source: the runtime tree
+      # installs the package set from them, so a release contains the same
+      # bytes a publication would ship.
+      - name: Pack the release tarballs
+        run: bash apps/desktop-tauri/scripts/pack-linux.sh linux-x64
+
+      - name: Build the native providers
+        run: bash apps/desktop-tauri/scripts/build-native.sh linux-x64
+
+      # The package set, the runtime project, and the seeded profile are
+      # prepared from the packed release tarballs, so the payload contains the
+      # same bytes a release would publish.
+      - name: Prepare the Linux runtime tree
+        run: bunx tsx apps/desktop-tauri/scripts/prepare-linux-runtime.ts linux-x64
+
+      # The feed the artifacts point at is the release's own download
+      # directory, so the release this lane publishes is the one the updater
+      # and the component installer read. The artifacts carry the feed URL, so
+      # it is fixed before they are packed.
+      - name: Pack the AppImage
+        env:
+          DSH_APPIMAGE_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/manifest.json
+          DSH_COMPONENT_FEED: https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}
+        run: bash apps/desktop-tauri/scripts/pack-appimage.sh linux-x64
+
+      - name: Pack the Debian package
+        env:
+          DSH_APPIMAGE_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/manifest.json
+          DSH_COMPONENT_FEED: https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}
+        run: bash apps/desktop-tauri/scripts/pack-deb.sh linux-x64
+
+      - name: Pack the RPM package
+        env:
+          DSH_APPIMAGE_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/manifest.json
+          DSH_COMPONENT_FEED: https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}
+        run: bash apps/desktop-tauri/scripts/pack-rpm.sh linux-x64
+
+      - name: Check the size budget
+        run: bash apps/desktop-tauri/scripts/size-gate.sh linux-x64
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_DRAFT: ${{ inputs.draft }}
+        run: |
+          set -euo pipefail
+          tag="$RELEASE_TAG"
+          version=$(node -p "require('./package.json').version")
+          feed="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag"
+
+          draft_flag=()
+          if [ "$RELEASE_DRAFT" = "true" ]; then
+            draft_flag=(--draft)
+          fi
+
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" "${draft_flag[@]}" \
+              --title "DeepSeek Harness Desktop $version (Linux x64)" \
+              --notes "Linux desktop build: AppImage, .deb, .rpm, the update manifest, and the on-demand Office component."
+          fi
+
+          # The feed documents are generated from the prepared tree, so the
+          # digest and the size in the manifest describe the exact bytes this
+          # release uploads.
+          bunx tsx apps/desktop-tauri/scripts/publish-release.ts linux-x64 --tag "$tag"
+
+          echo "release: feed $feed/manifest.json"

@@ -430,6 +430,7 @@ DSH_DESKTOP_PROJECT_DIR=$HOME/.dsh/profiles/web \
 | D30 | **Engine Office đi theo component on-demand** (ADR-0008 mở rộng): `libreoffice-kit` + `libreoffice-kit-wasm` (144 MB) nằm trong archive component, không trong payload lõi. Loader trỏ `@deepseek-ai/libreoffice-kit` (và subpath `package.json`, `cli`) vào bản đã cài, đọc từ `$DSH_HOME/components/current.json`; plugin `office-to-pdf` trong profile vẫn import được. Payload Python được **di chuyển** ra khỏi primary runtime sang `.office-python` trong build tree để archive dựng lại được khi engine đổi |
 | D31 | **Ngân sách kích thước được đặt lại (A3′)**: artifact tải về ≤ 105 MB (AppImage/.deb/.rpm) và cây cài đặt ≤ 400 MB. Ngưỡng cũ "cài đặt ≤ 105 MB" bất khả thi: Node 24.21 stripped một mình đã 103,5 MB, phần còn lại là chính các package của harness |
 | D29 | Provider native của Desktop nằm trong **một crate napi-rs duy nhất** `native/dsh-native` (D4): PTY (`portable-pty`), flock của session lease, binding `execve`/`fcntl` của bootstrap, và pipeline ảnh (`image` + `zune-png` + `fast_image_resize` + libwebp tĩnh). Cùng crate build binary `landlock-run` (UAPI Landlock viết thẳng trong Rust). Thay provider **không sửa `packages/`**: `apps/desktop-host/native/native-loader.mjs` đăng ký resolve hook trỏ `node-pty` → `node-pty.cjs`, `@deepseek-ai/node-addon-system/flock` → `flock.cjs`, `koffi` → `koffi.cjs`, `sharp` → `sharp.cjs`; launcher Tauri nạp hook bằng `--import` trước khi profile boot. Thiếu `.node` ⇒ hook no-op ⇒ payload giữ addon gốc ⇒ lane Electron không đổi |
+| D32 | **GitHub Release là nguồn feed**: một release Linux mang cả artifact (AppImage/.deb/.rpm) lẫn tài liệu feed (`manifest.json` cho updater, `components.json` + archive Office cho component on-demand). URL tải của release ổn định theo tag ⇒ artifact **baked** sẵn `DSH_DESKTOP_UPDATE_FEED`/`DSH_COMPONENT_FEED` trỏ vào thư mục tải của chính release đó, và bản sau publish ở tag mới. Script `apps/desktop-tauri/scripts/publish-release.ts` sinh tài liệu feed **từ cây build** (sha256 + size của đúng byte sẽ upload) rồi `gh release upload --clobber`; lane `desktop-release.yml` chạy thủ công (`workflow_dispatch`, nhận tag) vì phát hành là hành động có chủ đích, không tự chạy theo branch push |
 
 ## Số đo thật
 
@@ -698,6 +699,14 @@ Trên máy phát triển có `bwrap` nên lane snapshot xanh. Runner `ubuntu-lat
 
 `replays subagent-dsh-sdk-diagnostic` và `replays subagent-dsh-sdk-dynamic-route` (snapshots/sdk) đỏ trên runner `ubuntu-latest` (2 vCPU) với `ENOENT .../.child-dsh/sessions` ⇒ tiến trình con (một `dsh` lồng nhau) không khởi động được. **Cùng hai ca xanh trên máy phát triển** (2/2 pass) và toàn lane xanh 211/211 tại đó. CI của upstream chạy lane này trên runner 4 vCPU/16 core ⇒ khả năng cao là thiếu CPU cho tiến trình con. Việc cần cho lane của fork: runner nhiều hơn, hoặc chấp nhận hai ca này là ngoại lệ của lane.
 
+**Đã đóng (2026-10-21):** đúng là thiếu CPU, nhưng nguyên nhân là *song song*, không phải số nhân. Đo lại bằng `taskset -c 0,1` (giới hạn 2 CPU) cho thấy lane **treo 8,5 giờ** ở đúng hai ca này: tiến trình con không bao giờ khởi động xong, còn `vitest` chờ `turn/end` vô hạn. Chạy tuần tự (`DSH_SNAPSHOT_MAX_CONCURRENCY=1`, `DSH_SNAPSHOT_MAX_WORKERS=1`) trên cùng 2 CPU ấy thì **211/211 xanh trong 367 s**. Lane CI của fork đã đặt hai biến đó ⇒ mỗi ca replay có trọn runner, tiến trình con luôn kịp khởi động. Không sửa expected output.
+
+### B47 — `renameSync` dùng mà không import ⇒ lane đóng gói trên runner sạch chết ngay
+
+`apps/desktop-tauri/scripts/prepare-linux-runtime.ts` gọi `renameSync(pythonDir, officePython)` (chuyển payload Python ra khỏi primary runtime) nhưng **không import** hàm đó từ `node:fs`. Máy phát triển không lộ vì cây build local đã có `.office-python` sẵn (nhánh `else if` chạy, không đi qua `renameSync`); một runner sạch có Python trong primary runtime thì đi đúng nhánh đó và chết với `ReferenceError: renameSync is not defined`. Đã sửa (thêm `renameSync` vào import `node:fs`). Cùng lúc đó, `officeComponent` có thể `undefined` ở chỗ đọc `.file` ⇒ thêm một `throw` tường minh khi không có component nào.
+
+**Bài học:** các script của lane Tauri **không nằm trong chương trình typecheck** nào (`tsconfig.host.json` chỉ liệt kê `apps/desktop/scripts/**`), nên `tsc` không bắt được cả hai lỗi trên. Đã thêm `apps/desktop-tauri/scripts/**/*.ts` vào `include` của `tsconfig.host.json` ⇒ `bun run typecheck` giờ kiểm tra cả script của lane.
+
 ### B45 — Decoder PNG của crate `image` quá chậm cho đường ảnh sản phẩm
 
 `image` (dựa trên crate `png`) giải mã ảnh 12 MP mất ~2,1 s, còn libspng của sharp ~27 ms ⇒ ảnh đính kèm sẽ "treo" UI. Dùng `zune-png` (SIMD) cho PNG và `fast_image_resize` cho resize: còn 171 ms cho resize+encode 4000×3000 (sharp 97 ms).
@@ -800,6 +809,18 @@ Mọi thay đổi còn lại nằm ở L1 (thêm mới): `apps/desktop-tauri/**`
 - Host `desktop` dùng được profile `~/.dsh/profiles/web` cho thí nghiệm: bỏ `skill-office`, đặt `runtimeDir=$HOME/.dsh/profiles`, `projectDir=$HOME/.dsh/profiles/web`.
 - `strip` lên binary Python của python-build-standalone làm hỏng interpreter (mất symbol versioning); đừng strip, hãy prune file.
 - `/tmp` là tmpfs 7,7 GB và chỉ còn ~1,6 GB: copy Node (120 MB) hay wheel vào đó chết với `Unknown system error -122` (EDQUOT). Đặt `TMPDIR` sang ổ lớn (`apps/desktop/.desktop-build/tmp` hoặc `~/.cache/…`) khi dựng primary runtime và khi chạy `apps/desktop-host/tests` (spec `office.spec.ts` copy Node).
+
+### Tài nguyên cần dọn (tạo trong máy này, 2026-10-21)
+
+| Tài nguyên | Dung lượng | Cách dọn |
+|---|---|---|
+| Docker image `fedora:41` | 238 MB | `docker rmi fedora:41` — `pack-rpm.sh` kéo về để có `rpmbuild` |
+| Docker image `ubuntu:24.04` | 117 MB | `docker rmi ubuntu:24.04` — `deb-probe.sh` kéo về để cài `.deb` sạch |
+| Wine prefix `~/.wine` | 2,4 GB | `rm -rf ~/.wine` — dùng để chạy gate `scripts/wine-windows-gates.sh` (Node win-x64 dưới Wine) |
+| Wine cache `.cache/wine-windows/` | 416 MB | `rm -rf .cache/wine-windows` — cache Node win-x64 + prefix dùng lại |
+| `/tmp/opencode/*` | vài GB | `rm -rf /tmp/opencode` — scratch của phiên làm việc |
+
+Ba container đang chạy (`dbx`, `his-nhidong-orthanc`, `postgres`) **không** thuộc lane này ⇒ đừng đụng. Lane dùng `docker run --rm` nên không để lại container.
 
 ## Lịch sử cập nhật
 

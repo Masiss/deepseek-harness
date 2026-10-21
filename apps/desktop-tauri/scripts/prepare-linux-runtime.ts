@@ -30,7 +30,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process'
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { delimiter, dirname, join, relative, resolve } from 'node:path'
 import {
   DESKTOP_HOST_PACKAGE,
@@ -43,7 +43,7 @@ import {
 import { DESKTOP_HOST_PROTOCOL_VERSION } from '../../desktop/src/host-protocol.ts'
 import { createPluginProfile, createRuntimeProjectMetadata } from '../../desktop/src/project-manager.ts'
 import { parseDesktopRelease } from '../../desktop/src/release.ts'
-import { desktopTargetPlatform, resolveDesktopTargetBuildPaths } from '../../desktop/scripts/desktop-build-paths.mjs'
+import { resolveDesktopTargetBuildPaths } from '../../desktop/scripts/desktop-build-paths.mjs'
 import { prepareDesktopPackageSet } from '../../desktop/scripts/prepare-package-set.ts'
 import { prepareRuntimePatches, verifyRuntimePatches } from '../../desktop/scripts/prepare-runtime-patches.ts'
 import { desktopRuntimeFileExclusion } from '../../desktop/scripts/runtime-file-policy.ts'
@@ -133,7 +133,10 @@ function runPnpm(pnpm: string, node: string, cwd: string, args: readonly string[
 
 async function main(): Promise<void> {
   const name = targetName(process.argv[2])
-  const target = desktopTargetPlatform(name)
+  // The platform and architecture come from the target name: this carrier
+  // assembles Linux payloads only, and the upstream declaration of the
+  // shared helper names the updater's targets rather than the build ones.
+  const target = { platform: 'linux' as const, arch: name.endsWith('-arm64') ? 'arm64' as const : 'x64' as const }
   const paths = resolveDesktopTargetBuildPaths({
     ...process.env,
     DSH_DESKTOP_TARGET_PLATFORM: target.platform,
@@ -229,6 +232,9 @@ async function main(): Promise<void> {
       target: name,
     })
     console.error(`linux runtime: office component ${officeComponent.file} (${String(officeComponent.bytes)} bytes)`)
+  }
+  if (officeComponent === undefined) {
+    throw new Error('linux runtime: the primary runtime has no Python payload and no published component')
   }
 
   // 3. Copy the resolved modules into the immutable runtime directory.
