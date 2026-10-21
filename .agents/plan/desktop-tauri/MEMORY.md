@@ -706,6 +706,12 @@ Trên máy phát triển có `bwrap` nên lane snapshot xanh. Runner `ubuntu-lat
 
 **Bài học:** các script của lane Tauri **không nằm trong chương trình typecheck** nào (`tsconfig.host.json` chỉ liệt kê `apps/desktop/scripts/**`), nên `tsc` không bắt được cả hai lỗi trên. Đã thêm `apps/desktop-tauri/scripts/**/*.ts` vào `include` của `tsconfig.host.json` ⇒ `bun run typecheck` giờ kiểm tra cả script của lane.
 
+### B49 — Wine chạy được bộ test Windows-native, trừ phần ACL (security descriptor)
+
+`apps/desktop-tauri/scripts/windows-native-probe.sh` dựng một **snapshot** của cây (git ls-files), cài bằng pnpm với `nodeLinker: hoisted` + `supportedArchitectures: [win32, x64]`, rồi chạy bộ test dưới Wine bằng Node win-x64. Cần hoisted vì Node dưới Wine không realpath symlink của layout isolated của pnpm (giống lý do `scripts/wine-windows-gates.sh` làm vậy).
+
+Đo (2026-10-21): `win32-process` **59/59 xanh** · `session-persistence-jsonl` **737/747 xanh** (10 skip) · `fs-local` **160/164 xanh** (4 skip) · `sandbox-windows-acl` **112 xanh / 29 đỏ** — mọi ca đỏ đều do `SetNamedSecurityInfoW`/`GetNamedSecurityInfoW` trả `ERROR_ACCESS_DENIED` (5): Wine **không hiện thực** Windows security descriptor. Ba suite kia xanh trọn vẹn ⇒ đây là baseline koffi để so provider Rust của P5-win32; phần ACL vẫn phải quyết bằng runner Windows.
+
 ### B48 — Cài workspace bằng Bun ⇒ runtime con không resolve được package của workspace
 
 Hai ca replay `subagent-dsh-sdk-*` đỏ trên CI với `ENOENT .../.child-dsh/sessions`: tiến trình con (`dsh` lồng nhau) **không khởi động được** nên không ghi session nào. Nguyên nhân: lane cài bằng `bun install`, mà layout **isolated** của Bun giữ mỗi package workspace trong `node_modules/.bun/<pkg>@<ver>/node_modules/`, nên Node **không** tìm thấy package đó khi resolve theo tên từ thư mục profile. Layout **hoisted** của pnpm đặt mọi package workspace vào `node_modules/.pnpm/node_modules/` ⇒ Node tìm thấy.
@@ -851,4 +857,5 @@ Ba container đang chạy (`dbx`, `his-nhidong-orthanc`, `postgres`) **không** 
 | 2026-10-20 | P5-posix (4): pipeline ảnh bằng Rust thay `sharp` (decode `zune-png`, resize `fast_image_resize`, WebP libwebp tĩnh, JPEG zune) — facts giống hệt, WebP lệch 0–6%, 93 test `attachment-local` xanh; payload không còn `sharp`/`@img`; thêm B32–B34, M12 |
 | 2026-10-21 | P1: copy của shell lấy từ `apps/desktop/src/locale.ts` (generator `generate-locale.ts` → `locale.rs`); CI kiểm tra bản sinh không cũ |
 | 2026-10-21 | P4: release Linux từ GitHub runner (lane `desktop-release.yml`, D32) — release `desktop-v0.2.1-rc.2` thật, 4 asset, sha256 khớp byte; thêm M19 |
+| 2026-10-21 | P5-win32: probe `windows-native-probe.sh` chạy bộ test Windows-native dưới Wine (3 suite xanh trọn vẹn, ACL đỏ vì Wine không có security descriptor); thêm B49 |
 | 2026-10-21 | Sửa hai lỗi chặn lane: `renameSync` thiếu import trong `prepare-linux-runtime.ts` (runner sạch chết) + script của lane Tauri nằm ngoài chương trình typecheck; lane CI cài workspace bằng pnpm (layout isolated của Bun làm runtime con không resolve được package workspace); thêm B47–B48 |
