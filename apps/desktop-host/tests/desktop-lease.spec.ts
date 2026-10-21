@@ -57,6 +57,13 @@ describe('desktop lease', () => {
     expect(readFileSync(lease.path, 'utf8').trim()).toBe(String(process.pid + 1))
   })
 
+  it('creates the harness home when the carrier is the first', () => {
+    const dir = join(home(), 'nested', 'home')
+    const lease = acquireDesktopLease(dir)
+    expect(readFileSync(lease.path, 'utf8').trim()).toBe(String(process.pid))
+    lease.release()
+  })
+
   it('releases twice without complaint', () => {
     const dir = home()
     const lease = acquireDesktopLease(dir)

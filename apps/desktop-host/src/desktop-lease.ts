@@ -20,7 +20,7 @@
  * @module @deepseek-ai/dsh-desktop-host/desktop-lease
  */
 
-import { closeSync, fsyncSync, lstatSync, openSync, readFileSync, unlinkSync, writeSync } from 'node:fs'
+import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** Name of the lease file inside the harness home. */
@@ -28,15 +28,22 @@ export const DESKTOP_LEASE_FILENAME = 'desktop-host.lease'
 
 /** State another Desktop carrier is already using. */
 export class DesktopLeaseError extends Error {
+  /** The harness home that is already leased. */
+  readonly home: string
+  /** Process id of the live owner, when it could be read. */
+  readonly ownerPid: number | undefined
+
   /**
    * @param home - The harness home that is already leased.
    * @param ownerPid - Process id of the live owner, when it could be read.
    */
-  constructor(readonly home: string, readonly ownerPid?: number) {
+  constructor(home: string, ownerPid?: number) {
     super(ownerPid === undefined
       ? `desktop: ${home} is in use by another Desktop application`
       : `desktop: ${home} is in use by another Desktop application (pid ${String(ownerPid)})`)
     this.name = 'DesktopLeaseError'
+    this.home = home
+    this.ownerPid = ownerPid
   }
 }
 
@@ -88,6 +95,8 @@ function readOwner(path: string): number | undefined {
  */
 export function acquireDesktopLease(home: string): DesktopLease {
   const path = join(home, DESKTOP_LEASE_FILENAME)
+  // A first run has no harness home yet; the carrier creates it.
+  mkdirSync(home, { recursive: true, mode: 0o700 })
   let descriptor: number
   try {
     descriptor = openSync(path, 'wx', 0o600)

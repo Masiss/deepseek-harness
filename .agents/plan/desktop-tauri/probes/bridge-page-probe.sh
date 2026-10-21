@@ -8,7 +8,7 @@ work=$(mktemp -d /tmp/opencode/bridge-page.XXXXXX)
 home=$(mktemp -d /tmp/opencode/bridge-page-home.XXXXXX)
 mkfifo "$work/in"
 
-DSH_HOME="$home" node "$repo/apps/desktop-host/src/tauri.ts" \
+DSH_HOME="$home" node --import "$repo/node_modules/tsx/dist/esm/index.mjs" "$repo/apps/desktop-host/src/tauri.ts" \
   "$HOME/.dsh/profiles" "$HOME/.dsh/profiles/web" \
   < "$work/in" > "$work/out" 2> "$work/err" &
 pid=$!
