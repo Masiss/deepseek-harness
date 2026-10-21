@@ -209,6 +209,14 @@ ensureRelease(
   `DeepSeek Harness Desktop ${version} feed (${target})`,
   'The update feed: the manifest naming the current artifact and the Office component archive.',
 )
+// The feed release outlives the release it describes: every publication
+// replaces its documents, so its title has to name the version it now carries.
+const edited = spawnSync('gh', [
+  'release', 'edit', feedTag,
+  '--title', `DeepSeek Harness Desktop ${version} feed (${target})`,
+  '--notes', 'The update feed: the manifest naming the current artifact and the Office component archive.',
+], { stdio: 'inherit', env })
+if (edited.status !== 0) throw new Error(`publish-release: gh release edit exited with ${String(edited.status)}`)
 
 // The release's artifacts are immutable once published, so a repeated run
 // replaces them rather than failing.
