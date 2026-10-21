@@ -845,15 +845,25 @@ Mọi thay đổi còn lại nằm ở L1 (thêm mới): `apps/desktop-tauri/**`
 - `strip` lên binary Python của python-build-standalone làm hỏng interpreter (mất symbol versioning); đừng strip, hãy prune file.
 - `/tmp` là tmpfs 7,7 GB và chỉ còn ~1,6 GB: copy Node (120 MB) hay wheel vào đó chết với `Unknown system error -122` (EDQUOT). Đặt `TMPDIR` sang ổ lớn (`apps/desktop/.desktop-build/tmp` hoặc `~/.cache/…`) khi dựng primary runtime và khi chạy `apps/desktop-host/tests` (spec `office.spec.ts` copy Node).
 
-### Tài nguyên cần dọn (tạo trong máy này, 2026-10-21)
+### Tài nguyên tạo trong máy này (2026-10-21) — **đã dọn xong**
 
-| Tài nguyên | Dung lượng | Cách dọn |
+| Tài nguyên | Dung lượng | Đã dọn bằng |
 |---|---|---|
 | Docker image `fedora:41` | 238 MB | `docker rmi fedora:41` — `pack-rpm.sh` kéo về để có `rpmbuild` |
 | Docker image `ubuntu:24.04` | 117 MB | `docker rmi ubuntu:24.04` — `deb-probe.sh` kéo về để cài `.deb` sạch |
 | Wine prefix `~/.wine` | 2,4 GB | `rm -rf ~/.wine` — dùng để chạy gate `scripts/wine-windows-gates.sh` (Node win-x64 dưới Wine) |
-| Wine cache `.cache/wine-windows/` | 416 MB | `rm -rf .cache/wine-windows` — cache Node win-x64 + prefix dùng lại |
-| `/tmp/opencode/*` | vài GB | `rm -rf /tmp/opencode` — scratch của phiên làm việc |
+| Wine cache `.cache/wine-windows/` | 416 MB | đã xoá từ trước |
+| `/tmp/opencode/*` | vài GB | `rm -rf /tmp/opencode/*` — scratch của phiên làm việc |
+| Cây runtime lane `apps/desktop/.desktop-build/` | 8,4 GB | `bun run clean` + xoá `probe/`, `tree-backup/`, `appimage/`, `deb/`, `rpm/`, `dsh-pnpm/`, `packed/` |
+| Build Rust của shell `apps/desktop-tauri/src-tauri/target/` | 7,8 GB | xoá `debug/` và `release/{deps,build,incremental}`; giữ binary `release/dsh-desktop-tauri` (10 MB) |
+| Build Rust của addon `native/dsh-native/target/` | 1,8 GB | xoá `debug/` và `release/{deps,build,incremental}`; giữ `libdsh_native.so`, `libdsh_pty.so`, `landlock-run` |
+| Output build của repo (`packages/*/lib`, `apps/*/lib`) | ~350 MB | `bun run clean` (359 path) |
+
+Sau khi dọn: ố đĩa trống **28 GB** (trước: 7 GB). Repo vẫn xanh: `bun run typecheck` 5/5, `bunx vitest run apps/desktop-host` 131/131.
+
+**Cần dựng lại trước khi chạy probe dựa trên cây đóng gói**: `apps/desktop/.desktop-build/targets/linux-x64/` (script `pack-linux.sh` / `stage-payload.sh`). Các probe `update-probe.sh`, `desktop-lease-probe.sh`, `linux-tree-probe.sh` cần cây đó.
+
+**Private key ký release không được nằm trên đĩa**: nó chỉ tồn tại trong secret `DSH_RELEASE_SIGNING_KEY` của fork. Một bản sao tạm ở `/tmp/opencode/signkey.pem` (mode 644) đã bị xoá; public key tương ứng vẫn ghim trong `apps/desktop-host/src/update/signing.ts`.
 
 Ba container đang chạy (`dbx`, `his-nhidong-orthanc`, `postgres`) **không** thuộc lane này ⇒ đừng đụng. Lane dùng `docker run --rm` nên không để lại container.
 
@@ -886,3 +896,4 @@ Ba container đang chạy (`dbx`, `his-nhidong-orthanc`, `postgres`) **không** 
 | 2026-10-21 | **Route Codex chạy thật** (D34): `openai-codex` là OAuth-only, credential phải là grant record `llm-pi-ai/openai-codex`; bundle headless tắt store credentials (B52); model `gpt-5.6-terra` trả lời ⇒ `codex-model-probe.sh` OK |
 | 2026-10-21 | F12: **lease** trên state desktop (`$DSH_HOME/desktop-host.lease`) do cả hai entrypoint Host giữ ⇒ hai carrier Tauri/Electron không ghi chung session/settings/credential store; lease của tiến trình chết thì được nhận lại; thêm D36, M23 |
 | 2026-10-21 | F10: gom phần chung của hai entrypoint Host vào `desktop-launch.ts` (nạp profile, lease, runProfile, shutdown/quit-inspection, ready) — mỗi entry giữ phần riêng; kèm sửa probe boot Host từ source (Node strip-only không chịu parameter property) sang tsx ESM hook; thêm D37 |
+| 2026-10-21 | **Dọn rác máy**: xoá cây runtime lane (8,4 GB), build Rust của shell (7,8 GB) và của addon (1,8 GB), output build repo, `~/.wine` (2,4 GB), 2 image Docker của lane, `/tmp/opencode/*` — khoảng **21 GB**; ố đĩa trống 7 GB → 28 GB. Kèm phát hiện: **private key ký release** nằm tạm ở `/tmp/opencode/signkey.pem` (mode 644) đã xoá; key chỉ tồn tại trong secret của fork |
