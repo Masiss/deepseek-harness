@@ -392,7 +392,7 @@ Tất cả AC trên đạt, hoặc có quyết định fallback được ghi l�
 - [x] Theme hệ thống đổi → UI đổi theo — `theme(None)` (theo hệ thống); WebKitGTK suy `prefers-color-scheme` từ theme GTK.
 - [x] Directory picker — **không cần Tauri dialog**: `packages/bundle/web-app` đã compose `dsh-host-directory-picker-auto`, tự chọn backend `native` (zenity/kdialog trên Linux có display) và cả hai mặt Host/client được mount như entry thường. Xem mục P2.
 - [x] Menu Application (About, dev: Reload + DevTools `F12`, Quit `Ctrl+Q`) và menu Edit (undo/redo/cut/copy/paste/select-all) — ảnh chụp release xác nhận.
-- [ ] Bản địa hoá copy của shell — **còn thiếu**, có lý do: `apps/desktop/src/locale.ts` là nguồn duy nhất và là TypeScript; chép sang Rust sẽ tạo nhà thứ hai cho cùng chuỗi.
+- [x] Bản địa hoá copy của shell — `apps/desktop-tauri/scripts/generate-locale.ts` đọc `apps/desktop/src/locale.ts` (nguồn duy nhất, TypeScript) và **sinh** `src-tauri/src/locale.rs`; shell Rust tra key trong module sinh ra ⇒ **không** có nhà thứ hai cho cùng chuỗi. CI kiểm tra bản sinh không cũ (`generate-locale.ts --check`).
 
 ### Exit gate
 
@@ -575,7 +575,7 @@ Provider Rust pass parity; code cũ chỉ bị xoá sau một chu kỳ phát hà
 - [x] Python cài lần đầu chạy được (import check trước khi publish).
 - [x] Không có Office/Python trong bundle core.
 - [x] Size gate: `apps/desktop-tauri/scripts/size-gate.sh` (artifact ≤ 105 MiB, cây cài đặt ≤ 400 MiB) — CI của fork gọi script này.
-- [ ] `bun run test:web:built` vẫn pass.
+- [~] `bun run test:web:built` vẫn pass — **3 ca đỏ có sẵn tại HEAD**, chứng minh bằng checkout `f8d5be74c2^` (trước mọi thay đổi của fork) vẫn đỏ y hệt ⇒ không phải hồi quy của lane. Không sửa expected output.
 
 ---
 
