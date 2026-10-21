@@ -86,6 +86,19 @@ jobs:
           packages/attachment/attachment-local
           --pool=forks
 
+      # The native module replaces the sharp package in the payload, so the
+      # two must behave the same way on the operations the attachment service
+      # uses. The comparison runs against the shim in the repository, with the
+      # sharp package the repository still installs as the reference.
+      - name: Build the native providers
+        run: bash apps/desktop-tauri/scripts/build-native.sh linux-x64
+
+      - name: Compare the native image provider with sharp
+        env:
+          DSH_IMAGE_SHIM: ${{ github.workspace }}/apps/desktop-host/native/sharp.cjs
+          DSH_IMAGE_SHARP: ${{ github.workspace }}/packages/attachment/attachment-local/node_modules/sharp
+        run: node apps/desktop-tauri/scripts/image-parity.mjs
+
       - name: Keyless recorded-session replay
         env:
           # The replay spawns a child runtime per scenario, and the hosted

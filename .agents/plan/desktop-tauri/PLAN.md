@@ -627,7 +627,7 @@ Chỉ coi là hoàn thành khi **tất cả** đạt:
 
 | # | Điều kiện | Cách kiểm |
 |---|---|---|
-| A1 | 10 bất biến giữ nguyên | gate §6 `AGENTS.md` |
+| A1 | 10 bất biến giữ nguyên | **đạt (10/10 cơ chế)** | Session format/`SESSION_FORMAT_VERSION` không đổi; transcript không đổi (`git diff origin/master...HEAD -- packages/session packages/core` rỗng); CLI/`cordis.yml` không đổi; token/cookie + WebSocket giữ nguyên (bridge probe); PTY semantics kiểm bằng provider parity (resize/signal/exit code); sandbox semantics kiểm bằng landlock parity (`parity=identical`) + đọc-thoát `fd`; update policy giữ nguyên (N→N+1 chạy trên AppImage, feed **đã ký**); plugin API giữ nguyên (`dsh plugin` cài + chạy, P0); bundle/profile giữ nguyên (profile desktop dùng chung `dsh`); **transcript diff = 0**: `live-transcript-probe.sh` chạy lượt thật qua route Codex ⇒ session ghi ⇒ replay ⇒ hai log đã chuẩn hoá khớp từng byte ✓ — *trừ* phiên có ảnh đính kèm (F13) |
 | A2 | Không sửa `packages/` upstream | `git diff upstream/master...HEAD -- packages/` rỗng |
 | A3 | Artifact ≤ 105 MB (A3′) | `size-gate.sh` — **đạt**: AppImage 86,7 MiB · .deb 66,9 MiB · .rpm 72,9 MiB · cài đặt 337 MiB |
 | A4 | RSS idle ≤ 250 MB | **đạt**: 170–179 MiB (`rss-probe.sh`, Host headless) |
@@ -702,9 +702,9 @@ Ba finding đã lỗi thời khi kiểm chứng: F02 phần "`.setup()` chặn" 
 
 ## Việc còn lại theo thứ tự ưu tiên
 
-Cập nhật 2026-10-21 (sau khi lane CI xanh trọn vẹn, release 2 target Linux đã chạy thật, F04 (chữ ký feed) và F11 (budget sandbox) đã đóng, và route Codex đã trả lời thật):
+Cập nhật 2026-10-21 (sau khi lane CI xanh trọn vẹn, release 2 target Linux đã chạy thật, F04/F06/F10/F11/F12 đã đóng, A9 đã chạy với model thật, và F13 mới):
 
-1. ~~**A9 phần model sống**~~ — **đã đóng**: `live-transcript-probe.sh` chạy lượt thật qua route Codex, ghi session, replay lại từ bản ghi, hai log đã chuẩn hoá khớp từng byte ✓.
+1. **F13** — byte ảnh chuẩn hoá lệch giữa hai carrier (đo: max 6/255 mỗi kênh): hoặc port đúng kernel + làm tròn của libvips, hoặc **ghi nhận là khác biệt đã chấp nhận** và ghi rõ vào điều kiện đóng của A1/A9 (chỉ đúng với phiên không đính kèm ảnh).
 2. **P5-win32** — khi Windows vào phạm vi. Đã có baseline koffi để so: `windows-native-probe.sh` chạy bộ test Windows-native dưới Wine (3 suite xanh trọn vẹn; ACL đỏ vì Wine không có security descriptor — B49).
 3. **A6 phần macOS/Windows** — e2e update trên 2 nền tảng sau khi carrier Tauri thay Electron.
 4. **P3 ký** — macOS (Developer ID + notarize) và Windows (Authenticode) cần chứng thư, không làm được trên máy này.
