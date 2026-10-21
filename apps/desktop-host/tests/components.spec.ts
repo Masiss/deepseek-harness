@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto'
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { zstdCompressSync } from 'node:zlib'
 import { afterEach, describe, expect, it } from 'vitest'
 import { parseComponentsManifest } from '../src/components/manifest.ts'
 import { DesktopOfficeComponent } from '../src/components/office.ts'
-import { extractTar } from '../src/components/tar.ts'
+import { extractTar, extractZstdTar } from '../src/components/tar.ts'
 
 const roots: string[] = []
 
@@ -80,6 +80,7 @@ describe('component manifest', () => {
     ['missing version', { ...valid, components: [{ ...valid.components[0], version: undefined }] }],
     ['path in file', { ...valid, components: [{ ...valid.components[0], file: '../x' }] }],
     ['zero bytes', { ...valid, components: [{ ...valid.components[0], bytes: 0 }] }],
+    ['an archive larger than the ceiling', { ...valid, components: [{ ...valid.components[0], bytes: 2 ** 40 }] }],
     ['short digest', { ...valid, components: [{ ...valid.components[0], sha256: 'abc' }] }],
     ['duplicate id', { ...valid, components: [valid.components[0], valid.components[0]] }],
   ])('rejects %s', (_name, value) => {
@@ -153,6 +154,23 @@ describe('tar extraction', () => {
     mkdirSync(destination)
     await expect(extractTar(archive, destination, { totalBytes: 1024, entries: 8, depth: 2, fileBytes: 1024 }))
       .rejects.toThrow('nested too deeply')
+  })
+
+  it('refuses a compressed archive that expands past the budget', async () => {
+    const root = scratch()
+    const archive = join(root, 'bomb.tar.zst')
+    // A small download that expands to far more than the budget allows.
+    writeFileSync(archive, zstdCompressSync(tarArchive([
+      { name: 'big', type: 'file', content: 'x'.repeat(64 * 1024) },
+    ])))
+    const destination = join(root, 'out')
+    mkdirSync(destination)
+    const scratchFile = join(root, 'bomb.tar')
+    await expect(extractZstdTar(archive, destination, scratchFile, {
+      totalBytes: 1024, entries: 8, depth: 8, fileBytes: 1024,
+    })).rejects.toThrow('size budget')
+    // The intermediate tar never outlives the attempt.
+    expect(existsSync(scratchFile)).toBe(false)
   })
 })
 

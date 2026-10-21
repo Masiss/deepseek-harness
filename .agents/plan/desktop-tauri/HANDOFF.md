@@ -35,7 +35,7 @@ Mỗi phát hiện có sẵn đường truyền, điều kiện, cách tái hi�
 | # | Mức | File cần sửa | Sửa gì |
 |---|---|---|---|
 | 1 | **high** | `apps/desktop-host/src/components/manifest.ts`, `apps/desktop-host/src/components/office.ts`, `apps/desktop-tauri/scripts/publish-release.ts` | Ký `components.json` bằng **cùng key** của update feed + client verify trước khi tải bất cứ byte nào; chặn scheme không phải https/loopback. **Đây là cái quan trọng nhất**: archive tải về được **thực thi**. |
-| 2 | medium | `apps/desktop-host/src/components/tar.ts` (+ `manifest.ts`) | Chặn *khi ghi* luồng giải nén (amplification 31.000×), và giới hạn `bytes` mà manifest khai. |
+| 2 | medium | `apps/desktop-host/src/components/tar.ts` (+ `manifest.ts`) | ~~**ĐÃ SỬA (2026-10-22)**~~ chặn *khi ghi* luồng giải nén + giới hạn `bytes` mà manifest khai; xem §3.1 |
 | 3 | medium | `native/dsh-native/src/image_scan.rs` (+ test) | Đọc byte flags của chunk VP8X bằng `data.get(start)` ⇒ hết panic ⇒ hết SIGABRT. **Đây là code Rust của chính phiên này viết.** |
 | 4 | medium | `apps/desktop-tauri/scripts/pack-appimage.sh` (+ `pack-rpm.sh`) | Ghim digest của `appimagetool` (và image `fedora:41` theo digest) trước khi chạy. |
 | 5 | low | `apps/desktop-host/src/desktop-bridge.ts` | Gọi `parseShortcutEdit` / `parseShortcutDefinitions` ở cửa vào (Electron đã làm vậy ở `apps/desktop/src/keyboard.ts:89`). |
@@ -43,6 +43,13 @@ Mỗi phát hiện có sẵn đường truyền, điều kiện, cách tái hi�
 | 7 | low | `apps/desktop-host/src/tauri.ts` (+ `update/service.ts`) | Nhả admission lock khi cài thất bại (Electron có rollback ở `apps/desktop/src/main.ts:633`). |
 
 Sau khi sửa: chạy lại `bunx vitest run apps/desktop-host`, `cargo test --manifest-path native/dsh-native/Cargo.toml --lib`, `bun run typecheck`, `bun run lint` ✓ và bổ sung **test hồi quy** cho mỗi cái (mỗi phát hiện đều có sẵn cách tái hiện trong sandbox để làm mẫu).
+
+### (A1) Sửa xong: bom giải nén zstd (2026-10-22)
+- `apps/desktop-host/src/components/tar.ts`: `extractZstdTar` nhận `limits` và **chặn luồng giải nén khi nó đang ghi** (`boundedStream` ⇒ vượt `totalBytes` là throw) ⇒ file scratch luôn bị xoá kể cả khi thất bại.
+- `apps/desktop-host/src/components/manifest.ts`: `MAX_COMPONENT_ARTIFACT_BYTES` (1 GiB) — manifest khai byte lớn hơn thì bị từ chối, nên tải về cũng bị chặn.
+- Test hồi quy: `components.spec.ts` — archive 2.106 B nén ra 64 MiB bị từ chối với `size budget` và scratch bị dọn.
+- Đã đo lại: bom 2.106 B ⇒ `RESULT bomb=REFUSED`, `/tmp` không còn bị chiếm (fixture cũ 1,8 GB đã xoá).
+- **Archive Office thật vẫn cài được**: `office-component-probe.sh` ⇒ `status_install` ready, `python_imports=ok`, engine compose ✓.
 
 ### (B) F14 — bỏ ~34 MB rác trong payload
 Cây `dsh/node_modules` mang 21 package `dsh-experimental-*` (32 MB là `sherpa-onnx-linux-x64` — model giọng nói) trong khi profile desktop **không mount** package experimental nào. Lọc dependency closure trong `apps/desktop-tauri/scripts/stage-payload.sh` (đúng cách đã bỏ `sharp`/`koffi`/`node-pty`) ⇒ AppImage 90 MB → ~62 MB.

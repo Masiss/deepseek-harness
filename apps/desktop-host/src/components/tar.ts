@@ -15,6 +15,7 @@ import { chmod, mkdir, open, rm, symlink } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { pipeline } from 'node:stream/promises'
+import { Transform, type TransformCallback } from 'node:stream'
 import { createZstdDecompress } from 'node:zlib'
 
 const BLOCK = 512
@@ -189,16 +190,56 @@ export async function extractTar(
 /**
  * Decompress a zstd archive and extract its tar contents.
  *
+ * The decompressed stream is bounded while it is written, so an archive whose
+ * expansion dwarfs the download is refused before the bytes reach the disk.
+ * The budget is the same one the extraction spends on its entries, because both
+ * describe how much one install may write.
+ *
  * @param archive - Path to the `.tar.zst` file.
  * @param destination - Existing directory the entries are written below.
  * @param scratch - Path for the intermediate uncompressed tar, removed afterwards.
+ * @param limits - Budget the extraction may spend.
  * @returns Resolves after the archive is fully extracted.
+ * @throws When the decompressed archive exceeds the budget.
  */
-export async function extractZstdTar(archive: string, destination: string, scratch: string): Promise<void> {
-  await pipeline(createReadStream(archive), createZstdDecompress(), createWriteStream(scratch))
+export async function extractZstdTar(
+  archive: string,
+  destination: string,
+  scratch: string,
+  limits: TarLimits = DEFAULT_TAR_LIMITS,
+): Promise<void> {
   try {
-    await extractTar(scratch, destination)
+    await pipeline(
+      createReadStream(archive),
+      createZstdDecompress(),
+      boundedStream(limits.totalBytes),
+      createWriteStream(scratch),
+    )
+    await extractTar(scratch, destination, limits)
   } finally {
     await rm(scratch, { force: true })
   }
+}
+
+/**
+ * A stream that refuses to pass more than `limit` bytes.
+ *
+ * The limit applies to the bytes the archive expands to, not to the bytes it
+ * arrives as, so a small download cannot fill the disk.
+ *
+ * @param limit - Largest number of bytes the stream may pass.
+ * @returns The bounded stream.
+ */
+function boundedStream(limit: number): Transform {
+  let written = 0
+  return new Transform({
+    transform(chunk: Buffer, _encoding, callback: TransformCallback) {
+      written += chunk.byteLength
+      if (written > limit) {
+        callback(new Error('desktop components: the archive exceeds its size budget'))
+        return
+      }
+      callback(null, chunk)
+    },
+  })
 }

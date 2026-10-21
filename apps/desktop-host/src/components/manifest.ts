@@ -39,6 +39,16 @@ const ID = /^[a-z][a-z0-9-]*$/u
 const VERSION = /^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/u
 const DIGEST = /^[a-f0-9]{64}$/u
 
+/**
+ * Largest archive a manifest may declare.
+ *
+ * The Office component ships a Python runtime and the Office engine, so the
+ * ceiling leaves room for it. The bound matters because the declared length is
+ * what the download writes before any digest is compared, and because the
+ * archive expands further than it arrives.
+ */
+export const MAX_COMPONENT_ARTIFACT_BYTES = 1024 * 1024 * 1024
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -61,7 +71,7 @@ export function parseComponentsManifest(value: unknown): DesktopComponentsManife
     if (typeof id !== 'string' || !ID.test(id)
       || typeof version !== 'string' || !VERSION.test(version)
       || typeof file !== 'string' || file.length === 0 || file.includes('/') || file === '.' || file === '..'
-      || typeof bytes !== 'number' || !Number.isSafeInteger(bytes) || bytes <= 0
+      || typeof bytes !== 'number' || !Number.isSafeInteger(bytes) || bytes <= 0 || bytes > MAX_COMPONENT_ARTIFACT_BYTES
       || typeof sha256 !== 'string' || !DIGEST.test(sha256)) {
       throw new Error('desktop components: invalid manifest')
     }
