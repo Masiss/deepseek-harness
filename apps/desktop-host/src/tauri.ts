@@ -17,6 +17,7 @@ import { installDesktopUpdateTaskControl } from './update-tasks.ts'
 import { installDesktopQuitInspection } from './quit-inspection.ts'
 import { installPlatformSessionPublisher } from './platform-session.ts'
 import { prepareDesktopProfile } from './profile-lifecycle.ts'
+import { acquireDesktopLease } from './desktop-lease.ts'
 import { DesktopOfficeComponent } from './components/office.ts'
 import * as desktopOffice from './office.ts'
 import { createAppImageDriver } from './update/appimage.ts'
@@ -65,6 +66,9 @@ async function main(): Promise<void> {
   }
   const profile = loadProfileDirectory('dsh', projectDir, installAnchor)
   reportSkippedBundles('dsh', profile)
+  // The Tauri shell and the Electron application can both be installed; only
+  // one Host may own the state they share.
+  const lease = acquireDesktopLease(resolveDshHome())
   const application = runProfile({
     environment: loadLayeredEnv('dsh'),
     profile: 'desktop',
@@ -96,6 +100,7 @@ async function main(): Promise<void> {
     await running?.shutdown.shutdown(0)
     try { await transport.send({ type: 'shutdown-complete' }) } catch (error: unknown) { console.error(error) }
     transport.close()
+    lease.release()
   })()
   transport.onMessage((message) => {
     if (message.type === 'shutdown') { void stop(); return }

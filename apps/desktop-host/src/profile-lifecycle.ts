@@ -15,8 +15,10 @@
  * Feature bundles are never removed: they insert rows over the Web application
  * instead of replacing it, which is the supported way to extend a profile.
  *
- * Only one Host runs per profile: the shell enforces single-instance startup,
- * so this module does not take the Electron profile lock.
+ * Only one Host runs per profile: a carrier enforces single-instance startup
+ * for itself, and the lease in `desktop-lease.ts` keeps the other carrier out
+ * of the state they share, so this module does not take the Electron profile
+ * lock.
  */
 
 import {
