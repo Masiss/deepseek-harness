@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag: the release name and the feed path the artifacts point at'
+        description: 'Release tag: each target publishes a release named after it'
         type: string
         required: true
       draft:
@@ -32,14 +32,6 @@ concurrency:
 env:
   PRIMARY_NODE_VERSION: '24'
   DSH_TELEMETRY_DISABLED: '1'
-  # The release name is the tag: a dispatch names it, and a pushed tag is
-  # already named.
-  # Each target publishes its own release, because the artifacts differ and
-  # the feed is per target too.
-  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}-${{ matrix.target }}
-  # The feed is per target: the Office component archive differs per target.
-  FEED_TAG: desktop-feed-${{ matrix.target }}
-
 jobs:
   release:
     name: Build and publish the ${{ matrix.target }} release
@@ -57,6 +49,12 @@ jobs:
             runner: ubuntu-24.04-arm
     env:
       DSH_DESKTOP_TARGET: ${{ matrix.target }}
+      # Each target publishes its own release, because the artifacts differ
+      # and the feed is per target too.
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}-${{ matrix.target }}
+      # The feed is per target: the Office component archive differs per
+      # target.
+      FEED_TAG: desktop-feed-${{ matrix.target }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
