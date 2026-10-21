@@ -3,43 +3,50 @@
  * `sharp`-shaped entry over the Rust native module.
  *
  * The attachment service inspects a raster, normalizes it, and re-encodes it.
- * This wrapper serves the operations that service uses — decode and report the
- * intrinsic facts, apply the EXIF orientation, scale inside a box, and encode
- * as WebP or JPEG — from the Rust module.
+ * This wrapper serves that surface — decode and report the intrinsic facts,
+ * apply the EXIF orientation, scale inside a box, keep the metadata a caller
+ * asks for, and encode as PNG, JPEG, WebP, or TIFF — from the Rust module.
  *
- * Everything outside that surface is delegated to the real sharp package when
- * the payload still carries it, so test fixtures and other consumers keep
- * their behavior. The Desktop payload drops sharp once this module is present.
+ * Every operation the wrapper offers runs on the native module, so a payload
+ * that carries this module needs no sharp package and no libvips binaries.
  */
 
-const { existsSync } = require('node:fs')
-const { dirname, join } = require('node:path')
+const { readFileSync } = require('node:fs')
 const native = require('./dsh-native.node')
 
-/** How many pipelines fell back to the real sharp package. */
-let delegated = 0
+/** Formats the native module encodes. */
+const ENCODABLE_FORMATS = new Set(['png', 'jpeg', 'webp', 'tiff', 'gif'])
 
-/** The real sharp package, when the payload still carries it. */
-function fallbackSharp() {
-  if (fallbackSharp.resolved !== undefined) return fallbackSharp.resolved
-  const here = dirname(__filename)
-  const candidates = [
-    // The Desktop runtime: <runtime>/node_modules/sharp.
-    join(here, '..', '..', '..', 'sharp'),
-    // The repository: packages/attachment/attachment-local/node_modules/sharp.
-    join(here, '..', '..', '..', 'packages', 'attachment', 'attachment-local', 'node_modules', 'sharp'),
-  ]
-  for (const candidate of candidates) {
-    if (!existsSync(candidate)) continue
-    try {
-      fallbackSharp.resolved = require(candidate)
-      return fallbackSharp.resolved
-    } catch {
-      // A candidate that does not load is not a usable fallback.
-    }
+/** Whether a name is one of the built-in colour profiles libvips ships. */
+const BUILTIN_PROFILES = new Set(['srgb', 'p3', 'cmyk'])
+
+/** The pixels of one synthetic raster, as the native module expects them. */
+function syntheticPixels(create) {
+  const width = create.width
+  const height = create.height
+  const channels = create.channels
+  const background = create.background ?? { r: 0, g: 0, b: 0, alpha: 1 }
+  const pixels = Buffer.alloc(width * height * channels)
+  for (let index = 0; index < width * height; index += 1) {
+    const offset = index * channels
+    pixels[offset] = background.r ?? 0
+    if (channels > 1) pixels[offset + 1] = background.g ?? 0
+    if (channels > 2) pixels[offset + 2] = background.b ?? 0
+    // The background alpha is a fraction, as sharp takes it.
+    if (channels > 3) pixels[offset + 3] = Math.round((background.alpha ?? 1) * 255)
   }
-  fallbackSharp.resolved = null
-  return null
+  return pixels
+}
+
+/** The metadata blocks a container carries. */
+function readBlocks(data) {
+  const blocks = native.readMetadata(Buffer.from(data))
+  return {
+    exif: blocks.exif === undefined || blocks.exif === null ? undefined : Buffer.from(blocks.exif),
+    icc: blocks.icc === undefined || blocks.icc === null ? undefined : Buffer.from(blocks.icc),
+    xmp: blocks.xmp === undefined || blocks.xmp === null ? undefined : Buffer.from(blocks.xmp),
+    iptc: blocks.iptc === undefined || blocks.iptc === null ? undefined : Buffer.from(blocks.iptc),
+  }
 }
 
 /** A pipeline over one encoded raster. */
@@ -51,12 +58,35 @@ class Pipeline {
     this.format = null
     this.quality = undefined
     this.effort = undefined
+    this.blocks = undefined
+    // A synthetic raster has no encoded bytes to decode; its pixels are known.
+    this.synthetic = undefined
   }
 
   /** The intrinsic facts of the source raster. */
   async metadata() {
+    if (this.synthetic !== undefined) {
+      return {
+        format: 'raw',
+        width: this.synthetic.width,
+        height: this.synthetic.height,
+        pages: 1,
+        orientation: undefined,
+        depth: 'uchar',
+        space: 'srgb',
+        hasAlpha: this.synthetic.channels === 4,
+        hasProfile: false,
+        exif: undefined,
+        xmp: undefined,
+        iptc: undefined,
+        icc: undefined,
+        tifftagPhotoshop: undefined,
+        comments: undefined,
+      }
+    }
     const decoded = native.decodeImage(Buffer.from(this.input))
     const facts = decoded.facts
+    const blocks = readBlocks(this.input)
     return {
       format: facts.format,
       width: facts.width,
@@ -67,10 +97,10 @@ class Pipeline {
       space: facts.space,
       hasAlpha: facts.hasAlpha,
       hasProfile: facts.hasIcc,
-      exif: facts.hasExif ? Buffer.alloc(0) : undefined,
-      xmp: facts.hasXmp ? Buffer.alloc(0) : undefined,
-      iptc: facts.hasIptc ? Buffer.alloc(0) : undefined,
-      icc: facts.hasIcc ? Buffer.alloc(0) : undefined,
+      exif: blocks.exif,
+      xmp: blocks.xmp,
+      iptc: blocks.iptc,
+      icc: blocks.icc,
       tifftagPhotoshop: facts.hasPhotoshop ? {} : undefined,
       comments: facts.hasComments ? [] : undefined,
     }
@@ -80,24 +110,48 @@ class Pipeline {
   raw() {
     const pipeline = this
     return {
-      async toBuffer() {
+      async toBuffer(options = {}) {
         const processed = await pipeline.process()
-        return Buffer.from(processed.pixels)
+        const data = Buffer.from(processed.pixels)
+        if (options.resolveWithObject !== true) return data
+        return {
+          data,
+          info: {
+            width: processed.width,
+            height: processed.height,
+            channels: processed.channels,
+            size: processed.width * processed.height * processed.channels,
+            format: 'raw',
+          },
+        }
       },
     }
   }
 
   /** The pixels and dimensions after the pipeline's operations. */
   async process() {
-    const decoded = native.decodeImage(Buffer.from(this.input))
-    let pixels = Buffer.from(decoded.pixels)
-    let width = decoded.facts.width
-    let height = decoded.facts.height
-    const channels = decoded.channels
+    let pixels
+    let width
+    let height
+    let channels
+    let orientation = 1
+    if (this.synthetic !== undefined) {
+      pixels = Buffer.from(this.input)
+      width = this.synthetic.width
+      height = this.synthetic.height
+      channels = this.synthetic.channels
+    } else {
+      const decoded = native.decodeImage(Buffer.from(this.input))
+      pixels = Buffer.from(decoded.pixels)
+      width = decoded.facts.width
+      height = decoded.facts.height
+      channels = decoded.channels
+      orientation = decoded.facts.orientation ?? 1
+    }
     for (const operation of this.operations) {
       if (operation.kind === 'rotate') {
-        const orientation = operation.orientation ?? decoded.facts.orientation ?? 1
-        const rotated = native.rotateImage(pixels, width, height, channels, orientation)
+        const applied = operation.orientation ?? orientation
+        const rotated = native.rotateImage(pixels, width, height, channels, applied)
         pixels = Buffer.from(rotated.pixels)
         width = rotated.width
         height = rotated.height
@@ -118,20 +172,19 @@ class Pipeline {
   async toBuffer(options = {}) {
     const processed = await this.process()
     const format = this.format ?? 'png'
-    let data
-    if (format === 'jpeg') {
-      data = Buffer.from(native.encodeJpeg(
-        processed.pixels, processed.width, processed.height, processed.channels,
-        this.quality ?? 80,
-      ))
-    } else if (format === 'webp') {
-      data = Buffer.from(native.encodeWebp(
-        processed.pixels, processed.width, processed.height, processed.channels,
-        this.quality ?? 80, this.effort ?? 4,
-      ))
-    } else {
-      data = await this.delegate('png').toBuffer()
-    }
+    const blocks = this.blocks ?? {}
+    const data = Buffer.from(native.encodeImage(
+      processed.pixels, processed.width, processed.height, processed.channels,
+      {
+        format,
+        ...(this.quality === undefined ? {} : { quality: this.quality }),
+        ...(this.effort === undefined ? {} : { effort: this.effort }),
+        ...(blocks.exif === undefined ? {} : { exif: blocks.exif }),
+        ...(blocks.icc === undefined ? {} : { icc: blocks.icc }),
+        ...(blocks.xmp === undefined ? {} : { xmp: blocks.xmp }),
+        ...(blocks.iptc === undefined ? {} : { iptc: blocks.iptc }),
+      },
+    ))
     if (options.resolveWithObject !== true) return data
     return { data, info: { width: processed.width, height: processed.height, format } }
   }
@@ -143,6 +196,7 @@ class Pipeline {
     copy.format = this.format
     copy.quality = this.quality
     copy.effort = this.effort
+    copy.blocks = this.blocks
     return copy
   }
 
@@ -188,174 +242,93 @@ class Pipeline {
     return this
   }
 
-  /**
-   * Hand the pipeline to the real sharp package.
-   * @param operation - The operation the caller asked for.
-   * @returns The real package's pipeline for the same input and operations.
-   */
-  delegate(operation) {
-    const fallback = fallbackSharp()
-    if (fallback === null) {
-      throw new Error(`sharp shim: ${operation} needs the sharp package`)
-    }
-    delegated += 1
-    let instance = fallback(Buffer.from(this.input))
-    for (const applied of this.operations) {
-      if (applied.kind === 'rotate') instance = instance.rotate()
-      else if (applied.kind === 'resize') {
-        instance = instance.resize({
-          width: applied.width,
-          height: applied.height,
-          fit: 'inside',
-          withoutEnlargement: applied.withoutEnlargement,
-        })
-      }
-    }
-    return new Delegating(instance)
+  /** Encode as PNG. */
+  png(options = {}) {
+    this.format = 'png'
+    this.quality = options.quality
+    return this
   }
 
-  /** Encode as PNG; the Rust module encodes WebP and JPEG only. */
-  png() {
-    return this.delegate('png')
+  /** Encode as TIFF. */
+  tiff(options = {}) {
+    this.format = 'tiff'
+    this.quality = options.quality
+    return this
   }
 
-  /** Encode as TIFF; the Rust module encodes WebP and JPEG only. */
-  tiff() {
-    return this.delegate('tiff')
-  }
-
-  /** Encode as another format; the Rust module encodes WebP and JPEG only. */
+  /** Encode as another format. */
   toFormat(format) {
-    return this.delegate(`toFormat(${format})`)
-  }
-
-  /** Write descriptive metadata; the Rust module writes no metadata. */
-  withMetadata() {
-    return this.delegate('withMetadata')
-  }
-
-  /** Write a colour profile; the Rust module writes no metadata. */
-  withIccProfile() {
-    return this.delegate('withIccProfile')
-  }
-}
-
-/** A pipeline that hands every operation to the real sharp package. */
-class Delegating {
-  constructor(instance) {
-    this.instance = instance
-  }
-
-  /** Every operation belongs to the real sharp package. */
-  metadata(...args) {
-    delegated += 1
-    return this.instance.metadata(...args)
-  }
-
-  raw(...args) {
-    delegated += 1
-    return this.instance.raw(...args)
-  }
-
-  toBuffer(...args) {
-    delegated += 1
-    return this.instance.toBuffer(...args)
-  }
-
-  clone() {
-    delegated += 1
-    return new Delegating(this.instance.clone())
-  }
-
-  rotate(...args) {
-    delegated += 1
-    this.instance.rotate(...args)
+    if (!ENCODABLE_FORMATS.has(format)) {
+      throw new Error(`sharp shim: the native module cannot encode ${format}`)
+    }
+    this.format = format
     return this
   }
 
-  toColourspace(...args) {
-    delegated += 1
-    this.instance.toColourspace(...args)
+  /** Keep the source's descriptive metadata, and the orientation asked for. */
+  withMetadata(options = {}) {
+    // A synthetic raster carries no metadata to keep.
+    const source = this.synthetic === undefined ? readBlocks(this.input) : {}
+    const orientation = options.orientation
+    let exif = source.exif
+    if (orientation !== undefined && this.synthetic === undefined) {
+      const written = native.exifForOrientation(Buffer.from(this.input), orientation)
+      exif = written === undefined || written === null ? undefined : Buffer.from(written)
+    }
+    this.blocks = {
+      exif,
+      icc: source.icc,
+      xmp: source.xmp,
+      iptc: source.iptc,
+    }
     return this
   }
 
-  toColorspace(...args) {
-    delegated += 1
-    this.instance.toColorspace(...args)
-    return this
-  }
-
-  resize(...args) {
-    delegated += 1
-    this.instance.resize(...args)
-    return this
-  }
-
-  webp(...args) {
-    delegated += 1
-    this.instance.webp(...args)
-    return this
-  }
-
-  jpeg(...args) {
-    delegated += 1
-    this.instance.jpeg(...args)
-    return this
-  }
-
-  png(...args) {
-    delegated += 1
-    this.instance.png(...args)
-    return this
-  }
-
-  tiff(...args) {
-    delegated += 1
-    this.instance.tiff(...args)
-    return this
-  }
-
-  toFormat(...args) {
-    delegated += 1
-    this.instance.toFormat(...args)
-    return this
-  }
-
-  withMetadata(...args) {
-    delegated += 1
-    this.instance.withMetadata(...args)
-    return this
-  }
-
-  withIccProfile(...args) {
-    delegated += 1
-    this.instance.withIccProfile(...args)
+  /** Write a colour profile. */
+  withIccProfile(profile) {
+    if (typeof profile !== 'string') {
+      throw new Error('sharp shim: a colour profile is named by a file path')
+    }
+    if (BUILTIN_PROFILES.has(profile)) {
+      throw new Error(
+        `sharp shim: the native module does not ship the built-in ${profile} profile;`
+        + ' pass the profile file instead',
+      )
+    }
+    this.blocks = { ...(this.blocks ?? {}), icc: readFileSync(profile) }
     return this
   }
 }
 
 /**
  * Open an encoded raster.
- * @param input - Encoded bytes, or a sharp input descriptor.
+ * @param input - Encoded bytes, a raw buffer description, or a synthetic raster.
  * @param options - Decoder options.
  * @returns The pipeline for that input.
  */
 function sharp(input, options) {
-  const encoded = (Buffer.isBuffer(input) || input instanceof Uint8Array)
-    && (options?.raw === undefined)
-  if (!encoded) {
-    const fallback = fallbackSharp()
-    if (fallback === null) {
-      throw new Error('sharp shim: this input needs the sharp package')
-    }
-    delegated += 1
-    return new Delegating(fallback(input, options))
+  // sharp names a raw raster by its descriptor: the pixels and their shape.
+  if (input?.raw !== undefined) {
+    const raw = input.raw
+    const pixels = Buffer.alloc(raw.width * raw.height * raw.channels)
+    Buffer.from(input.data ?? input.buffer ?? input).copy(pixels)
+    const pipeline = new Pipeline(pixels, options)
+    pipeline.synthetic = { width: raw.width, height: raw.height, channels: raw.channels }
+    return pipeline
   }
-  return new Pipeline(input, options)
+  // sharp names a new raster by what it should contain.
+  if (input?.create !== undefined) {
+    const create = input.create
+    const pipeline = new Pipeline(syntheticPixels(create), options)
+    pipeline.synthetic = { width: create.width, height: create.height, channels: create.channels }
+    return pipeline
+  }
+  if (Buffer.isBuffer(input) || input instanceof Uint8Array) {
+    return new Pipeline(input, options)
+  }
+  throw new Error('sharp shim: this input needs the sharp package')
 }
 
 module.exports = sharp
 module.exports.default = sharp
 module.exports.sharp = sharp
-/** How many pipelines fell back to the real sharp package. */
-module.exports.delegatedCount = () => delegated

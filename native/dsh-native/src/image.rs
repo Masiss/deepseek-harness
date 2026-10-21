@@ -7,11 +7,16 @@
 
 use std::io::Cursor;
 
-use image::{DynamicImage, ImageFormat, RgbaImage};
+use image::codecs::png::{CompressionType, FilterType};
+use image::{DynamicImage, ImageFormat, ImageEncoder, RgbaImage};
 use napi::bindgen_prelude::*;
 use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 
+use crate::image_meta::{
+    exif_with_orientation, extract_metadata, write_jpeg_metadata, write_png_xmp, write_webp_metadata,
+    MetadataBlocks,
+};
 use crate::image_scan::scan_container;
 
 /// The intrinsic facts of an encoded raster.
@@ -78,6 +83,7 @@ fn format_name(format: ImageFormat) -> Option<&'static str> {
         ImageFormat::Jpeg => Some("jpeg"),
         ImageFormat::WebP => Some("webp"),
         ImageFormat::Gif => Some("gif"),
+        ImageFormat::Tiff => Some("tiff"),
         _ => None,
     }
 }
@@ -339,6 +345,175 @@ pub fn encode_webp(
         .write_with_encoder(encoder)
         .map_err(reason)?;
     Ok(Buffer::from(encoded))
+}
+
+/// How one raster is encoded.
+#[napi(object)]
+pub struct EncodeOptions {
+    /// Container format: `png`, `jpeg`, `webp`, or `tiff`.
+    pub format: String,
+    /// Quality target for the lossy formats, 1 through 100.
+    pub quality: Option<u32>,
+    /// Compression effort for WebP, 0 through 6.
+    pub effort: Option<u32>,
+    /// EXIF block to write, without the JPEG `Exif\0\0` prefix.
+    pub exif: Option<Buffer>,
+    /// Colour profile to write.
+    pub icc: Option<Buffer>,
+    /// XMP packet to write.
+    pub xmp: Option<Buffer>,
+    /// IPTC block to write.
+    pub iptc: Option<Buffer>,
+}
+
+/// The metadata blocks one container carries.
+#[napi(object)]
+pub struct ContainerMetadata {
+    /// Raw EXIF block, without the JPEG `Exif\0\0` prefix.
+    pub exif: Option<Buffer>,
+    /// Colour profile bytes.
+    pub icc: Option<Buffer>,
+    /// XMP packet bytes.
+    pub xmp: Option<Buffer>,
+    /// IPTC block bytes.
+    pub iptc: Option<Buffer>,
+}
+
+/// Read the metadata blocks of an encoded raster.
+///
+/// @param data - Complete encoded image bytes.
+/// @returns The blocks the container carries.
+#[napi]
+pub fn read_metadata(data: Buffer) -> Result<ContainerMetadata> {
+    let bytes = data.as_ref().to_vec();
+    let format = image::guess_format(&bytes).map_err(reason)?;
+    let blocks = extract_metadata(&bytes, format);
+    Ok(ContainerMetadata {
+        exif: blocks.exif.map(Buffer::from),
+        icc: blocks.icc.map(Buffer::from),
+        xmp: blocks.xmp.map(Buffer::from),
+        iptc: blocks.iptc.map(Buffer::from),
+    })
+}
+
+/// The EXIF block that declares one orientation.
+///
+/// @param data - Complete encoded image bytes of the source.
+/// @param orientation - The orientation to declare, 1 through 8.
+/// @returns The EXIF block to write, or none when the source has none and the
+/// orientation is the default.
+#[napi]
+pub fn exif_for_orientation(data: Buffer, orientation: u32) -> Result<Option<Buffer>> {
+    let bytes = data.as_ref().to_vec();
+    let format = image::guess_format(&bytes).map_err(reason)?;
+    let blocks = extract_metadata(&bytes, format);
+    Ok(exif_with_orientation(blocks.exif.as_deref(), orientation).map(Buffer::from))
+}
+
+/// Encode a raster into one container format, with the metadata blocks the
+/// caller asked to keep.
+///
+/// @param pixels - Interleaved 8-bit pixels.
+/// @param width - Raster width.
+/// @param height - Raster height.
+/// @param channels - Channels per pixel.
+/// @param options - The container format and the metadata to write.
+/// @returns The encoded bytes.
+#[napi]
+pub fn encode_image(
+    pixels: Buffer,
+    width: u32,
+    height: u32,
+    channels: u32,
+    options: EncodeOptions,
+) -> Result<Buffer> {
+    let pixels = pixels.as_ref().to_vec();
+    let source = raster(&pixels, width, height, channels)?;
+    let blocks = MetadataBlocks {
+        exif: options.exif.map(|block| block.as_ref().to_vec()),
+        icc: options.icc.map(|block| block.as_ref().to_vec()),
+        xmp: options.xmp.map(|block| block.as_ref().to_vec()),
+        iptc: options.iptc.map(|block| block.as_ref().to_vec()),
+    };
+    let quality = options.quality.unwrap_or(80).clamp(1, 100) as u8;
+    let colour = colour_type(channels)?;
+    match options.format.as_str() {
+        "png" => {
+            let mut encoded = Vec::new();
+            let mut encoder = image::codecs::png::PngEncoder::new_with_quality(
+                &mut encoded,
+                CompressionType::Default,
+                FilterType::Adaptive,
+            );
+            if let Some(profile) = blocks.icc.as_ref() {
+                encoder
+                    .set_icc_profile(profile.clone())
+                    .map_err(|error| Error::from_reason(error.to_string()))?;
+            }
+            if let Some(exif) = blocks.exif.as_ref() {
+                encoder
+                    .set_exif_metadata(exif.clone())
+                    .map_err(|error| Error::from_reason(error.to_string()))?;
+            }
+            encoder
+                .write_image(&pixels, width, height, colour)
+                .map_err(reason)?;
+            let written = match blocks.xmp.as_ref() {
+                Some(xmp) => write_png_xmp(&encoded, xmp),
+                None => encoded,
+            };
+            Ok(Buffer::from(written))
+        }
+        "jpeg" => {
+            let mut encoded = Vec::new();
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, quality)
+                .encode_image(&source.to_rgb8())
+                .map_err(reason)?;
+            Ok(Buffer::from(write_jpeg_metadata(&encoded, &blocks)))
+        }
+        "webp" => {
+            let mut encoded = Vec::new();
+            let encoder = webp::WebpEncoder::new(&mut encoded)
+                .with_quality(quality)
+                .with_compression(options.effort.unwrap_or(4).min(6) as u8);
+            source
+                .write_with_encoder(encoder)
+                .map_err(reason)?;
+            Ok(Buffer::from(write_webp_metadata(&encoded, &blocks)))
+        }
+        "gif" => {
+            let mut encoded = Vec::new();
+            image::codecs::gif::GifEncoder::new(&mut encoded)
+                .write_image(&pixels, width, height, colour)
+                .map_err(reason)?;
+            Ok(Buffer::from(encoded))
+        }
+        "tiff" => {
+            let mut encoded = std::io::Cursor::new(Vec::new());
+            let mut encoder = image::codecs::tiff::TiffEncoder::new(&mut encoded);
+            if let Some(profile) = blocks.icc.as_ref() {
+                encoder
+                    .set_icc_profile(profile.clone())
+                    .map_err(|error| Error::from_reason(error.to_string()))?;
+            }
+            encoder
+                .write_image(&pixels, width, height, colour)
+                .map_err(reason)?;
+            Ok(Buffer::from(encoded.into_inner()))
+        }
+        other => Err(Error::from_reason(format!("unsupported image format: {other}"))),
+    }
+}
+
+/// The colour type an interleaved buffer of the given channel count holds.
+fn colour_type(channels: u32) -> Result<image::ExtendedColorType> {
+    Ok(match channels {
+        1 => image::ExtendedColorType::L8,
+        2 => image::ExtendedColorType::La8,
+        3 => image::ExtendedColorType::Rgb8,
+        4 => image::ExtendedColorType::Rgba8,
+        _ => return Err(Error::from_reason("image pixels have an unknown channel count")),
+    })
 }
 
 /// A raster as an image buffer of the given channel count.

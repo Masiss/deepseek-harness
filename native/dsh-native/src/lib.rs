@@ -26,6 +26,9 @@ use nix::unistd::Pid;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 
 mod image;
+mod image_meta;
+#[cfg(test)]
+mod image_meta_tests;
 mod image_scan;
 #[cfg(test)]
 mod image_scan_tests;
