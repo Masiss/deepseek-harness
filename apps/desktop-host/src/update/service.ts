@@ -15,7 +15,7 @@
 import { createHash } from 'node:crypto'
 import { mkdir, open, rm } from 'node:fs/promises'
 import { join } from 'node:path'
-import { gt, valid } from 'semver'
+import { gt, lt, valid } from 'semver'
 import type { UpdateInstallerDriver, UpdateInstallPlan } from './appimage.ts'
 import { DesktopUpdateJournal } from './journal.ts'
 import {
@@ -61,6 +61,13 @@ export interface DesktopUpdatePrompt {
 export interface DesktopUpdateServiceOptions {
   /** Manifest URL the shell was built to trust. */
   readonly feed: string
+  /**
+   * PEM public key the feed's signature is verified against.
+   *
+   * The pinned key is the trust anchor; another key is only for a caller
+   * that checks a document against a key of its own.
+   */
+  readonly publicKey?: string
   /** Installed version, owned by the shell that launched this Host. */
   readonly currentVersion: string
   /** Target artifact this shell can install. */
@@ -275,11 +282,18 @@ export class DesktopUpdateService {
         signal: AbortSignal.timeout(this.timeoutMs),
       })
       if (!response.ok) throw new Error(`desktop update: feed answered ${String(response.status)}`)
-      const manifest = parseUpdateManifest(await readBoundedJson(response, MAX_MANIFEST_BYTES))
+      const manifest = parseUpdateManifest(await readBoundedJson(response, MAX_MANIFEST_BYTES), this.options.publicKey)
       version = manifest.version
       if (valid(manifest.version) === null) throw new Error('desktop update: feed version is invalid')
       if (this.channel === 'latest' && manifest.version.includes('-')) {
         throw new Error('desktop update: latest feed contains a prerelease')
+      }
+      // A release may name the oldest client allowed to install it; a client
+      // below that line cannot install this release, so the update is not
+      // offered to it.
+      if (manifest.minimumVersion !== undefined
+        && lt(this.options.currentVersion, manifest.minimumVersion)) {
+        throw new UpdateManifestError('unsupported-target', `minimumVersion ${manifest.minimumVersion}`)
       }
       const artifact = selectUpdateArtifact(manifest, this.options.target)
       const newer = gt(manifest.version, this.options.currentVersion)

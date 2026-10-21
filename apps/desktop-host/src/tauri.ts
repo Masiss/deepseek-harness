@@ -216,6 +216,12 @@ function createDesktopUpdates(
   try {
     return new DesktopUpdateService({
       feed,
+      // The pinned key is the trust anchor; an operator may point the Host
+      // at another channel's key.
+      ...(process.env.DSH_DESKTOP_UPDATE_PUBLIC_KEY === undefined
+        || process.env.DSH_DESKTOP_UPDATE_PUBLIC_KEY === ''
+        ? {}
+        : { publicKey: process.env.DSH_DESKTOP_UPDATE_PUBLIC_KEY }),
       currentVersion,
       target: updateTarget(process.platform, process.arch),
       directory: join(resolveDshHome(), 'updates'),

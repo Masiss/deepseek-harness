@@ -10,6 +10,7 @@
  */
 
 import { valid } from 'semver'
+import { UpdateSignatureError, verifyUpdateFeedSignature } from './signing.ts'
 
 /** Targets a Desktop artifact can be published for, named `platform-arch`. */
 export const UPDATE_TARGETS = [
@@ -34,9 +35,13 @@ export interface UpdateArtifact {
 /** One published release. */
 export interface UpdateManifest {
   /** Documents this shape; a reader refuses anything it does not know. */
-  readonly schemaVersion: 1
+  readonly schemaVersion: 2
   /** Released version, bare semver including any prerelease. */
   readonly version: string
+  /** Oldest client version allowed to install this release; absent means any. */
+  readonly minimumVersion?: string
+  /** Base64 Ed25519 signature over the manifest's signed fields. */
+  readonly signature?: string
   /** Artifacts by target; a target omitted here is not published for this release. */
   readonly artifacts: Readonly<Partial<Record<UpdateTarget, UpdateArtifact>>>
 }
@@ -46,10 +51,13 @@ export type UpdateManifestFailure =
   | 'not-an-object'
   | 'unsupported-schema'
   | 'invalid-version'
+  | 'invalid-minimum-version'
   | 'missing-artifacts'
   | 'invalid-artifact'
   | 'unsupported-target'
   | 'missing-artifact'
+  | 'unsigned'
+  | 'invalid-signature'
 
 /** A manifest that cannot be used, with a fixed classification and a locating detail. */
 export class UpdateManifestError extends Error {
@@ -93,14 +101,19 @@ function isUpdateTarget(value: string): value is UpdateTarget {
  * client does not run, and that must not make its own artifact unusable.
  *
  * @param input - Parsed JSON, not a string.
+ * @param publicKey - The PEM public key to verify the signature against; the pinned one by default.
  * @returns The validated manifest.
  * @throws {UpdateManifestError} when the document or any known artifact is malformed.
  */
-export function parseUpdateManifest(input: unknown): UpdateManifest {
+export function parseUpdateManifest(input: unknown, publicKey?: string): UpdateManifest {
   if (!isRecord(input)) throw new UpdateManifestError('not-an-object', '$')
-  if (input.schemaVersion !== 1) throw new UpdateManifestError('unsupported-schema', 'schemaVersion')
+  if (input.schemaVersion !== 2) throw new UpdateManifestError('unsupported-schema', 'schemaVersion')
   if (typeof input.version !== 'string' || valid(input.version) === null) {
     throw new UpdateManifestError('invalid-version', 'version')
+  }
+  if (input.minimumVersion !== undefined
+    && (typeof input.minimumVersion !== 'string' || valid(input.minimumVersion) === null)) {
+    throw new UpdateManifestError('invalid-minimum-version', 'minimumVersion')
   }
   if (!isRecord(input.artifacts)) throw new UpdateManifestError('missing-artifacts', 'artifacts')
 
@@ -120,7 +133,31 @@ export function parseUpdateManifest(input: unknown): UpdateManifest {
     artifacts[target] = { url: raw.url, sha256: raw.sha256, size: raw.size }
   }
   if (Object.keys(artifacts).length === 0) throw new UpdateManifestError('missing-artifacts', 'artifacts')
-  return { schemaVersion: 1, version: input.version, artifacts }
+
+  // The signature covers the documents that name the artifact, so it is
+  // checked before the manifest is returned to a caller that may act on it.
+  const document = {
+    schemaVersion: 2,
+    version: input.version,
+    ...(input.minimumVersion === undefined ? {} : { minimumVersion: input.minimumVersion }),
+    artifacts: input.artifacts,
+  }
+  try {
+    verifyUpdateFeedSignature(document, typeof input.signature === 'string' ? input.signature : undefined, publicKey)
+  } catch (error) {
+    if (error instanceof UpdateSignatureError) {
+      throw new UpdateManifestError(error.failure === 'missing-signature' ? 'unsigned' : 'invalid-signature', error.failure)
+    }
+    throw error
+  }
+
+  return {
+    schemaVersion: 2,
+    version: input.version,
+    ...(typeof input.minimumVersion === 'string' ? { minimumVersion: input.minimumVersion } : {}),
+    ...(typeof input.signature === 'string' ? { signature: input.signature } : {}),
+    artifacts,
+  }
 }
 
 /**

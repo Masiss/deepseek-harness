@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -11,6 +11,7 @@ import {
   type DesktopUpdateAdmission,
   type DesktopUpdatePresentation,
 } from '../src/update/service.ts'
+import { signedFeedBytes } from '../src/update/signing.ts'
 
 const ARTIFACT = Buffer.from('a complete AppImage payload')
 const DIGEST = createHash('sha256').update(ARTIFACT).digest('hex')
@@ -24,19 +25,35 @@ let artifactStatus: number
 let installed: UpdateInstallPlan[]
 let admission: DesktopUpdateAdmission
 
+// The suite signs the manifests it serves with a key of its own, and the
+// service verifies them against that key.
+const { privateKey, publicKey } = generateKeyPairSync('ed25519')
+const PUBLIC_KEY = publicKey.export({ type: 'spki', format: 'pem' }).toString()
+
+/** A manifest with the fields a release signs. */
+function signedManifest(document: Record<string, unknown>): Record<string, unknown> {
+  const signed = {
+    schemaVersion: document.schemaVersion,
+    version: document.version,
+    ...(document.minimumVersion === undefined ? {} : { minimumVersion: document.minimumVersion }),
+    artifacts: document.artifacts,
+  }
+  return { ...document, signature: sign(null, signedFeedBytes(signed as never), privateKey).toString('base64') }
+}
+
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'dsh-update-service-'))
   installed = []
   admission = 'proceed'
   artifactBody = ARTIFACT
   artifactStatus = 200
-  manifestBody = {
-    schemaVersion: 1,
+  manifestBody = signedManifest({
+    schemaVersion: 2,
     version: '0.3.0',
     artifacts: {
       'linux-x64': { url: 'placeholder', sha256: DIGEST, size: ARTIFACT.byteLength },
     },
-  }
+  })
   server = createServer((request, response) => {
     if (request.url === '/app.bin') {
       response.statusCode = artifactStatus
@@ -57,19 +74,20 @@ afterEach(async () => {
 
 /** Serve the manifest with the artifact URL pointing at this server. */
 function serveArtifact(): void {
-  manifestBody = {
-    schemaVersion: 1,
+  manifestBody = signedManifest({
+    schemaVersion: 2,
     version: '0.3.0',
     artifacts: {
       'linux-x64': { url: `${base}/app.bin`, sha256: DIGEST, size: ARTIFACT.byteLength },
     },
-  }
+  })
 }
 
 /** One service bound to the test server. */
 function service(overrides: Partial<ConstructorParameters<typeof DesktopUpdateService>[0]> = {}): DesktopUpdateService {
   return new DesktopUpdateService({
     feed: `${base}/manifest.json`,
+    publicKey: PUBLIC_KEY,
     currentVersion: '0.2.1',
     target: 'linux-x64',
     directory: join(root, 'updates'),
@@ -114,7 +132,7 @@ describe('DesktopUpdateService', () => {
 
   it('reports nothing for a version that is not newer', async () => {
     serveArtifact()
-    manifestBody = { ...manifestBody as object, version: '0.2.1' }
+    manifestBody = signedManifest({ ...manifestBody as object, version: '0.2.1' })
     const updates = service()
     await expect(updates.check(true)).resolves.toEqual({ phase: 'idle' })
     await expect(updates.download('0.2.1')).resolves.toMatchObject({ phase: 'error', failure: 'download' })
@@ -122,18 +140,18 @@ describe('DesktopUpdateService', () => {
   })
 
   it('refuses a release without an artifact for this target', async () => {
-    manifestBody = {
-      schemaVersion: 1,
+    manifestBody = signedManifest({
+      schemaVersion: 2,
       version: '0.3.0',
       artifacts: { 'darwin-arm64': { url: `${base}/app.bin`, sha256: DIGEST, size: ARTIFACT.byteLength } },
-    }
+    })
     const updates = service()
     await expect(updates.check(true)).resolves.toEqual({ phase: 'error', failure: 'check', version: '0.3.0' })
   })
 
   it('refuses a prerelease on the latest channel', async () => {
     serveArtifact()
-    manifestBody = { ...manifestBody as object, version: '0.3.0-rc.1' }
+    manifestBody = signedManifest({ ...manifestBody as object, version: '0.3.0-rc.1' })
     const updates = service({ channel: 'latest' })
     await expect(updates.check(true)).resolves.toMatchObject({ phase: 'error', failure: 'check' })
   })

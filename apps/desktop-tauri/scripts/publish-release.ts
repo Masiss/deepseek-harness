@@ -19,11 +19,12 @@
  *   usage: publish-release.ts <linux-x64|linux-arm64> --tag <tag> [--feed-tag <tag>] [--dry-run]
  */
 
-import { createHash } from 'node:crypto'
+import { createHash, createPrivateKey, sign } from 'node:crypto'
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
+import { signedFeedBytes, type SignedFeedDocument } from '../../desktop-host/src/update/signing.ts'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const target = process.argv[2] ?? 'linux-x64'
@@ -71,18 +72,22 @@ function appImagePath(version: string): string {
 }
 
 /** The update manifest the updater reads, naming this target's artifact. */
-function updateManifest(version: string, appImage: string, releaseBase: string): string {
-  return `${JSON.stringify({
-    schemaVersion: 1,
-    version,
-    artifacts: {
-      [target]: {
-        url: `${releaseBase}/${basename(appImage)}`,
-        sha256: digestOf(appImage),
-        size: statSync(appImage).size,
-      },
+function updateManifest(version: string, appImage: string, releaseBase: string, minimumVersion: string | undefined): string {
+  const artifacts = {
+    [target]: {
+      url: `${releaseBase}/${basename(appImage)}`,
+      sha256: digestOf(appImage),
+      size: statSync(appImage).size,
     },
-  }, undefined, 2)}\n`
+  }
+  const document = {
+    schemaVersion: 2,
+    version,
+    ...(minimumVersion === undefined ? {} : { minimumVersion }),
+    artifacts,
+  }
+  const signature = signFeedDocument(document)
+  return `${JSON.stringify({ ...document, signature }, undefined, 2)}\n`
 }
 
 /** The component manifest the Office installer reads, beside the archives it names. */
@@ -94,6 +99,22 @@ function componentManifest(): string | undefined {
     throw new Error('publish-release: the component manifest names no archive')
   }
   return `${JSON.stringify(manifest, undefined, 2)}\n`
+}
+
+/**
+ * Sign the feed document with the release channel's private key.
+ *
+ * The key is the channel's secret; the client trusts the matching public
+ * key, which the Desktop Host pins. A feed that cannot be signed is not
+ * published, because a client that verifies signatures would refuse it.
+ */
+function signFeedDocument(document: SignedFeedDocument): string {
+  const pem = process.env.DSH_RELEASE_SIGNING_KEY ?? ''
+  if (pem === '') throw new Error('publish-release: DSH_RELEASE_SIGNING_KEY is missing')
+  const key = createPrivateKey(pem)
+  // The bytes come from the client's own canonicalization, so the signer and
+  // the verifier cannot drift apart.
+  return sign(null, signedFeedBytes(document), key).toString('base64')
 }
 
 /** The artifacts this target contributes to the shared release. */
@@ -131,7 +152,8 @@ const feedBase = `https://github.com/${repository}/releases/download/${feedTag}`
 
 const feed = join(tree, 'release-feed')
 spawnSync('mkdir', ['-p', feed], { stdio: 'inherit' })
-writeFileSync(join(feed, 'manifest.json'), updateManifest(version, appImage, releaseBase))
+const minimumVersion = process.env.DSH_RELEASE_MINIMUM_VERSION
+writeFileSync(join(feed, 'manifest.json'), updateManifest(version, appImage, releaseBase, minimumVersion))
 const components = componentManifest()
 if (components !== undefined) writeFileSync(join(feed, 'components.json'), components)
 

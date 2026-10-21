@@ -157,6 +157,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          # The feed is signed with the channel's key; the client trusts the
+          # matching public key, which the Desktop Host pins.
+          DSH_RELEASE_SIGNING_KEY: ${{ secrets.DSH_RELEASE_SIGNING_KEY }}
           # A pushed tag publishes the release: the tag is the reviewed act.
           # A dispatch creates a draft, so a rehearsal never goes live.
           RELEASE_DRAFT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || 'false' }}
