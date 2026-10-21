@@ -498,7 +498,7 @@ Update không làm mất dữ liệu và không cài bản sai nền tảng.
 - [ ] macOS: mở từ Applications, không bị Gatekeeper chặn.
 - [ ] Windows: cài, mở, PTY chạy.
 - [ ] Uninstall không để lại file ngoài `$DSH_HOME` do user tạo.
-- [ ] CI build đủ 5 target trong ngân sách thời gian.
+- [ ] CI build đủ 5 target trong ngân sách thời gian. **Linux x64 đã đo trên runner**: lane `desktop-release.yml` dựng xong AppImage + .deb + .rpm + size gate trong 12 phút (một target Linux; 5 target còn thiếu 4 nền tảng khác).
 - [ ] Size gate fail nếu vượt ngân sách.
 
 ### Exit gate
@@ -692,7 +692,7 @@ Một audit độc lập (`DSH_Tauri_Source_Audit_2026-10-20.md`, đọc từ b�
 | F06 | Native `sharp`/PTY chỉ là subset | **Đúng** — shim delegate các thao tác ngoài subset (PNG/TIFF/`withMetadata`/…) nên sẽ throw khi đã bỏ `sharp`; `toColourspace()` là no-op; `metadata()` trả placeholder | **Đã sửa phần cốt lõi**: module Rust báo đúng facts (depth, space, alpha, orientation EXIF, metadata EXIF/ICC/XMP/IPTC, số frame) ✓, 93 test `attachment-local` xanh ✓, resize+encode 171 ms (sharp 97 ms) ✓, UTF-8 không còn bị cắt ở ranh giới chunk ✓, `onExit` báo sau `onData` cuối ✓. **Còn mở**: các thao tác ngoài subset (PNG/TIFF/`withMetadata`/`withIccProfile`) vẫn delegate cho sharp thật ⇒ payload phải giữ `sharp` cho tới khi bổ sung |
 | F07 | Tar extraction không có budget | **Đúng, đã sửa** | `extractTar` nhận `TarLimits` (tổng byte, số entry, độ sâu, kích thước một file) và từ chối archive vượt ngân sách ✓ (3 ca test mới) |
 | F08 | Thiếu capability tương đương Electron | **Đúng** — không có browser guest, deep link chỉ focus | **Mở** (Wave 3) |
-| F09 | CI chưa chứng minh artifact đầy đủ | **Đúng** — workflow không đóng gói, không size gate, `bun-version: latest` không ghim | **Đã đóng (2026-10-21)**: ghim Bun `1.4.3`; lane mới `desktop-release.yml` dựng primary runtime → đóng gói tarball → dựng cây runtime → pack AppImage/.deb/.rpm → **size gate** → phát hành GitHub Release kèm tài liệu feed (D32). Chạy thủ công theo tag, không tự chạy theo branch push |
+| F09 | CI chưa chứng minh artifact đầy đủ | **Đúng** — workflow không đóng gói, không size gate, `bun-version: latest` không ghim | **Đã đóng (2026-10-21)**: ghim Bun `1.4.3`; lane mới `desktop-release.yml` dựng primary runtime → đóng gói tarball → dựng cây runtime → pack AppImage/.deb/.rpm → **size gate** → phát hành GitHub Release kèm tài liệu feed (D32). Chạy thủ công theo tag, không tự chạy theo branch push. **Đã chạy thật**: release `desktop-v0.2.1-rc.2` trên fork (12 phút) — AppImage 90.917.368 B + `manifest.json` + `components.json` + archive Office 107.236.690 B; sha256/size trong manifest khớp đúng byte đã upload |
 | F10 | Drift với upstream ở hai entrypoint Host | **Đúng** — `tauri.ts` cố ý duplicate bootstrap; sự khác biệt Office on-demand là chủ ý | **Mở** (bảo trì) |
 | F11 | Test isolation cần budget | **Đúng một phần** — `isolated-run.sh` có namespace/clearenv/ro-bind nhưng chưa có budget CPU/RAM/disk; loopback vẫn dùng chung | **Mở** (Wave 1) |
 | F12 | Coexistence Tauri/Electron trên cùng state | **Đúng** — single-instance của Tauri không bảo vệ profile khỏi Electron | **Mở** (Wave 2) |
