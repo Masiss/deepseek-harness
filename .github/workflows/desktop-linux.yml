@@ -24,8 +24,21 @@ jobs:
           # even though the lockfile freezes the dependencies.
           bun-version: 1.4.3
 
+      # The workspace is installed with pnpm, the lane that owns the release
+      # packaging. pnpm's hoisted layout exposes every workspace package to
+      # Node's resolver; Bun's isolated layout keeps them apart, and a nested
+      # runtime that resolves a workspace package by name then cannot find
+      # it. The upstream CI installs the same way.
+      - uses: pnpm/action-setup@v5.0.0
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24'
+
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
 
       - name: Install the desktop build dependencies
         run: |

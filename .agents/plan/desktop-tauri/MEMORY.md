@@ -702,10 +702,18 @@ Trên máy phát triển có `bwrap` nên lane snapshot xanh. Runner `ubuntu-lat
 **Đã đóng (2026-10-21):** đúng là thiếu CPU, nhưng nguyên nhân là *song song*, không phải số nhân. Đo lại bằng `taskset -c 0,1` (giới hạn 2 CPU) cho thấy lane **treo 8,5 giờ** ở đúng hai ca này: tiến trình con không bao giờ khởi động xong, còn `vitest` chờ `turn/end` vô hạn. Chạy tuần tự (`DSH_SNAPSHOT_MAX_CONCURRENCY=1`, `DSH_SNAPSHOT_MAX_WORKERS=1`) trên cùng 2 CPU ấy thì **211/211 xanh trong 367 s**. Lane CI của fork đã đặt hai biến đó ⇒ mỗi ca replay có trọn runner, tiến trình con luôn kịp khởi động. Không sửa expected output.
 
 ### B47 — `renameSync` dùng mà không import ⇒ lane đóng gói trên runner sạch chết ngay
-
 `apps/desktop-tauri/scripts/prepare-linux-runtime.ts` gọi `renameSync(pythonDir, officePython)` (chuyển payload Python ra khỏi primary runtime) nhưng **không import** hàm đó từ `node:fs`. Máy phát triển không lộ vì cây build local đã có `.office-python` sẵn (nhánh `else if` chạy, không đi qua `renameSync`); một runner sạch có Python trong primary runtime thì đi đúng nhánh đó và chết với `ReferenceError: renameSync is not defined`. Đã sửa (thêm `renameSync` vào import `node:fs`). Cùng lúc đó, `officeComponent` có thể `undefined` ở chỗ đọc `.file` ⇒ thêm một `throw` tường minh khi không có component nào.
 
 **Bài học:** các script của lane Tauri **không nằm trong chương trình typecheck** nào (`tsconfig.host.json` chỉ liệt kê `apps/desktop/scripts/**`), nên `tsc` không bắt được cả hai lỗi trên. Đã thêm `apps/desktop-tauri/scripts/**/*.ts` vào `include` của `tsconfig.host.json` ⇒ `bun run typecheck` giờ kiểm tra cả script của lane.
+
+### B48 — Cài workspace bằng Bun ⇒ runtime con không resolve được package của workspace
+
+Hai ca replay `subagent-dsh-sdk-*` đỏ trên CI với `ENOENT .../.child-dsh/sessions`: tiến trình con (`dsh` lồng nhau) **không khởi động được** nên không ghi session nào. Nguyên nhân: lane cài bằng `bun install`, mà layout **isolated** của Bun giữ mỗi package workspace trong `node_modules/.bun/<pkg>@<ver>/node_modules/`, nên Node **không** tìm thấy package đó khi resolve theo tên từ thư mục profile. Layout **hoisted** của pnpm đặt mọi package workspace vào `node_modules/.pnpm/node_modules/` ⇒ Node tìm thấy.
+
+Đo lại trên worktree sạch (cài `bun install`): `bun install` ⇒ **2 ca đỏ** với đúng `ENOENT .child-dsh/sessions`; `pnpm install` ⇒ **2/2 xanh**. CI của upstream cài bằng pnpm vì lý do này. Đã đổi lane `desktop-linux.yml` sang `pnpm install --frozen-lockfile` (kèm `pnpm/action-setup` + Node 24).
+
+**Bẫy phụ:** nếu thư mục kịch bản nằm *bên trong* repo (ví dụ `TMPDIR=<repo>/.tmp`), thư mục làm việc của runtime con dây lên tới repo ⇒ nó đọc `AGENTS.md` của repo ⇒ lệch transcript. Kịch bản phải nằm ngoài repo (CI dùng `/tmp` nên không dính). Không sửa expected output.
+
 
 ### B45 — Decoder PNG của crate `image` quá chậm cho đường ảnh sản phẩm
 
