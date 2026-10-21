@@ -5,9 +5,12 @@ name: Desktop Linux release
 # The release is the update feed: the updater reads `manifest.json` and the
 # Office installer reads `components.json` from the release's download
 # directory, so one release carries the artifacts and the documents that
-# describe them. The lane is manual-only — publication is an explicit act from
-# a tag — and it never runs on a pull request or a branch push.
+# describe them. The lane never runs on a pull request or a branch push: a
+# release is published from a tag, and the tag names the release.
 on:
+  push:
+    tags:
+      - 'desktop-v*'
   workflow_dispatch:
     inputs:
       tag:
@@ -23,12 +26,15 @@ permissions:
   contents: write
 
 concurrency:
-  group: desktop-release-${{ inputs.tag }}
+  group: desktop-release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 env:
   PRIMARY_NODE_VERSION: '24'
   DSH_TELEMETRY_DISABLED: '1'
+  # The release name is the tag: a dispatch names it, and a pushed tag is
+  # already named.
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   release:
@@ -95,20 +101,20 @@ jobs:
       # it is fixed before they are packed.
       - name: Pack the AppImage
         env:
-          DSH_APPIMAGE_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/manifest.json
-          DSH_COMPONENT_FEED: https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}
+          DSH_APPIMAGE_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/manifest.json
+          DSH_COMPONENT_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}
         run: bash apps/desktop-tauri/scripts/pack-appimage.sh linux-x64
 
       - name: Pack the Debian package
         env:
-          DSH_APPIMAGE_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/manifest.json
-          DSH_COMPONENT_FEED: https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}
+          DSH_APPIMAGE_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/manifest.json
+          DSH_COMPONENT_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}
         run: bash apps/desktop-tauri/scripts/pack-deb.sh linux-x64
 
       - name: Pack the RPM package
         env:
-          DSH_APPIMAGE_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/manifest.json
-          DSH_COMPONENT_FEED: https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}
+          DSH_APPIMAGE_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/manifest.json
+          DSH_COMPONENT_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}
         run: bash apps/desktop-tauri/scripts/pack-rpm.sh linux-x64
 
       - name: Check the size budget
@@ -118,8 +124,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_DRAFT: ${{ inputs.draft }}
+          # A pushed tag publishes the release: the tag is the reviewed act.
+          # A dispatch creates a draft, so a rehearsal never goes live.
+          RELEASE_DRAFT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || 'false' }}
         run: |
           set -euo pipefail
           tag="$RELEASE_TAG"
