@@ -52,6 +52,17 @@ jobs:
           # even though the lockfile freezes the dependencies.
           bun-version: 1.4.3
 
+      # The release tarballs are packed through pnpm, the lane that owns
+      # Desktop packaging. The action reads the version from the repository's
+      # own `packageManager` field, so it must not name one.
+      - uses: pnpm/action-setup@v5.0.0
+        with:
+          dest: ${{ runner.temp }}/setup-pnpm-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: ${{ env.PRIMARY_NODE_VERSION }}
+
       - name: Install the desktop build dependencies
         run: |
           sudo apt-get update
@@ -65,7 +76,10 @@ jobs:
             rpm
 
       - name: Install the workspace
-        run: bun install --frozen-lockfile
+        # The release tarballs are packed by pnpm, the lane that owns Desktop
+        # packaging, so the payload is installed through the lockfile that
+        # packaging reads.
+        run: pnpm install --frozen-lockfile
 
       # The payload carries the pinned primary runtime (Node, pnpm, and the
       # Office skill assets) the Desktop Host supervises. The upstream CI
@@ -77,23 +91,18 @@ jobs:
           --output apps/desktop/.desktop-build/targets/linux-x64/runtime
           --cache "$RUNNER_TEMP/primary-runtime-downloads"
 
-      - name: Build the workspace
-        run: bun run build
-
       # The release tarballs are the payload's only source: the runtime tree
       # installs the package set from them, so a release contains the same
-      # bytes a publication would ship.
+      # bytes a publication would ship. The step also builds the workspace
+      # and the native providers.
       - name: Pack the release tarballs
         run: bash apps/desktop-tauri/scripts/pack-linux.sh linux-x64
-
-      - name: Build the native providers
-        run: bash apps/desktop-tauri/scripts/build-native.sh linux-x64
 
       # The package set, the runtime project, and the seeded profile are
       # prepared from the packed release tarballs, so the payload contains the
       # same bytes a release would publish.
       - name: Prepare the Linux runtime tree
-        run: bunx tsx apps/desktop-tauri/scripts/prepare-linux-runtime.ts linux-x64
+        run: pnpm exec tsx apps/desktop-tauri/scripts/prepare-linux-runtime.ts linux-x64
 
       # The feed the artifacts point at is the release's own download
       # directory, so the release this lane publishes is the one the updater
@@ -147,6 +156,6 @@ jobs:
           # The feed documents are generated from the prepared tree, so the
           # digest and the size in the manifest describe the exact bytes this
           # release uploads.
-          bunx tsx apps/desktop-tauri/scripts/publish-release.ts linux-x64 --tag "$tag"
+          pnpm exec tsx apps/desktop-tauri/scripts/publish-release.ts linux-x64 --tag "$tag"
 
           echo "release: feed $feed/manifest.json"
