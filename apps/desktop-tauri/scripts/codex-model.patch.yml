@@ -5,6 +5,10 @@
 # invisible unless the store is mounted here.
 - id: credentials
   disabled: false
+  config:
+    # The store's watcher would keep the process alive after the answer, so
+    # the session would never be flushed to disk.
+    watch: false
 
 - id: llm-deepseek
   disabled: true

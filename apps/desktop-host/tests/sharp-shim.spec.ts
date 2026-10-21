@@ -39,13 +39,21 @@ interface ShimEntry {
   delegatedCount?: () => number
 }
 
-const shim = require(join(here, '..', 'native', 'sharp.cjs')) as ShimEntry
-
 /** Whether the native module was built for this checkout. */
 const built = existsSync(module)
 
+/**
+ * The `sharp`-shaped entry over the native module.
+ * @returns The entry, loaded only when the native module exists.
+ */
+function loadShim(): ShimEntry {
+  if (!built) throw new Error('the native module was not built for this checkout')
+  return require(join(here, '..', 'native', 'sharp.cjs')) as ShimEntry
+}
+
 describe.skipIf(!built)('sharp shim', () => {
   it('encodes a raster as PNG without the sharp package', async () => {
+    const shim = loadShim()
     const data = await shim({
       create: { width: 4, height: 3, channels: 3, background: { r: 9, g: 8, b: 7 } },
     }).png().toBuffer()
@@ -54,6 +62,7 @@ describe.skipIf(!built)('sharp shim', () => {
   })
 
   it('encodes a raster as TIFF without the sharp package', async () => {
+    const shim = loadShim()
     const data = await shim({
       create: { width: 4, height: 3, channels: 3, background: { r: 9, g: 8, b: 7 } },
     }).tiff().toBuffer()
@@ -63,6 +72,7 @@ describe.skipIf(!built)('sharp shim', () => {
 
   it('encodes into another format without the sharp package', async () => {
     // A half-transparent background keeps the alpha channel in the output.
+    const shim = loadShim()
     const data = await shim({
       create: { width: 4, height: 3, channels: 4, background: { r: 9, g: 8, b: 7, alpha: 0.5 } },
     }).toFormat('webp').toBuffer()
@@ -71,6 +81,7 @@ describe.skipIf(!built)('sharp shim', () => {
   })
 
   it('keeps the orientation a caller asks for', async () => {
+    const shim = loadShim()
     const source = await shim({
       create: { width: 4, height: 2, channels: 3, background: { r: 1, g: 2, b: 3 } },
     }).jpeg().toBuffer()
@@ -81,6 +92,7 @@ describe.skipIf(!built)('sharp shim', () => {
   })
 
   it('resizes inside a box without the sharp package', async () => {
+    const shim = loadShim()
     const source = await shim({
       create: { width: 8, height: 6, channels: 3, background: { r: 1, g: 2, b: 3 } },
     }).png().toBuffer()
@@ -91,6 +103,6 @@ describe.skipIf(!built)('sharp shim', () => {
 
   it('carries no path to the sharp package', () => {
     // A fallback would need the package the payload does not ship.
-    expect(shim.delegatedCount).toBeUndefined()
+    expect(loadShim().delegatedCount).toBeUndefined()
   })
 })

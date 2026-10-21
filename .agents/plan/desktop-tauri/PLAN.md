@@ -635,7 +635,7 @@ Chỉ coi là hoàn thành khi **tất cả** đạt:
 | A6 | Update N→N+1 pass trên 3 nền tảng | **Linux đạt, 2 nền tảng còn mở** — `update-probe.sh`: feed thật ⇒ `{"phase":"available","version":"9.9.9"}` + event SSE + `feed_requests=2`; thay N→N+1 trên AppImage đã đo ở P3b. macOS/Windows còn là carrier Electron nên chưa có bản Tauri để e2e |
 | A7 | Plugin thật cài + chạy | e2e |
 | A8 | Session cũ mở được | **đạt** — `session-read-probe.sh` đọc session thật của máy: 7 session (5 thế hệ `.v4` hiện hành, 2 thế hệ cũ được gắn `migration-required`), `list_ok=1 list_items=7` |
-| A9 | Transcript diff = 0 | **đạt phần không cần key** — `bun run test:snapshot` 211/211 xanh (replay session ghi sẵn khớp từng byte) + `bun run test:expected` 122/122 xanh. Phần cần model thật (transcript của một phiên sống) vẫn **mở**: không có `DEEPSEEK_API_KEY` |
+| A9 | Transcript diff = 0 | **đạt** — `bun run test:snapshot` 211/211 xanh (replay session ghi sẵn khớp từng byte) + `bun run test:expected` 122/122 xanh; **phần model thật**: `live-transcript-probe.sh` chạy một lượt qua route Codex (model thật), ghi session, replay lại từ bản ghi rồi so hai log đã chuẩn hoá ⇒ `RESULT live-transcript=OK` (diff = 0). Lưu ý: transcript của phiên **có ảnh đính kèm** vẫn lệch giữa hai carrier (F13) |
 | A10 | Không còn Electron trong app mới | kiểm tra bundle |
 
 ---
@@ -663,7 +663,7 @@ Audit trạng thái migration sau P5-posix + A3. Mỗi điều kiện nghiệm t
 | A6 | Update N→N+1 trên 3 nền tảng | **Linux đạt; macOS/Windows mở** | `update-probe.sh` (2026-10-20): `status_before`/`status_after` = `{"phase":"available","version":"9.9.9"}`, event SSE `data: {...}` đến, `feed_requests=2`; thay AppImage N→N+1 đã đo ở P3b. Đã thêm lane CI của fork (`.github/workflows/desktop-linux.yml`: build → typecheck → lint → test → snapshot → đóng gói → size gate). macOS/Windows vẫn là carrier Electron: e2e trên 2 nền tảng đó chỉ làm được sau khi port Tauri; phần **ký** (Developer ID / Authenticode) cần chứng thư mà máy này không có |
 | A7 | Plugin thật cài + chạy | **đạt** | P0: cài từ registry, cài từ tarball cục bộ, plugin chạy (`fiberPhase: active`) |
 | A8 | Session cũ mở được | **đạt** | `session-read-probe.sh` (đọc `~/.dsh/sessions` thật, chỉ đọc): `files_total=7`, `files_by_generation=5 .v4 + 2 legacy`, `list_ok=1 list_items=7`, `format_status={"current":5,"migration-required":2}` — Host Tauri đọc được session do bản cũ ghi, phân loại đúng thế hệ, và đọc nội dung session đầu tiên |
-| A9 | Transcript diff = 0 | **đạt phần không cần key, mở phần cần model thật** | `bun run test:snapshot` 211/211 xanh + `bun run test:expected` 122/122 xanh ⇒ transcript của các session ghi sẵn khớp từng byte với đầu ra model đã ghi. Phần model thật: thử chạy headless với credential có trên máy (một token OAuth của Codex) — provider `openai-codex` không dùng được token đó (`PI_AI_ERROR: Failed to extract accountId from token`) ⇒ cần `DEEPSEEK_API_KEY` thật |
+| A9 | Transcript diff = 0 | **đạt** | `bun run test:snapshot` 211/211 xanh + `bun run test:expected` 122/122 xanh ⇒ transcript của các session ghi sẵn khớp từng byte với đầu ra model đã ghi. Phần model thật: `live-transcript-probe.sh` — một lượt qua route Codex (model thật) ⇒ session ghi ⇒ replay lại từ bản ghi ⇒ hai log đã chuẩn hoá **khớp từng byte** (`RESULT live-transcript=OK`) |
 | A10 | Không còn Electron trong app mới | **đạt** | AppImage không chứa Electron (chỉ còn một thư mục *type* của browser sidebar); shell là Tauri 2 |
 
 ## Phát hiện audit khác
@@ -704,7 +704,7 @@ Ba finding đã lỗi thời khi kiểm chứng: F02 phần "`.setup()` chặn" 
 
 Cập nhật 2026-10-21 (sau khi lane CI xanh trọn vẹn, release 2 target Linux đã chạy thật, F04 (chữ ký feed) và F11 (budget sandbox) đã đóng, và route Codex đã trả lời thật):
 
-1. **A9 phần model sống** — chạy transcript diff với model thật. **Đường đã có**: route Codex trả lời thật (`codex-model-probe.sh` ⇒ `RESULT codex-model=OK`, D34); việc còn lại là chạy diff qua route đó thay vì `DEEPSEEK_API_KEY`.
+1. ~~**A9 phần model sống**~~ — **đã đóng**: `live-transcript-probe.sh` chạy lượt thật qua route Codex, ghi session, replay lại từ bản ghi, hai log đã chuẩn hoá khớp từng byte ✓.
 2. **P5-win32** — khi Windows vào phạm vi. Đã có baseline koffi để so: `windows-native-probe.sh` chạy bộ test Windows-native dưới Wine (3 suite xanh trọn vẹn; ACL đỏ vì Wine không có security descriptor — B49).
 3. **A6 phần macOS/Windows** — e2e update trên 2 nền tảng sau khi carrier Tauri thay Electron.
 4. **P3 ký** — macOS (Developer ID + notarize) và Windows (Authenticode) cần chứng thư, không làm được trên máy này.
