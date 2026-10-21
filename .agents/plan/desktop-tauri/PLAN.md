@@ -498,7 +498,7 @@ Update không làm mất dữ liệu và không cài bản sai nền tảng.
 - [ ] macOS: mở từ Applications, không bị Gatekeeper chặn.
 - [ ] Windows: cài, mở, PTY chạy.
 - [x] Uninstall không để lại file ngoài `$DSH_HOME` do user tạo — `uninstall-probe.sh`: đọc danh sách file package **tự sở hữu** (16.800 file) rồi xoá theo đúng danh sách đó ⇒ `remaining_in_root=0`; profile người dùng trong `$DSH_HOME` **không đổi** (`user_data_kept=yes`).
-- [ ] CI build đủ 5 target trong ngân sách thời gian. **Linux x64 đã đo trên runner**: lane `desktop-release.yml` dựng xong AppImage + .deb + .rpm + size gate trong 12 phút (một target Linux; 5 target còn thiếu 4 nền tảng khác).
+- [ ] CI build đủ 5 target trong ngân sách thời gian. **2 target Linux đã đo trên runner**: lane `desktop-release.yml` dựng xong AppImage + .deb + .rpm + size gate trong 12 phút (một target Linux; 5 target còn thiếu 3 nền tảng khác — macOS x64/arm64, Windows x64).
 - [x] Size gate fail nếu vượt ngân sách — `size-gate-probe.sh`: artifact vượt ngân sách tải về (105.102.410.25 B > 110.100.480 B) ⇒ `RESULT size-gate=FAIL` và exit khác 0; artifact dưới ngân sách ⇒ exit 0. Ngân sách đọc thẳng từ `size-gate.sh` nên probe không trôi khỏi gate.
 
 ### Exit gate
