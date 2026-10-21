@@ -695,6 +695,10 @@ Harness snapshot chạy agent trong một thư mục tạm; nếu thư mục t�
 
 Trên máy phát triển có `bwrap` nên lane snapshot xanh. Runner `ubuntu-latest` của GitHub **không** có `bwrap`, và package npm `@deepseek-ai/node-addon-system-<platform>` **không** chứa binary `landlock-run` (chỉ có `system.node`) ⇒ backend sandbox không khả dụng ⇒ `sandbox-local` từ chối chạy lệnh ⇒ các ca snapshot gọi tool (SDK, PTC) khác transcript đã ghi. Lane CI phải cài `bubblewrap` (hoặc dựng launcher Landlock của lane Tauri).
 
+### B50 — Lane CI của fork đã xanh trọn vẹn sau khi cài workspace bằng pnpm
+
+Chạy thật trên `ubuntu-latest` (run 39539599255): build → typecheck → lint → check bản copy sinh → native addon → test package đã đụng → **replay 211/211** → build shell → test crate → test Host: **tất cả xanh**. Hai ca `subagent-dsh-sdk` trước đó đỏ vì lane cài bằng Bun (B48); đổi sang pnpm là xanh, không cần runner nhiều core hơn.
+
 ### B46 — Hai ca replay subagent SDK chỉ đỏ trên runner 2 vCPU của CI
 
 `replays subagent-dsh-sdk-diagnostic` và `replays subagent-dsh-sdk-dynamic-route` (snapshots/sdk) đỏ trên runner `ubuntu-latest` (2 vCPU) với `ENOENT .../.child-dsh/sessions` ⇒ tiến trình con (một `dsh` lồng nhau) không khởi động được. **Cùng hai ca xanh trên máy phát triển** (2/2 pass) và toàn lane xanh 211/211 tại đó. CI của upstream chạy lane này trên runner 4 vCPU/16 core ⇒ khả năng cao là thiếu CPU cho tiến trình con. Việc cần cho lane của fork: runner nhiều hơn, hoặc chấp nhận hai ca này là ngoại lệ của lane.
@@ -857,5 +861,6 @@ Ba container đang chạy (`dbx`, `his-nhidong-orthanc`, `postgres`) **không** 
 | 2026-10-20 | P5-posix (4): pipeline ảnh bằng Rust thay `sharp` (decode `zune-png`, resize `fast_image_resize`, WebP libwebp tĩnh, JPEG zune) — facts giống hệt, WebP lệch 0–6%, 93 test `attachment-local` xanh; payload không còn `sharp`/`@img`; thêm B32–B34, M12 |
 | 2026-10-21 | P1: copy của shell lấy từ `apps/desktop/src/locale.ts` (generator `generate-locale.ts` → `locale.rs`); CI kiểm tra bản sinh không cũ |
 | 2026-10-21 | P4: release Linux từ GitHub runner (lane `desktop-release.yml`, D32) — release `desktop-v0.2.1-rc.2` thật, 4 asset, sha256 khớp byte; thêm M19 |
+| 2026-10-21 | Lane CI của fork **xanh trọn vẹn** trên `ubuntu-latest` sau khi cài workspace bằng pnpm (replay 211/211); thêm B50 |
 | 2026-10-21 | P5-win32: probe `windows-native-probe.sh` chạy bộ test Windows-native dưới Wine (3 suite xanh trọn vẹn, ACL đỏ vì Wine không có security descriptor); thêm B49 |
 | 2026-10-21 | Sửa hai lỗi chặn lane: `renameSync` thiếu import trong `prepare-linux-runtime.ts` (runner sạch chết) + script của lane Tauri nằm ngoài chương trình typecheck; lane CI cài workspace bằng pnpm (layout isolated của Bun làm runtime con không resolve được package workspace); thêm B47–B48 |
