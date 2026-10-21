@@ -34,13 +34,29 @@ env:
   DSH_TELEMETRY_DISABLED: '1'
   # The release name is the tag: a dispatch names it, and a pushed tag is
   # already named.
-  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  # Each target publishes its own release, because the artifacts differ and
+  # the feed is per target too.
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}-${{ matrix.target }}
+  # The feed is per target: the Office component archive differs per target.
+  FEED_TAG: desktop-feed-${{ matrix.target }}
 
 jobs:
   release:
-    name: Build and publish the Linux desktop release
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+    name: Build and publish the ${{ matrix.target }} release
+    # The arm64 payload needs an arm64 host: the payload carries a native
+    # Node, the Rust shell, and the pnpm-built packages.
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            runner: ubuntu-latest
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+    env:
+      DSH_DESKTOP_TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -87,8 +103,8 @@ jobs:
       - name: Prepare the primary runtime
         run: >
           pnpm run prepare:primary-runtime
-          --target linux-x64
-          --output apps/desktop/.desktop-build/targets/linux-x64/runtime
+          --target "$DSH_DESKTOP_TARGET"
+          --output "apps/desktop/.desktop-build/targets/$DSH_DESKTOP_TARGET/runtime"
           --cache "$RUNNER_TEMP/primary-runtime-downloads"
 
       # The release tarballs are the payload's only source: the runtime tree
@@ -96,7 +112,7 @@ jobs:
       # bytes a publication would ship. The step also builds the workspace
       # and the native providers.
       - name: Pack the release tarballs
-        run: bash apps/desktop-tauri/scripts/pack-linux.sh linux-x64
+        run: bash apps/desktop-tauri/scripts/pack-linux.sh "$DSH_DESKTOP_TARGET"
 
       # The package set, the runtime project, and the seeded profile are
       # prepared from the packed release tarballs, so the payload contains the
@@ -104,32 +120,42 @@ jobs:
       - name: Prepare the Linux runtime tree
         run: pnpm exec tsx apps/desktop-tauri/scripts/prepare-linux-runtime.ts linux-x64
 
-      # The feed the artifacts point at is the release's own download
-      # directory, so the release this lane publishes is the one the updater
-      # and the component installer read. The artifacts carry the feed URL, so
-      # it is fixed before they are packed.
+      # The artifacts carry the feed URL, and the feed is a release of its
+      # own whose documents move with every release. An application that
+      # shipped with one version therefore reads the feed of the newest
+      # release, not the feed of the release it shipped with.
       - name: Pack the AppImage
         env:
-          DSH_APPIMAGE_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/manifest.json
-          DSH_COMPONENT_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}
-        run: bash apps/desktop-tauri/scripts/pack-appimage.sh linux-x64
+          DSH_APPIMAGE_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.FEED_TAG }}/manifest.json
+          DSH_COMPONENT_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.FEED_TAG }}
+        run: bash apps/desktop-tauri/scripts/pack-appimage.sh "$DSH_DESKTOP_TARGET"
 
       - name: Pack the Debian package
         env:
-          DSH_APPIMAGE_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/manifest.json
-          DSH_COMPONENT_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}
-        run: bash apps/desktop-tauri/scripts/pack-deb.sh linux-x64
+          DSH_APPIMAGE_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.FEED_TAG }}/manifest.json
+          DSH_COMPONENT_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.FEED_TAG }}
+        run: bash apps/desktop-tauri/scripts/pack-deb.sh "$DSH_DESKTOP_TARGET"
 
       - name: Pack the RPM package
         env:
-          DSH_APPIMAGE_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}/manifest.json
-          DSH_COMPONENT_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.RELEASE_TAG }}
-        run: bash apps/desktop-tauri/scripts/pack-rpm.sh linux-x64
+          DSH_APPIMAGE_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.FEED_TAG }}/manifest.json
+          DSH_COMPONENT_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.FEED_TAG }}
+        run: bash apps/desktop-tauri/scripts/pack-rpm.sh "$DSH_DESKTOP_TARGET"
 
       - name: Check the size budget
-        run: bash apps/desktop-tauri/scripts/size-gate.sh linux-x64
+        run: bash apps/desktop-tauri/scripts/size-gate.sh "$DSH_DESKTOP_TARGET"
 
-      - name: Publish the release
+      # A gate that never fails is not a gate: the probe proves the size
+      # gate rejects an artifact over the budget and accepts one under it.
+      - name: Prove the size gate fails over budget
+        run: bash apps/desktop-tauri/scripts/size-gate-probe.sh "$DSH_DESKTOP_TARGET"
+
+      # Removing the package must leave the user's own profile and sessions
+      # in place, and must leave nothing of its own behind.
+      - name: Prove the removal leaves no user data behind
+        run: bash apps/desktop-tauri/scripts/uninstall-probe.sh "$DSH_DESKTOP_TARGET"
+
+      - name: Publish the release and the feed
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -138,24 +164,13 @@ jobs:
           RELEASE_DRAFT: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || 'false' }}
         run: |
           set -euo pipefail
-          tag="$RELEASE_TAG"
-          version=$(node -p "require('./package.json').version")
-          feed="https://github.com/$GITHUB_REPOSITORY/releases/download/$tag"
-
+          # The feed documents are generated from the prepared tree, so the
+          # digest and the size in the manifest describe the exact bytes this
+          # release uploads.
           draft_flag=()
           if [ "$RELEASE_DRAFT" = "true" ]; then
             draft_flag=(--draft)
           fi
-
-          if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" "${draft_flag[@]}" \
-              --title "DeepSeek Harness Desktop $version (Linux x64)" \
-              --notes "Linux desktop build: AppImage, .deb, .rpm, the update manifest, and the on-demand Office component."
-          fi
-
-          # The feed documents are generated from the prepared tree, so the
-          # digest and the size in the manifest describe the exact bytes this
-          # release uploads.
-          pnpm exec tsx apps/desktop-tauri/scripts/publish-release.ts linux-x64 --tag "$tag"
-
-          echo "release: feed $feed/manifest.json"
+          bunx tsx apps/desktop-tauri/scripts/publish-release.ts "$DSH_DESKTOP_TARGET" \
+            --tag "$RELEASE_TAG" --feed-tag "$FEED_TAG" "${draft_flag[@]}"
+          echo "release: feed https://github.com/$GITHUB_REPOSITORY/releases/download/$FEED_TAG/manifest.json"

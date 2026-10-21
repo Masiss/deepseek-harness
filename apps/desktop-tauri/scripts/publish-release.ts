@@ -1,22 +1,22 @@
 /**
- * Publish a prepared Linux build as a GitHub Release.
+ * Publish a prepared Linux build as a GitHub Release and publish its feed.
  *
  * The Desktop updater and the on-demand Office component both read their
  * inputs from a feed: the updater reads `manifest.json`, and the component
- * installer reads `components.json` beside the archives it names. This script
- * writes both documents from the prepared tree, then attaches the artifacts and
- * the feed to one GitHub Release, so a release is a complete, self-describing
- * download source.
+ * installer reads `components.json` beside the archives it names.
  *
- * The release assets are the feed. A GitHub release download URL is stable for
- * a tag, so the feed URL baked into the artifacts points at the release this
- * script publishes, and a later release moves the feed forward by publishing a
- * new tag.
+ * A release and a feed are two different things. The release holds the
+ * artifacts a user downloads, one per target. The feed holds the documents
+ * that say which artifact is current, and it moves: a new release overwrites
+ * the feed's documents, so the feed URL baked into an installed application
+ * keeps pointing at the newest release. Without that split, an application
+ * would read the feed of the release it shipped with and never see a
+ * successor.
  *
- * The script never signs anything: the artifacts carry the digest the feed
- * names, and the trust anchor for the feed belongs to the release channel.
+ * The feed is therefore per target, because the Office component archive
+ * differs per target, while the release holds every target's artifacts.
  *
- *   usage: publish-release.ts <linux-x64|linux-arm64> [--tag <tag>] [--dry-run]
+ *   usage: publish-release.ts <linux-x64|linux-arm64> --tag <tag> [--feed-tag <tag>] [--dry-run]
  */
 
 import { createHash } from 'node:crypto'
@@ -30,16 +30,24 @@ const target = process.argv[2] ?? 'linux-x64'
 const tree = join(repo, 'apps/desktop/.desktop-build/targets', target)
 
 interface Arguments {
+  /** Tag of the release holding the artifacts. */
   readonly tag: string
+  /** Tag of the release holding the feed documents. */
+  readonly feedTag: string
+  /** Create the release as a draft, so a rehearsal never goes live. */
+  readonly draft: boolean
   readonly dryRun: boolean
 }
 
 function parseArguments(): Arguments {
   const tagIndex = process.argv.indexOf('--tag')
+  const feedIndex = process.argv.indexOf('--feed-tag')
   const dryRun = process.argv.includes('--dry-run')
   const tag = tagIndex === -1 ? '' : (process.argv[tagIndex + 1] ?? '')
+  const feedTag = feedIndex === -1 ? '' : (process.argv[feedIndex + 1] ?? '')
+  const draft = process.argv.includes('--draft')
   if (tag === '' && !dryRun) throw new Error('publish-release: --tag <tag> is required')
-  return { tag, dryRun }
+  return { tag, feedTag: feedTag === '' ? `desktop-feed-${target}` : feedTag, draft, dryRun }
 }
 
 /** The version the artifacts were built from. */
@@ -62,14 +70,14 @@ function appImagePath(version: string): string {
   return path
 }
 
-/** The update manifest the updater reads. */
-function updateManifest(version: string, appImage: string, downloadBase: string): string {
+/** The update manifest the updater reads, naming this target's artifact. */
+function updateManifest(version: string, appImage: string, releaseBase: string): string {
   return `${JSON.stringify({
     schemaVersion: 1,
     version,
     artifacts: {
       [target]: {
-        url: `${downloadBase}/${basename(appImage)}`,
+        url: `${releaseBase}/${basename(appImage)}`,
         sha256: digestOf(appImage),
         size: statSync(appImage).size,
       },
@@ -88,32 +96,56 @@ function componentManifest(): string | undefined {
   return `${JSON.stringify(manifest, undefined, 2)}\n`
 }
 
-const { tag, dryRun } = parseArguments()
+/** The artifacts this target contributes to the shared release. */
+function releaseArtifacts(version: string): string[] {
+  const artifacts = [appImagePath(version)]
+  for (const part of ['deb', 'rpm']) {
+    const directory = join(tree, part)
+    if (!existsSync(directory)) continue
+    for (const name of readdirSync(directory)) {
+      if (name.endsWith('.deb') || name.endsWith('.rpm')) artifacts.push(join(directory, name))
+    }
+  }
+  return artifacts
+}
+
+/** The component archives this target publishes beside the feed documents. */
+function componentArchives(): string[] {
+  const directory = join(tree, 'components')
+  if (!existsSync(directory)) return []
+  return readdirSync(directory)
+    .filter(name => name.endsWith('.tar.zst'))
+    .map(name => join(directory, name))
+}
+
+const { tag, feedTag, draft, dryRun } = parseArguments()
 const version = artifactVersion()
 const appImage = appImagePath(version)
 
-// The release download base is the feed the artifacts point at. The release
-// URL is stable for a tag, so the artifacts published with this tag read the
-// feed this release publishes.
+// The release holds the artifacts; the feed holds the documents that name
+// the current one. Both are addressed by tag, and a release tag does not
+// move.
 const repository = process.env.GITHUB_REPOSITORY ?? 'Masiss/deepseek-harness'
-const downloadBase = `https://github.com/${repository}/releases/download/${tag}`
+const releaseBase = `https://github.com/${repository}/releases/download/${tag}`
+const feedBase = `https://github.com/${repository}/releases/download/${feedTag}`
 
 const feed = join(tree, 'release-feed')
 spawnSync('mkdir', ['-p', feed], { stdio: 'inherit' })
-writeFileSync(join(feed, 'manifest.json'), updateManifest(version, appImage, downloadBase))
+writeFileSync(join(feed, 'manifest.json'), updateManifest(version, appImage, releaseBase))
 const components = componentManifest()
 if (components !== undefined) writeFileSync(join(feed, 'components.json'), components)
 
-const componentArchives = existsSync(join(tree, 'components'))
-  ? readdirSync(join(tree, 'components')).filter(name => name.endsWith('.tar.zst'))
-  : []
+const artifacts = releaseArtifacts(version)
+const archives = componentArchives()
 
-console.log(`publish-release: version=${version} target=${target} tag=${tag}`)
-console.log(`publish-release: appimage=${basename(appImage)} bytes=${statSync(appImage).size} sha256=${digestOf(appImage)}`)
-for (const archive of componentArchives) {
-  console.log(`publish-release: component=${archive} bytes=${statSync(join(tree, 'components', archive)).size}`)
+console.log(`publish-release: version=${version} target=${target} tag=${tag} feed_tag=${feedTag}`)
+for (const artifact of artifacts) {
+  console.log(`publish-release: artifact=${basename(artifact)} bytes=${statSync(artifact).size} sha256=${digestOf(artifact)}`)
 }
-console.log(`publish-release: feed=${feed} feed_url=${downloadBase}/manifest.json`)
+for (const archive of archives) {
+  console.log(`publish-release: component=${basename(archive)} bytes=${statSync(archive).size} sha256=${digestOf(archive)}`)
+}
+console.log(`publish-release: feed_url=${feedBase}/manifest.json`)
 
 if (dryRun) {
   console.log('publish-release: dry run, nothing uploaded')
@@ -127,12 +159,47 @@ const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN ?? ''
 const env = { ...process.env, GH_TOKEN: token }
 if (token === '') throw new Error('publish-release: GITHUB_TOKEN is missing')
 
-const upload = spawnSync('gh', ['release', 'upload', tag, '--clobber', ...[
-  appImage,
+/** Whether a release with the given tag exists. */
+function releaseExists(releaseTag: string): boolean {
+  return spawnSync('gh', ['release', 'view', releaseTag], { stdio: 'ignore', env }).status === 0
+}
+
+/** Create a release when it does not exist yet. */
+function ensureRelease(releaseTag: string, title: string, notes: string): void {
+  if (releaseExists(releaseTag)) return
+  const args = ['release', 'create', releaseTag, '--title', title, '--notes', notes]
+  if (draft) args.push('--draft')
+  const created = spawnSync('gh', args, { stdio: 'inherit', env })
+  // Two targets publish into the same release, so the second one finds it
+  // already there.
+  if (created.status !== 0 && !releaseExists(releaseTag)) {
+    throw new Error(`publish-release: gh release create exited with ${String(created.status)}`)
+  }
+}
+
+ensureRelease(
+  tag,
+  `DeepSeek Harness Desktop ${version} (${target})`,
+  `Linux desktop build: the AppImage, the .deb, and the .rpm for ${target}.`,
+)
+ensureRelease(
+  feedTag,
+  `DeepSeek Harness Desktop ${version} feed (${target})`,
+  'The update feed: the manifest naming the current artifact and the Office component archive.',
+)
+
+// The release's artifacts are immutable once published, so a repeated run
+// replaces them rather than failing.
+const uploadRelease = spawnSync('gh', ['release', 'upload', tag, '--clobber', ...artifacts], { stdio: 'inherit', env })
+if (uploadRelease.status !== 0) throw new Error(`publish-release: gh release upload exited with ${String(uploadRelease.status)}`)
+
+// The feed's documents move with every release, so they are always replaced.
+const uploadFeed = spawnSync('gh', [
+  'release', 'upload', feedTag, '--clobber',
   join(feed, 'manifest.json'),
   ...(components === undefined ? [] : [join(feed, 'components.json')]),
-  ...componentArchives.map(archive => join(tree, 'components', archive)),
-]], { cwd: repo, stdio: 'inherit', env })
-if (upload.status !== 0) throw new Error(`publish-release: gh release upload exited with ${String(upload.status)}`)
+  ...archives,
+], { stdio: 'inherit', env })
+if (uploadFeed.status !== 0) throw new Error(`publish-release: gh release upload exited with ${String(uploadFeed.status)}`)
 
 console.log('publish-release: uploaded the artifacts and the feed')

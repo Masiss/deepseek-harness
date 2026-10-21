@@ -7,11 +7,15 @@
 # that decides whether a release is shippable.
 #
 #   usage: size-gate.sh [linux-x64|linux-arm64]
+#
+# DSH_DESKTOP_BUILD_ROOT points the gate at a build tree other than the
+# repository's own, which the gate's probe uses to judge a tree it builds.
 set -u
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 target=${1:-linux-x64}
-tree="$repo/apps/desktop/.desktop-build/targets/$target"
+build_root=${DSH_DESKTOP_BUILD_ROOT:-$repo/apps/desktop/.desktop-build}
+tree="$build_root/targets/$target"
 
 # Download budget: the largest artifact a user may fetch, in bytes.
 readonly DOWNLOAD_BUDGET=$((105 * 1024 * 1024))
