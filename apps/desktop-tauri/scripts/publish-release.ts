@@ -121,9 +121,11 @@ if (dryRun) {
 }
 
 // The GitHub CLI carries the token; the workflow grants `contents: write` so
-// the release and its assets are created by this run.
-const env = { ...process.env, GH_TOKEN: process.env.GITHUB_TOKEN ?? '' }
-if (env.GH_TOKEN === '') throw new Error('publish-release: GITHUB_TOKEN is missing')
+// the release and its assets are created by this run. The token arrives
+// under the CLI's own name, and the workflow's own name is accepted too.
+const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN ?? ''
+const env = { ...process.env, GH_TOKEN: token }
+if (token === '') throw new Error('publish-release: GITHUB_TOKEN is missing')
 
 const upload = spawnSync('gh', ['release', 'upload', tag, '--clobber', ...[
   appImage,
