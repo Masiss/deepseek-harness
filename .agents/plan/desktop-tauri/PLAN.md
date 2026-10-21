@@ -702,12 +702,14 @@ Ba finding đã lỗi thời khi kiểm chứng: F02 phần "`.setup()` chặn" 
 
 ## Việc còn lại theo thứ tự ưu tiên
 
-Cập nhật 2026-10-21 (sau khi lane CI xanh trọn vẹn, release 2 target Linux đã chạy thật, F04/F06/F10/F11/F12 đã đóng, A9 đã chạy với model thật, và F13 mới):
+Cập nhật 2026-10-22 (sau khi lane CI xanh trọn vẹn, release **0.2.1-rc.3** có feed **đã ký**, F04/F06/F10/F11/F12 đã đóng, A9 đã chạy với model thật, và một vòng audit bảo mật theo skill `security-audit`):
 
-1. **F13** — byte ảnh chuẩn hoá lệch giữa hai carrier (đo: max 6/255 mỗi kênh): hoặc port đúng kernel + làm tròn của libvips, hoặc **ghi nhận là khác biệt đã chấp nhận** và ghi rõ vào điều kiện đóng của A1/A9 (chỉ đúng với phiên không đính kèm ảnh).
-2. **P5-win32** — khi Windows vào phạm vi. Đã có baseline koffi để so: `windows-native-probe.sh` chạy bộ test Windows-native dưới Wine (3 suite xanh trọn vẹn; ACL đỏ vì Wine không có security descriptor — B49).
-3. **A6 phần macOS/Windows** — e2e update trên 2 nền tảng sau khi carrier Tauri thay Electron.
-4. **P3 ký** — macOS (Developer ID + notarize) và Windows (Authenticode) cần chứng thư, không làm được trên máy này.
-5. **P4 3 target còn lại** — macOS x64/arm64, Windows x64: cần runner macOS/Windows hoặc chứng thư.
-6. **P6 tùy chọn** — brotli cho Web dist (96,9 MB JS/CSS trong payload; server tĩnh là upstream nên cần middleware của Host) và ripgrep on-demand (5,5 MB; cần loại component mới).
-7. **Welcome/onboarding** — không tới được ở v1, xem ghi chú P2.
+1. **7 phát hiện của audit bảo mật** (2026-10-22) — bản đầy đủ ở `~/security-audit-skill/deepseek-harness/run-1/`; cái **high** là feed component **không ký** ⇒ archive tải về được thực thi; kèm giải nén zstd không giới hạn, WebP độc hại làm sập Host, `appimagetool` tải không kiể digest, và 3 cái low (bridge ghi shortcut không validate, TOCTOU khi cài AppImage, lock admission không nhả khi cài fail). Xem `HANDOFF.md` §3 (A).
+2. **F14** — payload mang ~34 MB package `dsh-experimental-*` không dùng (32 MB là model giọng nói `sherpa-onnx`); lọc trong `stage-payload.sh` ⇒ AppImage 90 MB → ~62 MB.
+3. **F13** — byte ảnh chuẩn hoá lệch giữa hai carrier (đo: max 6/255 mỗi kênh): hoặc port đúng kernel + làm tròn của libvips, hoặc **ghi nhận là khác biệt đã chấp nhận** và ghi rõ vào điều kiện đóng của A1/A9 (chỉ đúng với phiên không đính kèm ảnh).
+4. **P5-win32** — khi Windows vào phạm vi. Đã có baseline koffi để so: `windows-native-probe.sh` chạy bộ test Windows-native dưới Wine (3 suite xanh trọn vẹn; ACL đỏ vì Wine không có security descriptor — B49).
+5. **A6 phần macOS/Windows** — e2e update trên 2 nền tảng sau khi carrier Tauri thay Electron.
+6. **P3 ký** — macOS (Developer ID + notarize) và Windows (Authenticode) cần chứng thư, không làm được trên máy này.
+7. **P4 3 target còn lại** — macOS x64/arm64, Windows x64: cần runner macOS/Windows hoặc chứng thư.
+8. **P6 tùy chọn** — brotli cho Web dist (96,9 MB JS/CSS trong payload; server tĩnh là upstream nên cần middleware của Host) và ripgrep on-demand (5,5 MB; cần loại component mới).
+9. **Welcome/onboarding** — không tới được ở v1, xem ghi chú P2.
