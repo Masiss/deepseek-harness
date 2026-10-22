@@ -9,7 +9,7 @@
  *   usage: node update-flow-probe.mjs [linux-x64|linux-arm64]
  */
 
-import { createHash } from 'node:crypto'
+import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import { createServer } from 'node:http'
 import { cp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
@@ -27,6 +27,23 @@ const work = process.env.DSH_ISOLATION_DIR === undefined
 const OLD_IMAGE = Buffer.from('the installed version')
 const NEW_IMAGE = Buffer.from(`the published version ${Date.now()}\n`.repeat(64))
 const digest = createHash('sha256').update(NEW_IMAGE).digest('hex')
+const keys = generateKeyPairSync('ed25519')
+const feedKey = keys.publicKey.export({ type: 'spki', format: 'pem' }).toString()
+
+/** The canonical bytes the Host verifies, with this run's signature. */
+function signedManifest() {
+  const document = {
+    schemaVersion: 2,
+    version: '2.0.0',
+    artifacts: {
+      [target]: { url: `http://127.0.0.1:${feedPort}/app.bin`, sha256: digest, size: NEW_IMAGE.byteLength },
+    },
+  }
+  return {
+    ...document,
+    signature: sign(null, Buffer.from(JSON.stringify(document), 'utf8'), keys.privateKey).toString('base64'),
+  }
+}
 
 let feedPort = 0
 const feed = createServer((request, response) => {
@@ -35,13 +52,7 @@ const feed = createServer((request, response) => {
     return
   }
   response.setHeader('content-type', 'application/json')
-  response.end(JSON.stringify({
-    schemaVersion: 1,
-    version: '2.0.0',
-    artifacts: {
-      [target]: { url: `http://127.0.0.1:${feedPort}/app.bin`, sha256: digest, size: NEW_IMAGE.byteLength },
-    },
-  }))
+  response.end(JSON.stringify(signedManifest()))
 })
 
 await rm(work, { recursive: true, force: true })
@@ -63,6 +74,7 @@ const host = spawn(join(tree, 'bin/desktop-host'), [
     ...process.env,
     DSH_HOME: join(work, 'home'),
     DSH_DESKTOP_UPDATE_FEED: `http://127.0.0.1:${feedPort}/manifest.json`,
+    DSH_DESKTOP_UPDATE_PUBLIC_KEY: feedKey,
     DSH_DESKTOP_VERSION: '1.0.0',
     DSH_CLIENT_VERSION: '1.0.0',
     APPIMAGE: image,
@@ -126,7 +138,8 @@ console.log(`RESULT ready=OK port=${new URL(url).port}`)
 console.log(`prompts=${seen.prompts.join(',')}`)
 console.log(`open_status=${opened.status} presentation=${JSON.stringify(status)}`)
 console.log(`restart_frame=${seen.restart}`)
-console.log(`image_replaced=${installed.equals(NEW_IMAGE)} mode=${mode.toString(8)}`)
+const replaced = installed.equals(NEW_IMAGE)
+console.log(`image_replaced=${replaced} mode=${mode.toString(8)}`)
 
 send({ type: 'shutdown' })
 host.stdin.end()
@@ -137,3 +150,12 @@ await Promise.race([
 await reader
 feed.close()
 await rm(work, { recursive: true, force: true })
+
+const ok = opened.status === 204
+  && status.phase === 'installing'
+  && seen.prompts.includes('download:2.0.0')
+  && seen.prompts.includes('install:2.0.0')
+  && seen.restart
+  && replaced
+console.log(`RESULT update-flow=${ok ? 'OK' : 'FAIL'}`)
+if (!ok) process.exitCode = 1

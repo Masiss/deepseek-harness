@@ -123,6 +123,15 @@ jobs:
       - name: Prove both Host entries boot
         run: bash apps/desktop-tauri/scripts/entry-parity-probe.sh "$DSH_DESKTOP_TARGET"
 
+      # The packaged tree is what a user installs, so the release lane drives
+      # the journeys and injects the startup/crash/shutdown/offline failures
+      # against it instead of trusting the source tree.
+      - name: Drive packaged user journeys
+        run: bash apps/desktop-tauri/scripts/packaged-journey-probe.sh "$DSH_DESKTOP_TARGET"
+
+      - name: Inject packaged startup, crash, shutdown, and offline faults
+        run: bash apps/desktop-tauri/scripts/fault-probe.sh "$DSH_DESKTOP_TARGET"
+
       # The artifacts carry the feed URL, and the feed is a release of its
       # own whose documents move with every release. An application that
       # shipped with one version therefore reads the feed of the newest

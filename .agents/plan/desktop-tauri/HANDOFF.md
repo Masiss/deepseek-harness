@@ -7,7 +7,7 @@ Cập nhật 2026-10-22. Mục đích: session mới đọc file này là biết
 | Mục | Giá trị |
 |---|---|
 | Nhánh | `chore/web-bun-migration` (upstream `origin/master` không đụng) |
-| HEAD | `ee93ab64e8` — đã **push hết** lên `fork` ✓ |
+| HEAD | `fbe6ea0fe7` (D41–D43) + commit Goal 2 (2026-10-22) — **chưa push**; xem `git log -1` |
 | Version | `0.2.1-rc.3` (đã bump **toàn bộ** 343 package — xem bẫy §5) |
 | Release đã publish | `desktop-v0.2.1-rc.3-linux-x64` + `-linux-arm64`, feed `desktop-feed-linux-{x64,arm64}` **có chữ ký Ed25519** ✓ |
 | Lint | `bun run lint` sạch (1 warning có sẵn ở `packages/experimental/client-ui-cot-translation`) |
@@ -25,6 +25,20 @@ Cập nhật 2026-10-22. Mục đích: session mới đọc file này là biết
 - **A9** đã chạy với **model thật**: `live-transcript-probe.sh` (lượt thật qua route Codex ⇒ session ghi ⇒ replay ⇒ hai log đã chuẩn hoá khớp từng byte).
 - Route **Codex** dùng được (xem §6).
 - Đã **dọn ~21 GB** rác máy (cây runtime lane, build Rust, output build, `~/.wine`, image Docker, `/tmp/opencode`).
+
+## 2b. Goal 2 — release-grade (đang mở, 2026-10-22)
+
+Mục tiêu và acceptance đầy đủ ở `PLAN.md` § "Cấu trúc mục tiêu". Bằng chứng mới trong session này:
+
+- **Packaged journey** (`packaged-journey-probe.sh`, L2): cài plugin từ tarball → Host apply → restart → gỡ; tạo/rename Session → restart → đọc lại. Tất cả PASS.
+- **Fault injection** (`fault-probe.sh`, L2): thiếu runtime, profile hỏng, crash -9 → takeover lease, shutdown sạch, offline update, offline component. Tất cả PASS.
+- **Disk-full** (`disk-full-probe.sh` dưới `isolated-run.sh` 48 MB): tải component bị ENOSPC, `phase=error`, không còn file dở/`current.json`. Source map ENOSPC/EDQUOT/EFBIG/EROFS sang `download` thay vì `download-network`; unit test mới trong `components.spec.ts` (cây đóng gói sẽ nhận ở lần build sau).
+- **Update trọn luồng** (`update-flow-probe.mjs`): sau D40 probe này **bị hỏng** (manifest schema 1 + không ký) và đã sửa: schemaVersion 2, ký Ed25519 bằng key tạm, truyền `DSH_DESKTOP_UPDATE_PUBLIC_KEY`; giờ `RESULT update-flow=OK` (prompt download/install, `restart`, ảnh được thay).
+- **Profile contention**: `desktop-lease-probe.sh` vẫn `OK`.
+- **Sharp fallback**: `image-parity-probe.sh` 11/11; khác byte JPEG/GIF/TIFF/resize là đã chấp nhận (D39).
+- **Benchmark**: Host cold start 1,98–2,09 s (warm), idle RSS 179–182 MiB; shell 0,55 s → 0,77 s → 4,54 s trên weston headless.
+
+Còn lại của Goal 2: đưa các probe mới vào CI; bằng chứng GUI thật (CSP/console); crash giữa download/rename; portability matrix (Windows ACL/sandbox/Office path/update driver); đo WebView RSS.
 
 ## 3. Việc nên làm tiếp (theo thứ tự giá trị)
 

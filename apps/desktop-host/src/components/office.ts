@@ -122,6 +122,13 @@ async function boundedText(response: Response, limit: number): Promise<string> {
  * @param limit - Exact byte length the artifact must have.
  * @returns The lowercase SHA-256 of the received bytes.
  */
+/** Whether a local write failed because the filesystem could not store it. */
+function storageFailure(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('code' in error)) return false
+  const code = (error as { code?: unknown }).code
+  return code === 'ENOSPC' || code === 'EDQUOT' || code === 'EFBIG' || code === 'EROFS'
+}
+
 async function download(
   url: string,
   file: string,
@@ -159,7 +166,8 @@ async function download(
     }
   } catch (error) {
     if (error instanceof ComponentFailure) throw error
-    throw new ComponentFailure('download-network', error)
+    // The transport answered; the local filesystem could not accept the bytes.
+    throw new ComponentFailure(storageFailure(error) ? 'download' : 'download-network', error)
   } finally {
     await out.close()
   }

@@ -4,9 +4,135 @@ Tài liệu này gộp **ADR** và **kế hoạch chi tiết theo phase**. Quy t
 
 Kế hoạch **cắt nhỏ phần mềm** nằm riêng ở [`PLAN-SHRINK.md`](PLAN-SHRINK.md) và chỉ mở **sau khi** tài liệu này xanh.
 
-- Trạng thái: kế hoạch, chưa implement.
-- Ngày: 2026-10-19.
+- Trạng thái: **Goal 1 (baseline) đã đóng; Goal 2 (release-grade, Linux-first + nền port) đang mở.**
+- Ngày: 2026-10-19 (Goal 1); 2026-10-22 (Goal 2).
 - Phạm vi: chỉ `apps/desktop-tauri`, `native/dsh-native`, provider packages và glue tối thiểu.
+
+---
+
+# Cấu trúc mục tiêu
+
+## Goal 1 — Baseline migration (đã đóng, 2026-10-22)
+
+Goal 1 chứng minh **có thể thay Electron bằng Tauri mà không đổi lõi DSH**. Đây là baseline kỹ thuật, không phải kết luận sản phẩm đã hoàn tất.
+
+| Hạng mục | Kết quả |
+|---|---|
+| Shell | Tauri 2 + WebKitGTK; không còn Electron trong bundle Linux |
+| Runtime | Node 24.21 + dsh payload tự chứa; Host chạy qua NDJSON |
+| Linux | AppImage + `.deb` (và `.rpm` trong lane đóng gói) |
+| Native | Rust image provider, Landlock launcher, PTY/flock thay thế dần koffi |
+| Kích thước | AppImage **76.446.200 B**; cây cài **~290 MB**; `dsh/node_modules` **190 MB** |
+| Bất biến | Session format, tool schema, CLI, `cordis.yml`, HTTP/WS bridge, plugin API, bundle/profile giữ nguyên |
+| Bằng chứng | Phần VIII/X, `MEMORY.md`; snapshot 211/211, expected 122/122; session cũ đọc được; transcript replay diff = 0 |
+
+**Điều kiện đóng Goal 1:** 10 bất biến có bằng chứng chạy được, trừ các mục ghi rõ cần môi trường ngoài (macOS/Windows signing, runner không phải Linux, Windows ACL). Các mục này chuyển sang Goal 2, không tính là đã xong.
+
+## Goal 2 — Release-grade & cross-platform ready (đang mở)
+
+**Mục tiêu:** Linux Tauri đủ ổn định để dùng hằng ngày; mọi user journey quan trọng có bằng chứng trên **packaged runtime**; các lỗi vận hành (startup, crash, shutdown, update, offline, disk-full) được phân loại và xử lý; có portability matrix cho Windows/macOS từ source hiện tại, chỉ sửa các trở ngại nhỏ độc lập.
+
+**Không thuộc Goal 2:** full platform port, rewrite runtime, đổi session format/tool schema, tối ưu không có số đo, thay framework.
+
+### Mốc và trạng thái
+
+| Mốc | Nội dung | Trạng thái | Bằng chứng / việc còn lại |
+|---|---|---|---|
+| G2-M1 | Chốt D40–D43 + regression | **Xong** | Commit `fbe6ea0fe7`; build + build:check xanh; typecheck/lint/test xanh |
+| G2-M2 | User journey trên packaged runtime | **Đang làm** | Plugin + Session + profile contention + update PASS; CSP mới có boot headless; còn GUI thật và session có nội dung |
+| G2-M3 | Fault injection | **Đang làm** | 6 kịch bản Host + disk-full PASS; còn update hỏng digest ở mức packaged, crash giữa download, mất điện |
+| G2-M4 | CI evidence theo cấp | **Đang làm** | Có lane Linux + release; probe mới chưa vào CI; chưa có bằng chứng CI cho Windows/macOS |
+| G2-M5 | Portability matrix Windows/macOS | **Đang làm** | Ma trận dưới đây; chỉ sửa blocker nhỏ, không mở full port |
+| G2-M6 | Benchmark startup/idle/footprint | **Đang làm** | Số đo dưới đây; chưa chốt ngân sách và chưa đo WebView riêng |
+| G2-M7 | Tài liệu & bàn giao | **Đang làm** | PLAN/MEMORY/HANDOFF; sẽ cập nhật sau mỗi mốc |
+
+### Định nghĩa cấp bằng chứng
+
+| Cấp | Nghĩa | Ví dụ |
+|---|---|---|
+| **L0 — source** | Chạy trên source/unit test, chưa đóng gói | `vitest`, `cargo test`, `typecheck` |
+| **L1 — CI** | Cùng lệnh chạy trong GitHub Actions | `desktop-linux.yml`, `desktop-release.yml` |
+| **L2 — packaged** | Chạy trên cây `apps/desktop/.desktop-build/targets/<target>/` | `packaged-journey-probe.sh`, `fault-probe.sh` |
+| **L3 — desktop thật** | Shell + WebView trên compositor thật, có cửa sổ và tương tác người dùng | `cold-start-probe.sh` (weston headless) chỉ là L2.5; GUI thật chưa tự động hoá |
+
+Không dùng L0 để thay L2/L3. Một mục chỉ được coi là "release-grade" khi có L2, và với hành vi GUI thì cần L3 hoặc ghi rõ khoảng trống.
+
+### Journey matrix (packaged runtime)
+
+| Journey | Lệnh / bằng chứng | Cấp | Kết quả |
+|---|---|---|---|
+| Plugin: cài từ tarball, Host apply, restart, gỡ | `packaged-journey-probe.sh` | L2 | **PASS** (`plugin-install`, `plugin-list`, `plugin-after-restart`, `plugin-remove`) |
+| Session: tạo, rename, restart, đọc lại | `packaged-journey-probe.sh` | L2 | **PASS** (cùng `sessionId` sau restart) |
+| Hai carrier tranh profile | `desktop-lease-probe.sh` | L2 | **PASS** (`second_refused=OK`, takeover sau khi chết) |
+| CSP của release | `cold-start-probe.sh` + `tauri.conf.json` | L2.5 | **Một phần** — window + page load xong, không thấy CSP violation; chưa đọc được console WebKit thật |
+| Sharp fallback | `image-parity-probe.sh` | L2 | **PASS 11/11**; JPEG/GIF/TIFF/resize khác byte (đã chấp nhận, D39) |
+| Update feed ký | `update-probe.sh` | L2 (shell thật, headless) | **PASS** — feed hợp lệ `available`, feed bị sửa `idle` |
+| Update trọn luồng | `update-flow-probe.mjs` | L2 | **PASS** — prompt download/install, `restart`, ảnh được thay |
+| Offline update/component | `fault-probe.sh` | L2 | **PASS** — `check-network`, `feed-network`, không cài dở |
+| Disk-full khi tải component | `disk-full-probe.sh` (dưới `isolated-run.sh`) | L2 | **PASS** — `phase=error`, không còn `download-*`/`current.json`; phân loại ENOSPC thành `download` mới sửa ở source + unit test, cây đóng gói sẽ nhận ở lần build kế tiếp |
+| Session có nội dung + model thật | `live-transcript-probe.sh` | L3 (cần key) | **PASS** ở lần chạy trước; chưa lặp trong Goal 2 |
+| Welcome/onboarding, GUI thật | — | L3 | **Chưa có** (đã hoãn) |
+
+### Fault matrix
+
+| Lỗi | Kỳ vọng | Bằng chứng | Kết quả |
+|---|---|---|---|
+| Thiếu runtime lúc khởi động | Thoát nhanh, lỗi rõ, không treo | `fault-probe.sh` → `startup-missing-runtime` | **PASS** (exit 1, không timeout) |
+| Profile hỏng | Không serve, nhả lease | `fault-probe.sh` → `startup-bad-profile` | **PASS** (exit 1, lease released) |
+| Host bị kill -9 | Lần sau nhận lease cũ và serve | `fault-probe.sh` → `crash-takeover` | **PASS** (stale lease held → takeover ready) |
+| Shutdown qua control frame | Exit 0, nhả lease, không còn process | `fault-probe.sh` → `shutdown` | **PASS** |
+| Update feed không tới được | `check-network`, không crash | `fault-probe.sh` → `offline-update` | **PASS** |
+| Component feed không tới được | `feed-network`, không cài dở | `fault-probe.sh` → `offline-component` | **PASS** |
+| Hết đĩa khi tải | Lỗi không phải network, dọn file dở | `disk-full-probe.sh` + unit test ENOSPC | **PASS** (48 MB; `leftovers=0`; phân loại `download` đã sửa ở source, unit test xanh) |
+| Manifest/artifact bị sửa | Từ chối trước khi chạy | `update-probe.sh`, unit tests | **PASS** |
+| Crash giữa lúc download/install | Không để lại trạng thái nửa vời | — | **Chưa phủ** |
+| Mất điện / kill trong lúc rename | Journal phục hồi hoặc rollback | — | **Chưa phủ** |
+
+### Portability matrix (đọc từ source hiện tại)
+
+| Bề mặt | Linux (hiện tại) | Windows | macOS | Trở ngại / hướng xử lý |
+|---|---|---|---|---|
+| Tauri shell | Xong | Chưa build | Chưa build | Cần runner + signing; tray đã có nhánh `cfg(not(linux))` |
+| Host ↔ shell transport | NDJSON stdio | Dùng được | Dùng được | Không phụ thuộc nền tảng |
+| Lease profile | `native/flock` POSIX | **Thiếu ACL** | POSIX | P5-win32; cần test trên Windows thật |
+| Sandbox | Landlock | **Chưa có** | **Chưa có** | Native layer theo OS; không đổi policy engine |
+| Office component | `bin/python3`, `PATH=/usr/bin:/bin`, symlink POSIX | **Chưa có payload/đường dẫn** | Cần payload + `bin/python3` | Tách hằng số theo target; archive riêng cho từng OS |
+| Packaging | AppImage/deb/rpm | **Chưa có** | **Chưa có** | Script Linux-only; cần MSI/DMG + ký |
+| Update driver | AppImage | **Chưa có** | **Chưa có** | Manifest đã đa target; driver thay thế mới là Linux |
+| Image provider | Rust portable | Cần build | Cần build | Kiểm tra libwebp/toolchain trên runner |
+| PTY | Provider POSIX | **Chưa xác minh** | POSIX | Windows cần ConPTY; chưa port |
+
+**Quy tắc:** chỉ sửa các mục "nhỏ và độc lập" (hằng số đường dẫn, nhánh `cfg`, test) trong Goal 2. Full port (MSI/DMG, ACL, sandbox, update driver) chỉ mở khi có runner/chứng thư và quyết định phạm vi riêng.
+
+### Benchmark hiện có (2026-10-22, máy 20 CPU)
+
+| Số đo | Giá trị | Ghi chú |
+|---|---|---|
+| AppImage | **76.446.200 B** | Sau prune D41; gate ≤ 105 MiB |
+| Cây cài | **~290 MB** | Gồm runtime + project |
+| `dsh/node_modules` | **190 MB** | Trước prune 255 MB |
+| Host cold start (warm cache) | **1,98–2,09 s** | `measure-linux-tree.sh`, 3 lần |
+| Host cold start (first run) | **4,83 s** | Page cache lạnh |
+| Shell: window → start page → Host URL | **0,55 s → 0,77 s → 4,54 s** | `cold-start-probe.sh` (weston headless) |
+| Host idle RSS | **179–182 MiB** | Chưa gồm WebKitGTK |
+
+Chưa tối ưu thêm nếu không có số đo chứng minh. Ứng viên chỉ được mở khi vượt ngân sách: RSS WebView, thời gian chờ Host, kích thước Python.
+
+### Acceptance của Goal 2
+
+1. Mọi journey trong bảng có **PASS ở L2**, trừ mục ghi rõ "chưa phủ"; các mục GUI có L3 hoặc khoảng trống được chấp nhận bằng văn bản.
+2. Fault matrix phủ đủ 8 nhóm lỗi; lỗi còn lại được phân loại và có kế hoạch, không bỏ im lặng.
+3. Probe mới chạy trong CI Linux (ít nhất L1) và release lane; kết quả CI được ghi khác với L0/L2.
+4. Portability matrix có nguồn từ source; các blocker nhỏ đã sửa, blocker lớn có owner/điều kiện.
+5. Benchmark có số đo lặp lại được; chỉ mở tối ưu khi có ngưỡng và số liệu.
+6. Không đổi 10 bất biến, không đổi acceptance cũ, không thêm framework/runtime rewrite.
+
+### Blocker hiện tại
+
+- **Chứng thư + runner macOS/Windows** cho signing, ACL, MSI/DMG, update driver.
+- **GUI thật (L3)** cần compositor + WebKit console; hiện chỉ có weston headless và probe đọc trạng thái.
+- **Power-loss/rename crash** cần fault injection ở mức filesystem hoặc VM, chưa có trong môi trường này.
+- **Image byte parity** với Electron chỉ đúng cho phiên không đính kèm ảnh (D39); muốn đóng phải port arithmetic của libvips.
 
 ---
 

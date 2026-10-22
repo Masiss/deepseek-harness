@@ -1,5 +1,5 @@
 import { createHash, generateKeyPairSync, sign } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { zstdCompressSync } from 'node:zlib'
@@ -285,6 +285,33 @@ describe.skipIf(process.platform === 'win32')('office component install', () => 
     const settled = await component.install()
     expect(settled).toMatchObject({ installed: false, phase: 'error', failure: 'integrity' })
     expect(component.installed()).toBeUndefined()
+  })
+
+  it('reports a local write failure rather than a network failure', async () => {
+    const payload = archive()
+    const digest = createHash('sha256').update(payload).digest('hex')
+    const { primaryRuntime, directory } = fixture()
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = input instanceof Request ? input.url : String(input)
+      if (url.endsWith('/components.json')) {
+        return new Response(JSON.stringify(signed({
+          schemaVersion: 1,
+          components: [{ id: 'office', version: '3.12.0', file: 'office.tar.zst', bytes: payload.length, sha256: digest }],
+        })))
+      }
+      return new Response(new ReadableStream({
+        start(controller) {
+          controller.enqueue(payload.subarray(0, 512))
+          controller.error(Object.assign(new Error('no space left on device'), { code: 'ENOSPC' }))
+        },
+      }))
+    }) as typeof fetch
+    const component = new DesktopOfficeComponent({ feed: 'http://127.0.0.1/', directory, primaryRuntime, fetch: fetchImpl, publicKey })
+
+    const settled = await component.install()
+    expect(settled).toMatchObject({ installed: false, phase: 'error', failure: 'download' })
+    expect(component.installed()).toBeUndefined()
+    expect(readdirSync(directory).filter(name => name.startsWith('download-'))).toEqual([])
   })
 
   it('refuses a component feed that is not HTTPS or loopback', async () => {
