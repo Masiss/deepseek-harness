@@ -7,12 +7,12 @@ Cập nhật 2026-10-22. Mục đích: session mới đọc file này là biết
 | Mục | Giá trị |
 |---|---|
 | Nhánh | `chore/web-bun-migration` (upstream `origin/master` không đụng) |
-| HEAD | `c013718847` (perf: giữ dmabuf + tắt compositing gia tốc, có `graphics-probe.sh`) — **đã push** lên `fork`, CI run **39750055886** xanh ✓ |
-| Version | `0.2.1-rc.3` (đã bump **toàn bộ** 343 package — xem bẫy §5) |
+| HEAD | `64b66f9cde` = bump `0.2.1-rc.4` (**local, chưa push, chưa tag**) trên `4d048719d9` (plan) trên `6ea9bc31f7` (WebKit) trên `833cf8c386` (engine Office) — ba commit sau đó **đã push**, CI run **39774116751** xanh ✓ |
+| Version | cây làm việc `0.2.1-rc.4` (bump **349** package, local); **release đã publish vẫn** `0.2.1-rc.3` — xem bẫy §5 |
 | Release đã publish | `desktop-v0.2.1-rc.3-linux-x64` + `-linux-arm64`, feed `desktop-feed-linux-{x64,arm64}` **có chữ ký Ed25519** ✓ |
 | Lint | `bun run lint` sạch (1 warning có sẵn ở `packages/experimental/client-ui-cot-translation`) |
 | Typecheck | `bun run typecheck` 5/5 ✓ |
-| Lane CI | `.github/workflows/desktop-linux.yml` xanh ✓ (có thêm bước so shim ảnh với sharp thật) |
+| Lane CI | `.github/workflows/desktop-linux.yml` xanh ✓ (bước `Desktop shell tests` + `Keyless recorded-session replay` + `Desktop Host tests`) |
 | Lane release | `.github/workflows/desktop-release.yml` xanh ✓ 19m54s cho 2 target |
 
 ## 2. Đã xong (đừng làm lại)
@@ -39,7 +39,7 @@ Mục tiêu và acceptance đầy đủ ở `PLAN.md` § "Cấu trúc mục tiê
 - **Update trọn luồng** (`update-flow-probe.mjs`): sau D40 probe này **bị hỏng** (manifest schema 1 + không ký) và đã sửa: schemaVersion 2, ký Ed25519 bằng key tạm, truyền `DSH_DESKTOP_UPDATE_PUBLIC_KEY`; giờ `RESULT update-flow=OK` (prompt download/install, `restart`, ảnh được thay).
 - **Profile contention**: `desktop-lease-probe.sh` vẫn `OK`.
 - **Sharp fallback**: `image-parity-probe.sh` 11/11; khác byte JPEG/GIF/TIFF/resize là đã chấp nhận (D39).
-- **Benchmark**: Host cold start 1,98–2,09 s (warm), idle RSS 179–182 MiB; shell 0,55 s → 0,77 s → 4,54 s trên weston headless. `resident-probe.sh`: idle toàn app **RSS 765 MiB / PSS 597 MiB** (web 297 + shell 200 + Host 189 + network 58). `graphics-probe.sh` (mới 2026-10-22): FPS webview 58–63, app nạp 65 tài nguyên / 5,2 MB, ảnh chụp từ chính webview (0 pixel khác so với đường GPU).
+- **Benchmark**: Host cold start 1,98–2,09 s (warm), idle RSS 179–182 MiB; shell 0,55 s → 0,77 s → 4,54 s trên weston headless. App **đang chạy** trên session thật: **RSS 719–728 MiB / PSS 551–559 MiB** (web 330–338, shell 138–139, Host 192–193, network 58–59), FPS 57, app nạp 67 tài nguyên / 5,2 MB. Probe mới `graphics-probe.sh` (RSS/PSS/FPS/tài nguyên/ảnh webview), `office-engine-probe.sh` (engine Office).
 
 **L1 đã có**: Desktop Linux lane xanh tại [run 39740515325](https://github.com/Masiss/deepseek-harness/actions/runs/39740515325), gồm bước mới `Desktop shell tests` (drift gate, runtime policy, CSP).
 
@@ -47,13 +47,25 @@ Mục tiêu và acceptance đầy đủ ở `PLAN.md` § "Cấu trúc mục tiê
 
 **Engine Office trong AppImage (2026-10-22)**: cây runtime không mang `@deepseek-ai/libreoffice-kit` (engine đi theo component on-demand) ⇒ plugin `office-to-pdf` của profile không import được ⇒ app in `1 entry did not activate` và mất tính năng chuyển PDF. Sửa: loader trỏ engine về stub khi không có component lẫn engine (`native/office-engine-stub/`), nên plugin activate và lượt convert báo `unavailable`. Probe `office-engine-probe.sh` (trong release lane) chứng minh cả hai trạng thái.
 
-**Perf cuối (2026-10-22, commit `c013718847` trên `chore/web-bun-migration`, CI run 39750055886 xanh ✓)**: mặc định WebKit giờ **giữ renderer dmabuf + tắt compositing gia tốc** (`hardware-acceleration-policy=Never`, cache tắt, WebGL tắt, mọi thứ qua `DSH_DESKTOP_WEBKIT_*`; đảo qua `DSH_DESKTOP_WEBKIT_LIGHT=0` để đo lại). Báo cáo bộ nhớ đã cập trong §2b.
+**Mặc định WebKit cuối (2026-10-22, commit `6ea9bc31f7`)**: **không chỉnh gì** — đường GPU + renderer dmabuf, như WebKit mặc định. `DSH_DESKTOP_WEBKIT_{ACCEL,CACHE,WEBGL,DMABUF}` còn lại chỉ để **đo lại**, và `DSH_DESKTOP_WEBKIT_LIGHT=1` chỉ tắt page cache + WebGL (không tắt compositing gia tốc — cái đó làm màn đen).
 
-**Sửa theo source audit (2026-10-22)**: 8 finding của `~/downloads/DSH_L3_Source_Audit_b0a2313d09.md` đã được tái hiện và sửa (kết luận chi tiết: `…verdict.md`): gate cold-start/resident giờ hỏi **chính WebView** (`dsh: webview-auth=200`) thay vì `curl` của probe; probe không còn giết tiến trình lạ và dùng `mktemp -d`; Host báo lỗi khi chết sau READY (`ready` về false, có unit test); shell xoá cookie `dsh-auth-*` của WebKit trước lần đổi token nên cookie jar không phình nữa; retry token so **origin**; console webview chỉ bật khi `DSH_DESKTOP_WEB_CONSOLE=1`; launch token được redact trong log; quit hỏi Host ở thread riêng. Còn mở: cổng hồi quy cho `custom-protocol`/431 (chỉ có unit test), và A/B workload typing/scroll.
+**Sửa theo source audit (2026-10-22)**: 8 finding của `~/downloads/DSH_L3_Source_Audit_b0a2313d09.md` đã được tái hiện và sửa (kết luận chi tiết: `…verdict.md`): gate cold-start/resident giờ hỏi **chính WebView** (`dsh: webview-auth=200`) thay vì `curl` của probe; probe không còn giết tiến trình lạ và dùng `mktemp -d`; Host báo lỗi khi chết sau READY (`ready` về false, có unit test); shell xoá cookie `dsh-auth-*` của WebKit trước lần đổi token nên cookie jar không phình nữa; retry token so **origin**; console webview chỉ bật khi `DSH_DESKTOP_WEB_CONSOLE=1`; launch token được redact trong log; quit hỏi Host ở thread riêng. Còn mở: cổng hồi quy cho `custom-protocol`/431 (chỉ có unit test), và workload typing/scroll (B4 — sau khi revert thì **không còn cặp cấu hình để A/B**, nên chuyển thành số ngân sách).
 
 **L3 đã có (GUI thật trên máy)**: chạy app thật trên Hyprland và chụp màn hình (`grim`) ⇒ UI render đầy đủ. Ba lỗi chỉ lộ ra ở L3 đã sửa: release thiếu feature `custom-protocol` (start page trắng), cookie `SameSite=Strict` bị WebKit từ chối khi đi từ site của start page (app hiện "authentication required" ⇒ shell lặp yêu cầu token từ chính tài liệu của Host), và cookie jar phình theo port ⇒ Node trả `431` (Host xoá cookie authority cũ + `maxHeaderSize` 64 KiB).
 
-Probe mới đã vào **release lane** (`packaged-journey`, `fault-probe`, `crash-download`, `crash-extract`); lane đó chưa chạy lại sau khi thêm, nên bằng chứng packaged mới là L2 local. Còn lại của Goal 2: chạy release lane để có L1 packaged; bằng chứng GUI thật (CSP/console); portability (Windows ACL/sandbox/Office path/MSI-DMG); ngưỡng RSS desktop.
+**GUI thật (2026-10-22, session trên máy)**: app chạy trên Hyprland, UI render đầy đủ (sidebar, composer, model picker), `webview-auth=200`, FPS 57; model picker hiện **“GPT-5.6 Luna Default”** ⇒ route Codex (`gpt-5.6-luna`) **đã trả lời thật** (một lượt CLI trả đúng sentinel `LUNA_OK`). Phép so bắt buộc cho mọi đổi đồ họa: chụp **màn hình** (`grim -o eDP-1` rồi đo `content_mean`) — màn đen là `content_mean≈0`, 1 màu.
+
+**Probe mới đã vào release lane** (`packaged-journey`, `fault-probe`, `crash-download`, `crash-extract`, **`office-engine`**); lane release chưa chạy lại từ 21/10 ⇒ bằng chứng packaged mới là L2 local. Còn lại của Goal 2: B1 phát hành (để AppImage đã sửa tới được máy) → B2 chạy lại release lane → B3 header CSP + lượt model thật trong GUI → B4 ngân sách bộ nhớ + workload → B5 portability → B6 phần deferred.
+
+## 2c. Trạng thái máy sau session 2026-10-22 (tự dọn khi xong)
+
+| Thứ | Vị trí / trạng thái |
+|---|---|
+| App đang chạy | Tiến trình `dsh-desktop-tauri` trên **workspace 3** (tiêu đề “DeepSeek Harness”), cửa sổ hiển thị UI. Kill bằng pid trong `/home/masis/.cache/dsh-gui/app.pid`; **instance cũ giữ tên D-Bus single-instance** nên app mới sẽ thoát im lặng nếu chưa kill cái cũ |
+| Profile test riêng | `/home/masis/.cache/dsh-gui/project` — patch Codex + `gpt-5.6-luna` (`llm-pi-ai.providers.openai-codex`, `agent-default-model`, `agent-loop.agents[main]`) |
+| Home riêng của app test | `/home/masis/.cache/dsh-gui/home` (`.dsh/.credentials.yaml` là **bản sao** credential thật, mode 600) |
+| Credential Codex thật | `~/.dsh/.credentials.yaml` ⇒ grant `llm-pi-ai/openai-codex` (OAuth, hết hạn ~25 h kể từ 21/10); nguồn gốc: `~/.pi/agent/auth.json` (script `apps/desktop-tauri/scripts/codex-credential.ts`) |
+| Cây build | `apps/desktop/.desktop-build/targets/linux-x64` — đã vá tay loader + stub (probe dùng cây này) |
 
 ## 3. Việc nên làm tiếp (theo thứ tự giá trị)
 
@@ -131,6 +143,13 @@ Audit để lại 13 unit deferred (ngân sách agent) — đáng để soi trư
 | **Cây đóng gói đã bị dọn** | `apps/desktop/.desktop-build/targets/linux-x64/` phải dựng lại (`pack-linux.sh` + `prepare:primary-runtime` + `prepare-linux-runtime.ts`) trước khi chạy `update-probe.sh`, `desktop-lease-probe.sh`, `image-parity-probe.sh`, `entry-parity-probe.sh`, `office-component-probe.sh`. |
 | **Probe cần `apps/desktop/.desktop-build/tmp` writable** | Không chạy được trên `/tmp` tmpfs còn trống ít. |
 | **Node strip-only không chịu parameter property** | Các probe boot Host *từ source* phải qua tsx (đã sửa `bridge-probe.sh`, `pty-probe.sh`, `terminal-page-probe.sh`). |
+| **Đo đồ họa phải nhìn MÀN HÌNH, không chỉ webview** | `hardware-acceleration-policy=Never` làm webview vẽ nội bộ 60 fps mà cửa sổ vẫn **đen**; ảnh chụp từ API webview vẫn "0 pixel khác" vì nó chụp nội bộ. Phép so đúng: `grim -o eDP-1` rồi đo `content_mean` (đen ⇒ ≈0, 1 màu) |
+| **Đo trong weston headless cho kết quả NGƯỢC** | Headless không có GPU: tắt dmabuf thấy nhẹ hơn 73 MiB, trên máy có GPU thật nó **nặng hơn ~185 MiB**. Mọi số đo đường đồ họa phải đo trên session thật |
+| **Cây build trong repo resolve được engine Office** | `node_modules` của repo có `@deepseek-ai/libreoffice-kit` ⇒ probe local **không** thấy lỗi "không import được" của AppImage. Lỗi đó chỉ lộ ở bản đóng gói; probe phải chạy trên cây `.desktop-build` (đã có `office-engine-probe.sh`) |
+| **Không gõ bàn phím vào session người dùng đang bận** | `wtype` gõ vào cửa sổ đang có focus; khi focus rơi sang cửa sổ khác (zen/kitty) thì phím vào việc của họ. Luôn kiểm `hyprctl activewindow` trước khi gõ, và dừng nếu họ đang dùng máy |
+| **`pkill -f` giết chính shell của agent** | Mẫu lệnh khớp với dòng lệnh đang chạy ⇒ shell bị SIGKILL. Dùng `pkill -x` với tên process bị cắt 15 ký tự, hoặc pid file, hoặc `python3` + `os.kill` theo `comm` |
+| **Instance cũ giữ tên D-Bus single-instance** | App mới thoát im lặng (không log) vì tên D-Bus còn bị giữ. Kill instance cũ trước khi chạy lại, và kiểm `busctl --user list | grep SingleInstance` |
+| **`/tmp` có quota theo user** | `df` còn trống mà vẫn `Disk quota exceeded` khi dconf/gio ghi file. Dùng `TMPDIR` ngoài `/tmp` (ví dụ `~/.cache/dsh-probe`) cho app và probe |
 
 ## 6. Route Codex (đã cắm, dùng được ngay)
 
@@ -154,6 +173,12 @@ bash apps/desktop-tauri/scripts/desktop-lease-probe.sh   # lease: hai carrier kh
 bash apps/desktop-tauri/scripts/image-parity-probe.sh    # shim ảnh vs sharp thật
 bash apps/desktop-tauri/scripts/live-transcript-probe.sh  # model thật ⇒ replay ⇒ diff 0
 bash apps/desktop-tauri/scripts/entry-parity-probe.sh    # cả hai entrypoint Host boot
+bash apps/desktop-tauri/scripts/office-engine-probe.sh  # engine Office: component có/không
+bash apps/desktop-tauri/scripts/graphics-probe.sh        # RSS/PSS/FPS/tài nguyên + ảnh webview
+bash apps/desktop-tauri/scripts/cold-start-probe.sh      # webview-auth=200 + cold_start=OK
+# B1 (khi được duyệt phát hành): bump đã có sẵn ở commit local 64b66f9cde
+git push fork chore/web-bun-migration                    # đẩy commit bump lên fork
+git tag desktop-v0.2.1-rc.4 && git push fork desktop-v0.2.1-rc.4   # kích hoạt lane release
 ```
 Phát hành (làm thay đổi trên `fork`): bump version **mọi package** ⇒ tag `desktop-v<version>` ⇒ lane release tự chạy ⇒ feed mới đã ký.
 
