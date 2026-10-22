@@ -1,0 +1,12 @@
+{
+  "name": "@deepseek-ai/libreoffice-kit",
+  "version": "0.0.0",
+  "description": "Placeholder for the Office engine a runtime installs on demand",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json",
+    "./cli": "./lib/cli.js"
+  }
+}

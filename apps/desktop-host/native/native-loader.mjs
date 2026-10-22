@@ -11,8 +11,10 @@
  *
  * The Office engine travels with the on-demand Office component, so the hook
  * points the engine's package at the installed copy when the component is
- * present. Without it, the engine stays unresolved and the plugins that need
- * it are skipped until the user installs the component.
+ * present. A runtime that carries neither the component nor the engine points
+ * the package at a placeholder that reports the missing component, so the
+ * plugins that need the engine load and report an unavailable conversion
+ * instead of failing to import.
  *
  * Loaded by the Desktop Host launcher with `--import`.
  */
@@ -24,6 +26,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const binary = join(here, 'dsh-native.node')
+/** Runtime package tree that holds the node_modules directory of this loader. */
+const runtimeRoot = join(here, '..', '..', '..', '..')
 
 /** Specifiers the Rust module replaces, with the wrapper that calls it. */
 const replacements = new Map([
@@ -53,6 +57,20 @@ function officeEngineRoot() {
   return existsSync(join(root, 'lib', 'index.js')) ? root : undefined
 }
 
+/**
+ * Locate the Office engine inside the runtime tree.
+ *
+ * A runtime that was not stripped of the engine keeps the bundled copy, and
+ * the ordinary resolution finds it.
+ *
+ * @param runtime - Runtime package tree that holds the node_modules directory.
+ * @returns The engine package directory, or undefined when the runtime has none.
+ */
+function runtimeEngineRoot(runtime) {
+  const root = join(runtime, 'node_modules', '@deepseek-ai', 'libreoffice-kit')
+  return existsSync(join(root, 'lib', 'index.js')) ? root : undefined
+}
+
 const urls = new Map()
 if (process.platform !== 'win32' && existsSync(binary)) {
   for (const [specifier, path] of replacements) {
@@ -65,6 +83,14 @@ if (engine !== undefined) {
   urls.set('@deepseek-ai/libreoffice-kit', pathToFileURL(join(engine, 'lib', 'index.js')).href)
   urls.set('@deepseek-ai/libreoffice-kit/package.json', pathToFileURL(join(engine, 'package.json')).href)
   urls.set('@deepseek-ai/libreoffice-kit/cli', pathToFileURL(join(engine, 'lib', 'cli.js')).href)
+} else if (runtimeEngineRoot(runtimeRoot) === undefined) {
+  // Neither the component nor the runtime carries the engine, so the plugins
+  // that need it load a placeholder that reports the missing component
+  // instead of failing to import.
+  const stub = join(here, 'office-engine-stub')
+  urls.set('@deepseek-ai/libreoffice-kit', pathToFileURL(join(stub, 'lib', 'index.js')).href)
+  urls.set('@deepseek-ai/libreoffice-kit/package.json', pathToFileURL(join(stub, 'package.json')).href)
+  urls.set('@deepseek-ai/libreoffice-kit/cli', pathToFileURL(join(stub, 'lib', 'cli.js')).href)
 }
 
 if (urls.size > 0) {
