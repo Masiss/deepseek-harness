@@ -270,7 +270,10 @@ mod tests {
     }
     #[test]
     fn deserializes_event() {
-        let frame: FollowFrame = serde_json::from_str(r#"{"type":"event","event":{"type":"turn/start","seq":3,"time":4,"data":{"turn":1}}}"#).unwrap();
+        let frame: FollowFrame = serde_json::from_str(
+            r#"{"type":"event","event":{"type":"turn/start","seq":3,"time":4,"data":{"turn":1}}}"#,
+        )
+        .unwrap();
         assert!(matches!(frame, FollowFrame::Event(_)));
     }
     #[test]

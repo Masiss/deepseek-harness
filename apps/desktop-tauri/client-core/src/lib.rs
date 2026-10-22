@@ -3,11 +3,14 @@
 //! The crate contains wire data, launch-token credential handling, and HTTP transport;
 //! interface rendering and Host lifecycle remain outside this crate.
 
+pub mod approvals;
 pub mod auth;
 pub mod chat;
 pub mod envelope;
 pub mod follow;
+pub mod models;
 pub mod session;
+pub mod sessions;
 pub mod transport;
 
 #[derive(Debug, thiserror::Error)]
