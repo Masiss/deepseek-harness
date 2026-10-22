@@ -86,7 +86,8 @@ Không dùng L0 để thay L2/L3. Một mục chỉ được coi là "release-gr
 | Hết đĩa khi tải | Lỗi không phải network, dọn file dở | `disk-full-probe.sh` + unit test ENOSPC | **PASS** (48 MB; `failure=download`, `leftovers=0`) |
 | Manifest/artifact bị sửa | Từ chối trước khi chạy | `update-probe.sh`, unit tests | **PASS** |
 | Scratch còn lại sau khi Host bị kill | Lần boot sau thu hồi `download-*`/`staging-*`, không đụng version | `fault-probe.sh` → `crash-leftovers` | **PASS** |
-| Crash đúng lúc download/install | Không để lại trạng thái nửa vời | — | **Chưa phủ** (mới phủ phần dọn dẹp lúc boot) |
+| Kill -9 giữa lúc download | File dở còn lại, boot sau dọn sạch, không cài dở | `crash-download-probe.sh` | **PASS** (`left_before=1`, `cleaned=0`, `current=absent`) |
+| Kill giữa extract/commit | Không để lại version hỏng | Unit test `recover` + `staging-*` seeding | **Một phần** — chưa inject đúng thời điểm extract |
 | Mất điện / kill trong lúc rename | Journal phục hồi hoặc rollback | — | **Chưa phủ** |
 
 ### Portability matrix (đọc từ source hiện tại)
