@@ -10,9 +10,10 @@ use fs2::FileExt;
 use host::Host;
 use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
-use tray_icon::menu::{Menu, MenuItem};
-use tray_icon::{Icon, TrayIconBuilder};
-
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tray_icon::menu::{Menu, MenuEvent, MenuItem};
+use tray_icon::{Icon, TrayIconBuilder, TrayIconEvent};
 
 fn lock_path() -> PathBuf {
     let home = std::env::var_os("DSH_HOME")
@@ -44,7 +45,7 @@ fn acquire_instance_lock() -> Option<File> {
     Some(file)
 }
 
-fn setup_tray() -> Option<tray_icon::TrayIcon> {
+fn setup_tray() -> Option<(tray_icon::TrayIcon, tray_icon::menu::MenuId, tray_icon::menu::MenuId)> {
     let menu = Menu::new();
     let show = MenuItem::new("Show/Hide", true, None);
     let quit = MenuItem::new("Quit", true, None);
@@ -63,13 +64,15 @@ fn setup_tray() -> Option<tray_icon::TrayIcon> {
             return None;
         }
     };
+    let show_id = show.id().clone();
+    let quit_id = quit.id().clone();
     match TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_tooltip("DeepSeek Harness")
         .with_icon(icon)
         .build()
     {
-        Ok(tray) => Some(tray),
+        Ok(tray) => Some((tray, show_id, quit_id)),
         Err(error) => {
             eprintln!("tray setup failed: {error}");
             None
@@ -84,10 +87,13 @@ struct DesktopApp {
     transport: Option<HttpTransport>,
     sessions: Vec<String>,
     status: String,
+    quitting: Arc<AtomicBool>,
+    show_requested: Arc<AtomicBool>,
+    hide_requested: Arc<AtomicBool>,
 }
 
 impl DesktopApp {
-    fn new() -> Self {
+    fn new(quitting: Arc<AtomicBool>, show_requested: Arc<AtomicBool>, hide_requested: Arc<AtomicBool>) -> Self {
         let host = Host::start();
         let host_url = host.host_url().map(str::to_owned);
         let status = host.error().map_or_else(
@@ -106,6 +112,9 @@ impl DesktopApp {
             transport: None,
             sessions: Vec::new(),
             status,
+            quitting,
+            show_requested,
+            hide_requested,
         }
     }
 
@@ -139,9 +148,21 @@ impl DesktopApp {
 }
 
 impl eframe::App for DesktopApp {
-    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {}
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.show_requested.swap(false, std::sync::atomic::Ordering::AcqRel) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+        if self.hide_requested.swap(false, std::sync::atomic::Ordering::AcqRel) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+        }
+    }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if ui.ctx().input(|i| i.viewport().close_requested()) && !self.quitting.load(std::sync::atomic::Ordering::Acquire) {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.hide_requested.store(true, std::sync::atomic::Ordering::Release);
+        }
         egui::Panel::top("title_bar").show(ui, |ui| {
             ui.heading("DeepSeek Harness");
         });
@@ -193,11 +214,46 @@ fn main() -> eframe::Result {
         return Ok(());
     };
     updater::check();
-    let _tray = setup_tray();
+    let quitting = Arc::new(AtomicBool::new(false));
+    let tray = setup_tray();
+    let (show_id, quit_id) = tray.as_ref().map_or_else(
+        || (None, None),
+        |(_, show, quit)| (Some(show.clone()), Some(quit.clone())),
+    );
+    let show_requested = Arc::new(AtomicBool::new(false));
+    let hide_requested = Arc::new(AtomicBool::new(false));
     let options = eframe::NativeOptions::default();
+    let event_quitting = Arc::clone(&quitting);
+    let event_show = Arc::clone(&show_requested);
+    let event_hide = Arc::clone(&hide_requested);
+    let _menu_listener = MenuEvent::set_event_handler(Some(move |event: tray_icon::menu::MenuEvent| {
+        if Some(event.id.clone()) == quit_id {
+            event_quitting.store(true, Ordering::Release);
+        } else if Some(event.id) == show_id {
+            let currently_hidden = event_hide.load(Ordering::Acquire);
+            if currently_hidden {
+                event_show.store(true, Ordering::Release);
+            } else {
+                event_hide.store(true, Ordering::Release);
+            }
+        }
+    }));
+    let tray_show = Arc::clone(&show_requested);
+    let tray_quitting2 = Arc::clone(&quitting);
+    let _tray_listener = TrayIconEvent::set_event_handler(Some(move |event| {
+        if let TrayIconEvent::Click { .. } = event {
+            tray_show.store(true, Ordering::Release);
+        }
+        if tray_quitting2.load(Ordering::Acquire) {
+            std::process::exit(0);
+        }
+    }));
+    let app_quitting = Arc::clone(&quitting);
+    let app_show = Arc::clone(&show_requested);
+    let app_hide = Arc::clone(&hide_requested);
     eframe::run_native(
         "DeepSeek Harness",
         options,
-        Box::new(|_creation_context| Ok(Box::new(DesktopApp::new()))),
+        Box::new(move |_creation_context| Ok(Box::new(DesktopApp::new(app_quitting, app_show, app_hide)))),
     )
 }
