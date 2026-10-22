@@ -69,7 +69,7 @@ Không dùng L0 để thay L2/L3. Một mục chỉ được coi là "release-gr
 | Update feed ký | `update-probe.sh` | L2 (shell thật, headless) | **PASS** — feed hợp lệ `available`, feed bị sửa `idle` |
 | Update trọn luồng | `update-flow-probe.mjs` | L2 | **PASS** — prompt download/install, `restart`, ảnh được thay |
 | Offline update/component | `fault-probe.sh` | L2 | **PASS** — `check-network`, `feed-network`, không cài dở |
-| Disk-full khi tải component | `disk-full-probe.sh` (dưới `isolated-run.sh`) | L2 | **PASS** — `phase=error`, không còn `download-*`/`current.json`; phân loại ENOSPC thành `download` mới sửa ở source + unit test, cây đóng gói sẽ nhận ở lần build kế tiếp |
+| Disk-full khi tải component | `disk-full-probe.sh` (dưới `isolated-run.sh`) | L2 | **PASS** — `phase=error`, `failure=download`, không còn `download-*`/`current.json` |
 | Session có nội dung + model thật | `live-transcript-probe.sh` | L3 (cần key) | **PASS** ở lần chạy trước; chưa lặp trong Goal 2 |
 | Welcome/onboarding, GUI thật | — | L3 | **Chưa có** (đã hoãn) |
 
@@ -83,9 +83,10 @@ Không dùng L0 để thay L2/L3. Một mục chỉ được coi là "release-gr
 | Shutdown qua control frame | Exit 0, nhả lease, không còn process | `fault-probe.sh` → `shutdown` | **PASS** |
 | Update feed không tới được | `check-network`, không crash | `fault-probe.sh` → `offline-update` | **PASS** |
 | Component feed không tới được | `feed-network`, không cài dở | `fault-probe.sh` → `offline-component` | **PASS** |
-| Hết đĩa khi tải | Lỗi không phải network, dọn file dở | `disk-full-probe.sh` + unit test ENOSPC | **PASS** (48 MB; `leftovers=0`; phân loại `download` đã sửa ở source, unit test xanh) |
+| Hết đĩa khi tải | Lỗi không phải network, dọn file dở | `disk-full-probe.sh` + unit test ENOSPC | **PASS** (48 MB; `failure=download`, `leftovers=0`) |
 | Manifest/artifact bị sửa | Từ chối trước khi chạy | `update-probe.sh`, unit tests | **PASS** |
-| Crash giữa lúc download/install | Không để lại trạng thái nửa vời | — | **Chưa phủ** |
+| Scratch còn lại sau khi Host bị kill | Lần boot sau thu hồi `download-*`/`staging-*`, không đụng version | `fault-probe.sh` → `crash-leftovers` | **PASS** |
+| Crash đúng lúc download/install | Không để lại trạng thái nửa vời | — | **Chưa phủ** (mới phủ phần dọn dẹp lúc boot) |
 | Mất điện / kill trong lúc rename | Journal phục hồi hoặc rollback | — | **Chưa phủ** |
 
 ### Portability matrix (đọc từ source hiện tại)

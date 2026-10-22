@@ -61,6 +61,9 @@ async function main(): Promise<void> {
       ? {}
       : { publicKey: process.env.DSH_DESKTOP_COMPONENT_PUBLIC_KEY }),
   })
+  // A previous Host may have been killed between opening a download and
+  // removing it; reclaim that space before serving.
+  await officeComponent.recover()
   let stopping = false
 
   /**

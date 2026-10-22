@@ -227,6 +227,26 @@ export class DesktopOfficeComponent {
   }
 
   /**
+   * Remove scratch files a Host killed mid-download or mid-extract left behind.
+   *
+   * `install()` removes its own artifacts when it fails, but a SIGKILL skips
+   * those handlers. Versions and the `current.json` marker are never touched.
+   *
+   * @returns Nothing after the scratch names are gone.
+   */
+  async recover(): Promise<void> {
+    let entries: string[]
+    try {
+      entries = readdirSync(this.directory)
+    } catch {
+      return
+    }
+    await Promise.all(entries
+      .filter(name => name.startsWith('download-') || name.startsWith('staging-'))
+      .map(name => rm(join(this.directory, name), { recursive: true, force: true })))
+  }
+
+  /**
    * Locate a complete installation without trusting the manifest.
    *
    * @returns Version and composed runtime directory, or undefined when absent or incomplete.

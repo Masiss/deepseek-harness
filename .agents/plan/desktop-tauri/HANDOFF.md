@@ -32,7 +32,8 @@ Mục tiêu và acceptance đầy đủ ở `PLAN.md` § "Cấu trúc mục tiê
 
 - **Packaged journey** (`packaged-journey-probe.sh`, L2): cài plugin từ tarball → Host apply → restart → gỡ; tạo/rename Session → restart → đọc lại. Tất cả PASS.
 - **Fault injection** (`fault-probe.sh`, L2): thiếu runtime, profile hỏng, crash -9 → takeover lease, shutdown sạch, offline update, offline component. Tất cả PASS.
-- **Disk-full** (`disk-full-probe.sh` dưới `isolated-run.sh` 48 MB): tải component bị ENOSPC, `phase=error`, không còn file dở/`current.json`. Source map ENOSPC/EDQUOT/EFBIG/EROFS sang `download` thay vì `download-network`; unit test mới trong `components.spec.ts` (cây đóng gói sẽ nhận ở lần build sau).
+- **Disk-full** (`disk-full-probe.sh` dưới `isolated-run.sh` 48 MB): tải component bị ENOSPC, `phase=error`, `failure=download`, không còn file dở/`current.json`. Source map ENOSPC/EDQUOT/EFBIG/EROFS sang `download` thay vì `download-network`; unit test mới trong `components.spec.ts`.
+- **Crash leftovers**: `DesktopOfficeComponent.recover()` chạy lúc Host khởi động, xoá `download-*`/`staging-*` còn lại, không đụng `versions/`/`current.json`; `fault-probe.sh` thêm kịch bản `crash-leftovers` ⇒ PASS.
 - **Update trọn luồng** (`update-flow-probe.mjs`): sau D40 probe này **bị hỏng** (manifest schema 1 + không ký) và đã sửa: schemaVersion 2, ký Ed25519 bằng key tạm, truyền `DSH_DESKTOP_UPDATE_PUBLIC_KEY`; giờ `RESULT update-flow=OK` (prompt download/install, `restart`, ảnh được thay).
 - **Profile contention**: `desktop-lease-probe.sh` vẫn `OK`.
 - **Sharp fallback**: `image-parity-probe.sh` 11/11; khác byte JPEG/GIF/TIFF/resize là đã chấp nhận (D39).

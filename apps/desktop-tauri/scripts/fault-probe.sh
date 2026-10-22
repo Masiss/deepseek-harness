@@ -12,6 +12,8 @@
 #                            launch must take it over and serve
 #   shutdown                 the control frame must exit 0 and release the
 #                            lease, with no Host left running
+#   crash-leftovers          a killed install leaves scratch names; the next
+#                            launch reclaims them without touching versions
 #   offline-update           an unreachable update feed must classify as a
 #                            network failure, not crash or install
 #   offline-component        an unreachable component feed must classify as a
@@ -146,6 +148,20 @@ if [ -n "$base" ]; then
 else
   report shutdown FAIL "not-ready"
 fi
+
+# --- crash leftovers: the next launch reclaims scratch space --------------
+mkdir -p "$work/leftover-home/components/download-stale" \
+  "$work/leftover-home/components/staging-stale"
+printf 'partial' > "$work/leftover-home/components/download-stale/artifact"
+start "$work/leftover" "$tree/project" "$work/leftover-home"
+if [ -n "$base" ] \
+  && [ ! -e "$work/leftover-home/components/download-stale" ] \
+  && [ ! -e "$work/leftover-home/components/staging-stale" ]; then
+  report crash-leftovers ok "download=removed staging=removed"
+else
+  report crash-leftovers FAIL "download=$([ -e "$work/leftover-home/components/download-stale" ] && echo present || echo removed)"
+fi
+stop
 
 # --- offline: update feed unreachable --------------------------------------
 start "$work/offline-update" "$tree/project" "$work/offline-update-home" \

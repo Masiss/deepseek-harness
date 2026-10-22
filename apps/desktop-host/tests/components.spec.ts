@@ -314,6 +314,21 @@ describe.skipIf(process.platform === 'win32')('office component install', () => 
     expect(readdirSync(directory).filter(name => name.startsWith('download-'))).toEqual([])
   })
 
+  it('removes scratch files a killed Host left behind', async () => {
+    const { primaryRuntime, directory } = fixture()
+    mkdirSync(join(directory, 'download-dead'), { recursive: true })
+    writeFileSync(join(directory, 'download-dead', 'artifact'), 'partial')
+    mkdirSync(join(directory, 'staging-dead'), { recursive: true })
+    mkdirSync(join(directory, 'versions', '1.0.0'), { recursive: true })
+    const component = new DesktopOfficeComponent({ feed: 'http://127.0.0.1/', directory, primaryRuntime, publicKey })
+
+    await component.recover()
+
+    expect(existsSync(join(directory, 'download-dead'))).toBe(false)
+    expect(existsSync(join(directory, 'staging-dead'))).toBe(false)
+    expect(existsSync(join(directory, 'versions', '1.0.0'))).toBe(true)
+  })
+
   it('refuses a component feed that is not HTTPS or loopback', async () => {
     const payload = archive()
     const digest = createHash('sha256').update(payload).digest('hex')
