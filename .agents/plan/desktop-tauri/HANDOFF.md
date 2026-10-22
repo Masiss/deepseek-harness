@@ -41,7 +41,7 @@ Mục tiêu và acceptance đầy đủ ở `PLAN.md` § "Cấu trúc mục tiê
 - **Sharp fallback**: `image-parity-probe.sh` 11/11; khác byte JPEG/GIF/TIFF/resize là đã chấp nhận (D39).
 - **Benchmark**: Host cold start 1,98–2,09 s (warm), idle RSS 179–182 MiB; shell 0,55 s → 0,77 s → 4,54 s trên weston headless. `resident-probe.sh`: idle toàn app **RSS 605–607 MiB / PSS 430–432 MiB** (shell 192 + Host 169 + WebKit 167 + network 56).
 
-**L1 đã có**: Desktop Linux lane xanh tại [run 39719956704](https://github.com/Masiss/deepseek-harness/actions/runs/39719956704), gồm bước mới `Desktop shell tests` (drift gate, runtime policy, CSP).
+**L1 đã có**: Desktop Linux lane xanh tại [run 39721974388](https://github.com/Masiss/deepseek-harness/actions/runs/39721974388), gồm bước mới `Desktop shell tests` (drift gate, runtime policy, CSP).
 
 Probe mới đã vào **release lane** (`packaged-journey`, `fault-probe`, `crash-download`, `crash-extract`); lane đó chưa chạy lại sau khi thêm, nên bằng chứng packaged mới là L2 local. Còn lại của Goal 2: chạy release lane để có L1 packaged; bằng chứng GUI thật (CSP/console); portability (Windows ACL/sandbox/Office path/MSI-DMG); ngưỡng RSS desktop.
 
