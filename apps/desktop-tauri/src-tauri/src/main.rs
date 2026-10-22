@@ -25,13 +25,17 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use host::HostClient;
 
-/// Whether the shell runs WebKit with its light settings.
+/// Whether the shell applies the light WebKit settings.
 ///
-/// @returns true unless the environment turns the light settings off.
+/// The light preset turns off the page cache and WebGL. The accelerated
+/// compositing is not part of it: on a Wayland session it leaves the webview
+/// painting into a window that stays blank, so it has a switch of its own.
+///
+/// @returns true when the environment asks for the light settings.
 fn webkit_light() -> bool {
     match std::env::var("DSH_DESKTOP_WEBKIT_LIGHT") {
         Ok(value) => value != "0",
-        Err(_) => true,
+        Err(_) => false,
     }
 }
 
@@ -47,11 +51,12 @@ fn webkit_switch(name: &str, fallback: bool) -> bool {
     }
 }
 
-/// Keep WebKit's idle footprint down.
+/// Apply the WebKit settings a measurement asked for.
 ///
-/// GPU compositing keeps a large dmabuf surface alive for an application
-/// whose pages are mostly text; the same pages use materially less memory
-/// without it.
+/// The application keeps the stock settings: the renderer that hands its
+/// frames to the compositor without a copy, and the accelerated compositing
+/// that puts them on the screen. Both alternatives cost more than they save —
+/// the copy costs memory, and the missing compositing leaves a blank window.
 #[cfg(target_os = "linux")]
 fn configure_webkit(window: &tauri::WebviewWindow) {
     use webkit2gtk::{HardwareAccelerationPolicy, SettingsExt, WebViewExt};
@@ -61,9 +66,11 @@ fn configure_webkit(window: &tauri::WebviewWindow) {
             return;
         };
         // The light settings cost rendering speed and save memory. Each one
-        // has its own switch so a measurement can attribute the saving.
+        // has its own switch so a measurement can attribute the saving, and
+        // the accelerated compositing stays on unless a measurement asks for
+        // it: the webview paints into a blank window without it.
         let light = webkit_light();
-        if webkit_switch("DSH_DESKTOP_WEBKIT_ACCEL", light) {
+        if webkit_switch("DSH_DESKTOP_WEBKIT_ACCEL", false) {
             settings.set_hardware_acceleration_policy(HardwareAccelerationPolicy::Never);
         }
         if webkit_switch("DSH_DESKTOP_WEBKIT_CACHE", light) {
@@ -615,17 +622,14 @@ fn toggle_devtools(window: &tauri::WebviewWindow) {
     }
 }
 
-/// Keep the WebKit web process's idle memory down.
+/// Let a measurement turn the WebKit web process's dmabuf renderer off.
 ///
-/// The GPU renderer keeps a dmabuf surface alive for pages that are mostly
-/// text, and the same pages use materially less memory without it. The
-/// variable is read when the web process starts, so it is set before the
-/// window exists.
+/// The renderer hands the frames to the compositor without a copy. Turning it
+/// off makes the shell copy every frame, which costs far more memory on a
+/// machine with a graphics device than the renderer saves, so it stays on
+/// unless a measurement asks for the copy. The variable is read when the web
+/// process starts, so it is set before the window exists.
 fn tune_webkit_process_environment() {
-    // The dmabuf renderer hands the frames to the compositor without a copy.
-    // Turning it off makes the shell copy every frame, which costs far more
-    // memory on a machine with a graphics device than the renderer saves, so
-    // it stays on unless a measurement asks for the copy.
     if !webkit_switch("DSH_DESKTOP_WEBKIT_DMABUF", false) {
         return;
     }
