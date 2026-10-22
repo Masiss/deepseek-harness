@@ -247,6 +247,32 @@ Lane tập trung **Linux**; **macOS và Windows để pending** cho tới khi c�
 | **M8** | **Cổng parity**: checklist từng màn hình của web client | 100% xanh ✓ |
 | **M9** | Quy trình kịp upstream: mỗi release upstream ⇒ rà UX + checklist | Checklist trong `.agents/plan/` cập mỗi release ✓ |
 
+**Chất lượng code của Goal 3 (chủ dự án, 2026-10-22):** code mới phải **sạch**; tối ưu để đạt mục tiêu thì được phép, **nhưng mọi luật ban đầu giữ nguyên**.
+
+| Luật (giữ nguyên) | Áp dụng cho code Rust mới |
+|---|---|
+| 10 bất biến của lane (§"Bất biến") | Session format, tool schema, plugin API, bundle/profile composition, CLI contract, token/cookie auth, PTY, sandbox, update policy — **không** đổi để đổi lấy tiết kiệm |
+| Không `as unknown`, không `any` trần | Rust: không `unwrap`/`expect` trên đường chạy thật; lỗi có kiểu ✓ |
+| Lỗi có kiểu, báo cáo có hành động | `client-core` có error type riêng ✓; lỗi protocol mang mã + ngữ cảnh ✓ |
+| Không thêm dependency tùy tiện | Mỗi crate thêm vào đều phải có lý do trong báo cáo ✓ |
+| Cấu hình không hardcode trong plugin | Đường dẫn/hằng số theo môi trường nằm ở `Config` ✓ |
+| Misconfiguration fail loud | Profile thiếu row ⇒ báo rõ, không âm thầm chạy tiếp ✓ |
+| Tài liệu theo code, JSDoc/comment giữ cục bộ | Mỗi module Rust có mô tả hợp đồng ✓; comment giải thích *tại sao* ✓ |
+| Test theo hành vi, không sửa expected output | Test của crate so với hành vi quan sát được ✓; **không** sửa snapshot/fixture để xanh ✓ |
+| Tách miền rõ ràng | `client-core` = protocol ✓; app = UI ✓; Host = dịch vụ ✓ |
+
+**Hướng tối ưu được cân nhắc (đo trước khi làm, không đổi luật):**
+
+| Hướng | Kỳ vọng | Ràng buộc |
+|---|---|---|
+| **Profile desktop không mang package client-UI** | Host bớt module graph ⇒ RSS giảm (đang đo) | Web profile của upstream giữ nguyên ✓; desktop không mất tính năng harness ✓ |
+| **Giữ transcript trong bộ nhớ có giới hạn** (ảo hoá danh sách) | App native không phình theo session dài ✓ | Dữ liệu vẫn đầy đủ trên đĩa ✓ |
+| **`--optimize-for-size` + trần heap hợp lý cho Host** | Đã dùng ✓; đo lại sau khi bớt plugin | Không đặt trần old-space cứng ✓ (session cần sẽ nghẽn ✗) |
+| **Tải plugin theo nhu cầu (lazy)** | Host khởi động nhanh + nhẹ hơn | Phải là cơ chế extension point sẵn có ✓, không phải hack ✓ |
+| **Font atlas + render của egui** | Native client nhẹ hơn webview nhiều ✓ | Chỉ đo, không giả định ✓ |
+
+⇒ **Không có hướng tối ưu nào được chấp nhận nếu nó phá luật ở trên**; mục tiêu `< 300 MiB` là **điều kiện xong**, không phải lý do để viết code cẩu thả ✓.
+
 **Điều kiện "xong" của Goal 3 (Q14 — đủ cả bốn):**
 
 1. **Parity tính năng**: checklist từng màn hình của web client xanh hết ✓.
