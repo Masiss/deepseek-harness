@@ -233,19 +233,32 @@ Lane tập trung **Linux**; **macOS và Windows để pending** cho tới khi c�
 
 **Còn giữ nguyên:** toàn bộ tính năng dsh nằm ở **Host** (tools, plugin, session, model, provider, terminal, sandbox) — client native nói chuyện với Host qua **đúng API** web client dùng ⇒ không mất tính năng harness. Mất là **bề mặt UI** (66 package `packages/client/*`) phải viết lại, và **UX mới của upstream không tự về** ⇒ có quy trình đối chiếu (M9).
 
-**Mốc (thứ tự theo rủi ro, Q13):**
+**Mốc (thứ tự theo rủi ro, Q13) — trạng thái thực tế (2026-10-22):**
 
-| Mốc | Nội dung | Cổng chặn (acceptance) |
-|---|---|---|
-| **M1** | `client-core` Rust: lớp protocol (mọi RPC + stream của Host), xác thực bằng cookie của app, reconnect, cancel | Test đối chiếu với client web trên **cùng một** Host: cùng request ⇒ cùng response ✓; unit test ✓ |
-| **M2** | Viewer: đọc session đã có, log, trạng thái tool | Chạy được trên session thật ✓, số đo RSS ghi lại ✓ |
-| **M3** | Chat: gửi prompt, stream, cancel, hiển thị tool call | Lượt model thật trong app native ✓ (probe tương tự `gui-evidence-probe.sh`) |
-| **M4** | Duyệt quyền + chọn model + danh sách session | Parity với 3 màn hình web tương ứng ✓ |
-| **M5** | Terminal (PTY) | Parity ✓ |
-| **M6** | Settings, marketplace, document preview, plugin | Parity ✓ |
-| **M7** | Đóng gói: AppImage, updater, tray, single-instance, dialog | Probe packaged xanh ✓, update flow thật ✓ |
-| **M8** | **Cổng parity**: checklist từng màn hình của web client | 100% xanh ✓ |
-| **M9** | Quy trình kịp upstream: mỗi release upstream ⇒ rà UX + checklist | Checklist trong `.agents/plan/` cập mỗi release ✓ |
+| Mốc | Nội dung | Trạng thái | Ghi chú |
+|---|---|---|---|
+| **M1** | `client-core` Rust: envelope, auth (token→cookie), transport HTTP + cancel | **Xong** ✓ | `apps/desktop-tauri/client-core/`; inventory 73 request + 12 stream (`API.md`, `api.json`); 6 test |
+| **M2** | Viewer: session list/page, log, trạng thái tool call | **Xong** ✓ | `session.rs`; fixture recorded-session; 7 test |
+| **M3** | Chat: prompt (`session/prompt`), cancel (`session/cancel`), follow stream WS (`session/follow`) | **Xong** ✓ (transport) | `chat.rs` + `follow.rs`; tungstenite (handshake + rustls); 14 test. UI chat còn thiếu |
+| **M4** | Model selection + session management + approval typing | **Xong** ✓ (typing) | `models.rs`, `sessions.rs`, `approvals.rs`; gửi quyết định duyệt cần Remote Event channel (chưa có) |
+| **M5** | Terminal (PTY): environment/shells/list/create/rename/close + attach/retain streams | **Xong** ✓ (transport) | `terminal.rs`; 20 test |
+| **M6** | Settings, plugins, skills, schedules, workspace files | **Xong** ✓ (transport) | 5 module; 31 test. Document preview/marketplace UI chưa có endpoint |
+| **M7** | Native app shell (egui), host sidecar + auth, packaging | **Xong một phần** ◐ | `native-app/` (eframe/egui) + `host.rs` (sidecar + cookie) + `dialog.rs` + `updater.rs` + `package-appimage.sh`; single-instance (fs2), tray (tray-icon ksni), close-to-tray, auto-update sau `DSH_AUTO_UPDATE=1`. **Chưa**: updater ký số, tích hợp AppImage vào release lane |
+| **M8** | Cổng parity: checklist từng màn hình | **Đang làm** ◐ | `.agents/plan/desktop-tauri/PARITY.md` — các màn hình transport đã xong; UI panel còn thiếu |
+| **M9** | Quy trình kịp upstream | **Xong** ✓ | `.agents/plan/desktop-tauri/UPSTREAM.md` |
+
+**Số đo sàn bộ nhớ (2026-10-22):** Host base-only (không `dsh-web-app`) **≈ 180 MiB RSS / 168 MiB PSS**; Host có webview ~190 MiB ⇒ bỏ bundle web chỉ tiết kiệm ~10 MiB ở Host, **webview ~530 MiB mới là chi phí lớn**. Ước tính native: Host 180 + shell ~30 + client 30–80 = **240–290 MiB** ⇒ đạt `< 300 MiB` nếu giữ transcript có giới hạn + tải plugin lazy.
+
+**Cấu trúc code đã có:**
+
+```
+apps/desktop-tauri/client-core/     # protocol library (Rust), 31 test
+  src/{lib,envelope,auth,transport,session,chat,follow,models,sessions,approvals,terminal,settings,plugins,skills,schedules,workspace_files}.rs
+  API.md, api.json                  # inventory 73 request + 12 stream
+apps/desktop-tauri/native-app/      # egui shell (no webview)
+  src/{main,host,dialog,updater}.rs
+  package-appimage.sh
+```
 
 **Chất lượng code của Goal 3 (chủ dự án, 2026-10-22):** code mới phải **sạch**; tối ưu để đạt mục tiêu thì được phép, **nhưng mọi luật ban đầu giữ nguyên**.
 

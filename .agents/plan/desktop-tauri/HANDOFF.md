@@ -75,7 +75,28 @@ Sau grill với chủ dự án, lane **chuyển hẳn** sang ứng dụng native
 - Bốn điều kiện xong: parity đủ màn hình · **RSS < 300 MiB** (đo trên máy thật) · probe của lane chạy trên app native · AppImage ký được + update flow thật ✓.
 - Số đo quyết định: app webview **719–728 MiB**; WebKit ~530 MiB kể cả trang trắng; Host ~190 MiB; app chỉ nạp **5,23 MB** mà nó dùng (**0 B** không với tới được) ⇒ đổi composition không giúp gì, chỉ bỏ webview mới giảm được ✓.
 - Mốc đầu tiên: **M1 `client-core` Rust** (lớp protocol) — cổng chặn: đối chiếu với client web trên cùng Host ✓.
-- Việc còn đo: **sàn bộ nhớ thật** của hướng native (Host không mang package client-UI) — subagent đang đo ✓.
+
+### Đã xong sau session 2026-10-22 (M1–M9)
+
+| Mốc | Kết quả | Commit |
+|---|---|---|
+| M1 | `client-core`: envelope, auth (token→cookie), transport HTTP + cancel; inventory 73 request + 12 stream | `0a7e8bf56e` |
+| M2 | `session`: list/page + tool-call status; fixture recorded-session | `a2a8cb019f` |
+| M3 | `chat` (prompt/cancel) + `follow` (WS stream, tungstenite) | `64e5889db6`, `07f5213abe` |
+| M4 | `models`, `sessions`, `approvals` typing | `4c8c11fb5b` |
+| M5 | `terminal` (PTY RPC + attach/retain streams) | `a48103c78b` |
+| M6 | `settings`, `plugins`, `skills`, `schedules`, `workspace_files` | `9250a39556` |
+| M7a | `native-app`: egui window + session list, no webview | `4b9fb7423a` |
+| M7b | host sidecar launch + cookie auth trong native app | `dff5ab2af7` |
+| M7 packaging | `package-appimage.sh` | `4b61268d23` |
+| M7c | single-instance (fs2), tray (tray-icon ksni), dialog (rfd), updater check | `092164d6a2` |
+| M7d | tray show/hide + close-to-tray + auto-update (`DSH_AUTO_UPDATE=1`) | `9f304a58c9`, `697ac19349` |
+| M8 | `PARITY.md` checklist | `9be9938ba9` |
+| M9 | `UPSTREAM.md` process | `9be9938ba9` |
+
+**Số đo sàn bộ nhớ:** Host base-only **≈ 180 MiB RSS / 168 MiB PSS**; Host webview ~190 MiB ⇒ bỏ web bundle chỉ ~10 MiB; webview ~530 MiB là chi phí lớn. Ước tính native **240–290 MiB** ⇒ `< 300 MiB` khả thi.
+
+**Còn lại (chưa xong):** UI panel của từng miền (chat, terminal, settings, marketplace, document preview, deliverables, feedback, goals/jobs/todo/plan); Remote Event waterfall (gửi quyết định duyệt); multipart binary attachment; updater ký số + tích hợp AppImage vào release lane; probe trên app native; đo RSS thật của app native.
 
 ## 3. Việc nên làm tiếp (theo thứ tự giá trị)
 
