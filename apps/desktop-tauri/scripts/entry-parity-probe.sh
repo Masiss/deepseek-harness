@@ -16,6 +16,8 @@ set -u
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 target=${1:-linux-x64}
 tree=$(CDPATH= cd -- "$repo/apps/desktop/.desktop-build/targets/$target" && pwd)
+# The probe directory belongs to the built tree, and a fresh tree has none.
+mkdir -p "$tree/probe"
 work=$(mktemp -d "$tree/probe/entry-parity.XXXXXX")
 mkdir -p "$work/home" "$work/tmp"
 

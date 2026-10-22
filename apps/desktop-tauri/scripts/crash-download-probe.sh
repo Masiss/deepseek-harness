@@ -12,6 +12,8 @@ set -u
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 target=${1:-linux-x64}
 tree="$repo/apps/desktop/.desktop-build/targets/$target"
+# The probe directory belongs to the built tree, and a fresh tree has none.
+mkdir -p "$tree/probe"
 work=${DSH_CRASH_WORK:-$(mktemp -d "$tree/probe/crash-download.XXXXXX")}
 mkdir -p "$work/feed" "$work/home" "$work/run"
 home="$work/home"

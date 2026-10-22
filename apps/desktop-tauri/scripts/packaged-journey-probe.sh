@@ -19,6 +19,8 @@ set -u
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 target=${1:-linux-x64}
 tree="$repo/apps/desktop/.desktop-build/targets/$target"
+# The probe directory belongs to the built tree, and a fresh tree has none.
+mkdir -p "$tree/probe"
 work=${DSH_JOURNEY_WORK:-$(mktemp -d "$tree/probe/journey.XXXXXX")}
 mkdir -p "$work/tarball" "$work/home" "$work/workspace"
 home="$work/home/.dsh"
