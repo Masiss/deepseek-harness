@@ -9,10 +9,15 @@ pub mod chat;
 pub mod envelope;
 pub mod follow;
 pub mod models;
+pub mod plugins;
+pub mod schedules;
 pub mod session;
 pub mod sessions;
+pub mod settings;
+pub mod skills;
 pub mod terminal;
 pub mod transport;
+pub mod workspace_files;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
