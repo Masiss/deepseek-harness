@@ -7,7 +7,7 @@ Cập nhật 2026-10-22. Mục đích: session mới đọc file này là biết
 | Mục | Giá trị |
 |---|---|
 | Nhánh | `chore/web-bun-migration` (upstream `origin/master` không đụng) |
-| HEAD | `130f7e4aa8` + commit dọn probe (2026-10-22) — **đã push** lên `fork` |
+| HEAD | `c013718847` (perf: giữ dmabuf + tắt compositing gia tốc, có `graphics-probe.sh`) — **đã push** lên `fork`, CI run **39750055886** xanh ✓ |
 | Version | `0.2.1-rc.3` (đã bump **toàn bộ** 343 package — xem bẫy §5) |
 | Release đã publish | `desktop-v0.2.1-rc.3-linux-x64` + `-linux-arm64`, feed `desktop-feed-linux-{x64,arm64}` **có chữ ký Ed25519** ✓ |
 | Lint | `bun run lint` sạch (1 warning có sẵn ở `packages/experimental/client-ui-cot-translation`) |
@@ -39,11 +39,13 @@ Mục tiêu và acceptance đầy đủ ở `PLAN.md` § "Cấu trúc mục tiê
 - **Update trọn luồng** (`update-flow-probe.mjs`): sau D40 probe này **bị hỏng** (manifest schema 1 + không ký) và đã sửa: schemaVersion 2, ký Ed25519 bằng key tạm, truyền `DSH_DESKTOP_UPDATE_PUBLIC_KEY`; giờ `RESULT update-flow=OK` (prompt download/install, `restart`, ảnh được thay).
 - **Profile contention**: `desktop-lease-probe.sh` vẫn `OK`.
 - **Sharp fallback**: `image-parity-probe.sh` 11/11; khác byte JPEG/GIF/TIFF/resize là đã chấp nhận (D39).
-- **Benchmark**: Host cold start 1,98–2,09 s (warm), idle RSS 179–182 MiB; shell 0,55 s → 0,77 s → 4,54 s trên weston headless. `resident-probe.sh`: idle toàn app **RSS 605–607 MiB / PSS 430–432 MiB** (shell 192 + Host 169 + WebKit 167 + network 56).
+- **Benchmark**: Host cold start 1,98–2,09 s (warm), idle RSS 179–182 MiB; shell 0,55 s → 0,77 s → 4,54 s trên weston headless. `resident-probe.sh`: idle toàn app **RSS 765 MiB / PSS 597 MiB** (web 297 + shell 200 + Host 189 + network 58). `graphics-probe.sh` (mới 2026-10-22): FPS webview 58–63, app nạp 65 tài nguyên / 5,2 MB, ảnh chụp từ chính webview (0 pixel khác so với đường GPU).
 
 **L1 đã có**: Desktop Linux lane xanh tại [run 39740515325](https://github.com/Masiss/deepseek-harness/actions/runs/39740515325), gồm bước mới `Desktop shell tests` (drift gate, runtime policy, CSP).
 
 **Bộ nhớ (đo lại 2026-10-22, có ảnh chụp từ chính webview)**: mặc định mới = **giữ renderer dmabuf + tắt compositing gia tốc** ⇒ 765 MiB RSS / 597 MiB PSS, FPS 58–63, **0 pixel khác** so với đường GPU. Bẫy: đo trong weston headless (không GPU) cho kết quả **ngược** (tắt dmabuf thấy nhẹ hơn 73 MiB) — trên máy có GPU thật, tắt dmabuf **nặng hơn ~185 MiB**. Đừng tin số đo headless cho đường đồ họa.
+
+**Perf cuối (2026-10-22, commit `c013718847` trên `chore/web-bun-migration`, CI run 39750055886 xanh ✓)**: mặc định WebKit giờ **giữ renderer dmabuf + tắt compositing gia tốc** (`hardware-acceleration-policy=Never`, cache tắt, WebGL tắt, mọi thứ qua `DSH_DESKTOP_WEBKIT_*`; đảo qua `DSH_DESKTOP_WEBKIT_LIGHT=0` để đo lại). Báo cáo bộ nhớ đã cập trong §2b.
 
 **Sửa theo source audit (2026-10-22)**: 8 finding của `~/downloads/DSH_L3_Source_Audit_b0a2313d09.md` đã được tái hiện và sửa (kết luận chi tiết: `…verdict.md`): gate cold-start/resident giờ hỏi **chính WebView** (`dsh: webview-auth=200`) thay vì `curl` của probe; probe không còn giết tiến trình lạ và dùng `mktemp -d`; Host báo lỗi khi chết sau READY (`ready` về false, có unit test); shell xoá cookie `dsh-auth-*` của WebKit trước lần đổi token nên cookie jar không phình nữa; retry token so **origin**; console webview chỉ bật khi `DSH_DESKTOP_WEB_CONSOLE=1`; launch token được redact trong log; quit hỏi Host ở thread riêng. Còn mở: cổng hồi quy cho `custom-protocol`/431 (chỉ có unit test), và A/B workload typing/scroll.
 
