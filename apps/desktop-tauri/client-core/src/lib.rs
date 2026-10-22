@@ -6,6 +6,7 @@
 pub mod auth;
 pub mod chat;
 pub mod envelope;
+pub mod follow;
 pub mod session;
 pub mod transport;
 
