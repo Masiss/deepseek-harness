@@ -1,10 +1,15 @@
 //! Native desktop shell: a pure egui window that reads the Host session inventory through client-core.
 
+mod host;
+
 use dsh_client_core::{session::SessionViewer, transport::HttpTransport};
 use eframe::egui;
+use host::Host;
 
 /// Application state owns the transport and the last session-list result so UI rendering stays local.
 struct DesktopApp {
+    host: Host,
+    host_url: Option<String>,
     transport: Option<HttpTransport>,
     sessions: Vec<String>,
     status: String,
@@ -13,25 +18,39 @@ struct DesktopApp {
 impl DesktopApp {
     /// Constructs the shell; an absent Host URL leaves the app usable in disconnected mode.
     fn new() -> Self {
-        let Some(host_url) = std::env::var_os("DSH_HOST_URL") else {
-            return Self {
-                transport: None,
-                sessions: Vec::new(),
-                status: "Disconnected — set DSH_HOST_URL to connect".to_owned(),
-            };
+        let host = Host::start();
+        let host_url = host.host_url().map(str::to_owned);
+        let status = host.error().map_or_else(
+            || {
+                if host_url.is_some() {
+                    "Host ready — click Connect".to_owned()
+                } else {
+                    "Disconnected — Host launch configuration is not set".to_owned()
+                }
+            },
+            str::to_owned,
+        );
+        Self {
+            host,
+            host_url,
+            transport: None,
+            sessions: Vec::new(),
+            status,
+        }
+    }
+
+    fn connect(&mut self) {
+        let Some(launch_url) = self.host.launch_url() else {
+            return;
         };
-        let host_url = host_url.to_string_lossy().into_owned();
-        match HttpTransport::new(&host_url) {
-            Ok(transport) => Self {
-                transport: Some(transport),
-                sessions: Vec::new(),
-                status: "Connected — loading sessions".to_owned(),
-            },
-            Err(error) => Self {
-                transport: None,
-                sessions: Vec::new(),
-                status: format!("Host URL error: {error}"),
-            },
+        match HttpTransport::authenticate(launch_url) {
+            Ok((base, transport)) => {
+                self.host_url = Some(base);
+                self.transport = Some(transport);
+                self.status = "Connected — loading sessions".to_owned();
+                self.refresh_sessions();
+            }
+            Err(error) => self.status = format!("Authentication failed: {error}"),
         }
     }
 
@@ -61,8 +80,12 @@ impl eframe::App for DesktopApp {
         });
         egui::Panel::left("sessions").show(ui, |ui| {
             ui.heading("Sessions");
-            if ui.button("Refresh").clicked() {
-                self.refresh_sessions();
+            if self.transport.is_some() {
+                if ui.button("Refresh").clicked() {
+                    self.refresh_sessions();
+                }
+            } else {
+                ui.label("Connect to enable sessions");
             }
             if self.sessions.is_empty() {
                 ui.label("No sessions loaded");
@@ -77,7 +100,16 @@ impl eframe::App for DesktopApp {
         });
         egui::CentralPanel::default().show(ui, |ui| {
             ui.heading("Welcome");
-            ui.label("Native egui shell — host sidecar and authentication are TODO.");
+            if let Some(url) = &self.host_url {
+                ui.label(format!("Host: {url}"));
+            }
+            if self.transport.is_none()
+                && self.host.launch_url().is_some()
+                && ui.button("Connect").clicked()
+            {
+                self.connect();
+            }
+            ui.label(&self.status);
         });
     }
 }

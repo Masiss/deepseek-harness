@@ -15,14 +15,32 @@ pub struct HttpTransport {
 }
 impl HttpTransport {
     pub fn new(base_url: &str) -> Result<Self, Error> {
+        Self::with_client(base_url, reqwest::blocking::Client::builder().cookie_store(true).build()?)
+    }
+
+    /// Builds a transport from an already configured cookie-preserving client.
+    pub fn with_client(base_url: &str, client: reqwest::blocking::Client) -> Result<Self, Error> {
         Ok(Self {
-            client: reqwest::blocking::Client::builder()
-                .cookie_store(true)
-                .build()?,
+            client,
             base_url: reqwest::Url::parse(base_url)
                 .map_err(|source| Error::InvalidUrl { source })?,
             next_id: std::sync::atomic::AtomicU64::new(1),
         })
+    }
+
+    /// Exchanges a Host launch URL and returns the clean redirected base URL plus transport.
+    pub fn authenticate(launch_url: &str) -> Result<(String, Self), Error> {
+        let client = reqwest::blocking::Client::builder()
+            .cookie_store(true)
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .build()?;
+        let response = client.get(launch_url).send()?;
+        if !response.status().is_success() {
+            return Err(Error::HttpStatus(response.status().as_u16()));
+        }
+        let base_url = response.url().to_string();
+        let base_url = base_url.trim_end_matches('/').to_owned();
+        Ok((base_url.clone(), Self::with_client(&base_url, client)?))
     }
     pub fn request(
         &self,
