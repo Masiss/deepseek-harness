@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { zstdCompressSync } from 'node:zlib'
 import { afterEach, describe, expect, it } from 'vitest'
 import { parseComponentsManifest } from '../src/components/manifest.ts'
-import { DesktopOfficeComponent } from '../src/components/office.ts'
+import { DesktopOfficeComponent, officePythonRuntime } from '../src/components/office.ts'
 import { extractTar, extractZstdTar } from '../src/components/tar.ts'
 import { signedComponentBytes } from '../src/update/signing.ts'
 
@@ -76,6 +76,28 @@ function tarArchive(entries: readonly Entry[]): Buffer {
   blocks.push(Buffer.alloc(1024))
   return Buffer.concat(blocks)
 }
+
+describe('component runtime paths', () => {
+  it('uses the Windows Python launcher and preserves the host search path', () => {
+    const previous = process.env.PATH
+    process.env.PATH = 'C:\\Windows\\System32'
+    try {
+      expect(officePythonRuntime('C:\\dsh', 'win32')).toEqual({
+        executable: 'C:\\dsh\\dependencies\\python\\bin\\python.exe',
+        path: 'C:\\dsh\\dependencies\\python\\bin;C:\\Windows\\System32',
+      })
+    } finally {
+      if (previous === undefined) delete process.env.PATH
+      else process.env.PATH = previous
+    }
+  })
+
+  it('keeps the fixed system search path for POSIX runtimes', () => {
+    expect(officePythonRuntime('/opt/dsh', 'darwin')).toEqual({
+      executable: '/opt/dsh/dependencies/python/bin/python3', path: '/usr/bin:/bin',
+    })
+  })
+})
 
 describe('component manifest', () => {
   const valid = {

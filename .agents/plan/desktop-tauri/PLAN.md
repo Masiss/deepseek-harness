@@ -42,7 +42,7 @@ Goal 1 chứng minh **có thể thay Electron bằng Tauri mà không đổi lõ
 | G2-M2 | User journey trên packaged runtime | **Đang làm** | Plugin + Session + profile contention + update PASS; **CSP đã đọc được trên app thật** (console WebKit bật bằng `DSH_DESKTOP_WEB_CONSOLE=1`); còn: lượt model thật **trong GUI** (B3) và bản phát hành mới (B1) |
 | G2-M3 | Fault injection | **Xong (L2)** | 6 kịch bản Host + disk-full + crash-download + crash-extract + manifest bị sửa **PASS**; còn "mất điện giữa rename" (cần fault injection ở mức filesystem/VM) |
 | G2-M4 | CI evidence theo cấp | **Đang làm** | Lane Linux **xanh** ([run 39774116751](https://github.com/Masiss/deepseek-harness/actions/runs/39774116751)) gồm `Desktop shell tests` + `Keyless recorded-session replay`; **release lane chưa chạy lại** sau wave audit (B2); chưa có CI Windows/macOS |
-| G2-M5 | Portability matrix Windows/macOS | **Đang làm** | Ma trận dưới đây; chỉ sửa blocker nhỏ, không mở full port (B5) |
+| G2-M5 | Portability matrix Windows/macOS | **Pending (2026-10-22)** | **Ưu tiên Linux**; macOS/Windows để pending vì cần runner + chứng thư (xem §Blocker). Ma trận dưới đây giữ làm hồ sơ; chỉ sửa blocker nhỏ, không mở full port |
 | G2-M6 | Benchmark startup/idle/footprint | **Đang làm** | Số đo dưới đây trên **GUI thật**; chưa chốt ngân sách và chưa đo workload typing/scroll (B4) |
 | G2-M7 | Tài liệu & bàn giao | **Đang làm** | PLAN/MEMORY/HANDOFF; cập nhật sau mỗi mốc và mỗi quyết định |
 
@@ -56,7 +56,7 @@ Sáu bước theo thứ tự giá trị. **B1 là bước chặn người dùng*
 | **B2** | L1 packaged: chạy lại release lane trên code hiện tại | Tag ở B1 kích hoạt `desktop-release.yml` | 6 probe xanh: `entry-parity`, `packaged-journey`, `fault`, `crash-download`, `crash-extract`, **`office-engine`** (mới) |
 | **B3** | Bằng chứng GUI thật: CSP + lượt model thật trong app | App trên session Hyprland; `curl -sI` đọc header CSP của trang Host phục vụ; `DSH_DESKTOP_WEB_CONSOLE=1`; gõ một prompt trong composer (route Codex `gpt-5.6-luna`) | Header CSP có `default-src 'self'`, `object-src 'none'`, **không** `unsafe-eval`; ảnh `grim` chứa câu trả lời của model; `content_mean` > 0 (không màn đen) |
 | **B4** | Chốt ngân sách bộ nhớ + workload typing/scroll (A07) | Đo workload trên **mặc định** — sau khi revert, không còn cấu hình thay thế để A/B, nên phép so chuyển thành số ngân sách | §Benchmark có ngân sách ghi rõ (idle RSS ≤ 750 MiB; sàn đo được 719–728; `< 350 MiB` **không khả thi** với WebKitGTK + Node) và số độ trễ input→paint lặp lại được |
-| **B5** | Portability: sửa blocker nhỏ đọc được từ source | Ma trận §Portability matrix | Mỗi dòng có owner hoặc điều kiện; mục "nhỏ và độc lập" đã sửa kèm test |
+| **B5** | Portability: **phần Linux**; macOS/Windows giữ ở trạng thái pending | Ma trận §Portability matrix | Dòng Linux đã sửa kèm test; dòng macOS/Windows ghi rõ điều kiện mở (runner + chứng thư) — **không** mở full port |
 | **B6** | Lượt soi riêng cho phần deferred của audit | `native/{koffi,flock}.cjs`, `execve`/`fcntl` | Kết luận ghi ở MEMORY: sửa / chấp nhận / cần môi trường ngoài |
 
 **Bẫy của B1 (đã mắc lần trước):**
@@ -141,7 +141,7 @@ Còn lại: **A07** (harness `app_ready` đã có phần WebView + CPU idle; m�
 | Scratch còn lại sau khi Host bị kill | Lần boot sau thu hồi `download-*`/`staging-*`, không đụng version | `fault-probe.sh` → `crash-leftovers` | **PASS** |
 | Kill -9 giữa lúc download | File dở còn lại, boot sau dọn sạch, không cài dở | `crash-download-probe.sh` | **PASS** (`left_before=1`, `cleaned=0`, `current=absent`) |
 | Kill -9 giữa extract | Staging và version không marker bị dọn, không cài dở | `crash-extract-probe.sh` | **PASS** (`staging_before=1`, `cleaned=0`, `versions=0`) |
-| Mất điện / kill trong lúc rename | Journal phục hồi hoặc rollback | — | **Chưa phủ** |
+| Mất điện / kill trong lúc rename | Journal phục hồi hoặc rollback | `power-loss-rename-probe.sh` | **PASS** — journal `rename-journal.json` (fsync) trước mỗi đổi tên thư mục; sau crash cây là **bản cũ hoặc bản mới**, không có cây dở; `RESULT power-loss-rename=OK old-or-new=old journal=clean` |
 
 ### Portability matrix (đọc từ source hiện tại)
 
@@ -202,13 +202,16 @@ Còn lại: **A07** (harness `app_ready` đã có phần WebView + CPU idle; m�
 5. Benchmark có số đo lặp lại được; chỉ mở tối ưu khi có ngưỡng và số liệu.
 6. Không đổi 10 bất biến, không đổi acceptance cũ, không thêm framework/runtime rewrite.
 
+### Ưu tiên: Linux trước (2026-10-22)
+
+Lane tập trung **Linux**; **macOS và Windows để pending** cho tới khi có runner + chứng thư. Mọi việc còn mở dưới đây đều nằm trong phạm vi Linux trừ khi ghi rõ là không.
+
 ### Blocker hiện tại
 
 - **Bản phát hành mới**: AppImage `0.2.1-rc.3` còn lỗi engine Office (B1) — lane release chưa chạy lại từ 21/10.
-- **Chứng thư + runner macOS/Windows** cho signing, ACL, MSI/DMG, update driver.
 - **GUI thật (L3)**: đã có (app trên Hyprland, ảnh chụp, console WebKit) — còn một lượt model thật **trong** app (B3), và thao tác gõ cần session của người dùng rảnh tay.
-- **Power-loss/rename crash** cần fault injection ở mức filesystem hoặc VM, chưa có trong môi trường này.
 - **Image byte parity** với Electron chỉ đúng cho phiên không đính kèm ảnh (D39); muốn đóng phải port arithmetic của libvips.
+- **Pending — macOS/Windows**: cần runner + chứng thư cho signing, ACL, MSI/DMG, update driver, sandbox Windows, PTY ConPTY. Ma trận §Portability là hồ sơ để mở việc này, không phải việc đang làm.
 
 ---
 

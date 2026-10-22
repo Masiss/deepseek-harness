@@ -267,9 +267,13 @@ pub fn spawn(
     drop(pair.slave);
     // Pid 0 would make `waitpid`/`killpg` address the caller's own process
     // group, so a child without an id is refused rather than guessed.
-    let pid = child
+    let raw_pid = child
         .process_id()
-        .ok_or_else(|| Error::from_reason("spawn: the child reported no process id"))? as i32;
+        .ok_or_else(|| Error::from_reason("spawn: the child reported no process id"))?;
+    let pid = i32::try_from(raw_pid)
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| Error::from_reason("spawn: the child reported an invalid process id"))?;
     // The waiter below reaps this pid directly so the exit report carries the
     // exact signal; the handle holds no ownership after spawn.
     drop(child);

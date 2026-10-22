@@ -18,8 +18,8 @@
 import { createHash } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
-import { copyFile, mkdir, open, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { copyFile, mkdir, open, rename, rm, stat, symlink } from 'node:fs/promises'
+import { join, resolve, sep } from 'node:path'
 import { promisify } from 'node:util'
 import { parseComponentsManifest, type DesktopComponentArtifact } from './manifest.ts'
 import { extractZstdTar } from './tar.ts'
@@ -80,6 +80,19 @@ const MAX_MANIFEST_BYTES = 64 * 1024
 /** Modules every Office skill imports; the archive must resolve all of them. */
 const REQUIRED_IMPORTS = 'import numpy, pandas, openpyxl, docx, pptx, PIL, lxml\n'
 
+/** Platform-specific Python launcher and search path in a component runtime. */
+export function officePythonRuntime(runtime: string, platform: NodeJS.Platform = process.platform): {
+  readonly executable: string
+  readonly path: string
+} {
+  if (platform === 'win32') {
+    const bin = `${runtime}\\dependencies\\python\\bin`
+    return { executable: `${bin}\\python.exe`, path: `${bin};${process.env.PATH ?? ''}` }
+  }
+  const bin = join(runtime, 'dependencies', 'python', 'bin')
+  return { executable: join(bin, 'python3'), path: '/usr/bin:/bin' }
+}
+
 /** One classified install failure. */
 class ComponentFailure extends Error {
   constructor(readonly kind: DesktopComponentFailureKind, cause?: unknown) {
@@ -90,6 +103,72 @@ class ComponentFailure extends Error {
 /** Random suffix for staging names. */
 function suffix(): string {
   return `${String(process.pid)}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+interface RenameJournal {
+  readonly oldVersion?: string | undefined
+  readonly version: string
+  readonly target: string
+  readonly backup: string
+  readonly markerTemporary: string
+  readonly staging: string
+}
+
+/** Persist a small rename record before changing directory entries. */
+async function durableWrite(file: string, content: string): Promise<void> {
+  const handle = await open(file, 'w')
+  try {
+    await handle.writeFile(content)
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+}
+
+/** Make a directory-entry rename durable on filesystems that support fsync. */
+async function syncDirectory(directory: string): Promise<void> {
+  const handle = await open(directory, 'r')
+  try {
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+}
+
+/** Read a valid marker version without requiring the referenced tree to exist. */
+function markerVersion(directory: string): string | undefined {
+  try {
+    const value: unknown = JSON.parse(readFileSync(join(directory, 'current.json'), 'utf8'))
+    if (typeof value !== 'object' || value === null || !('version' in value)) return undefined
+    const version = value.version
+    return typeof version === 'string' && /^[\w.+-]+$/u.test(version) ? version : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Read a trusted, locally-written rename journal. */
+function readRenameJournal(file: string): RenameJournal | undefined {
+  try {
+    const value: unknown = JSON.parse(readFileSync(file, 'utf8'))
+    if (typeof value !== 'object' || value === null) return undefined
+    if (!('version' in value) || !('target' in value) || !('backup' in value)
+      || !('markerTemporary' in value) || !('staging' in value)) return undefined
+    if (typeof value.version !== 'string' || typeof value.target !== 'string'
+      || typeof value.backup !== 'string' || typeof value.markerTemporary !== 'string'
+      || typeof value.staging !== 'string') return undefined
+    const oldVersion = 'oldVersion' in value && typeof value.oldVersion === 'string' ? value.oldVersion : undefined
+    return {
+      oldVersion,
+      version: value.version,
+      target: value.target,
+      backup: value.backup,
+      markerTemporary: value.markerTemporary,
+      staging: value.staging,
+    }
+  } catch {
+    return undefined
+  }
 }
 
 /** Read a response body with an upper bound. */
@@ -237,13 +316,14 @@ export class DesktopOfficeComponent {
    * @returns Nothing after the unreachable files are gone.
    */
   async recover(): Promise<void> {
+    await this.recoverRename()
     let entries: string[]
     try {
       entries = readdirSync(this.directory)
     } catch {
       return
     }
-    const current = this.installed()?.version
+    const current = markerVersion(this.directory)
     let versions: string[] = []
     try {
       versions = readdirSync(join(this.directory, 'versions'))
@@ -258,6 +338,48 @@ export class DesktopOfficeComponent {
         .filter(name => name !== current)
         .map(name => rm(join(this.directory, 'versions', name), { recursive: true, force: true })),
     ])
+  }
+
+  /** Recover a commit interrupted between its directory-entry renames. */
+  private async recoverRename(): Promise<void> {
+    const journalFile = join(this.directory, 'rename-journal.json')
+    const journal = readRenameJournal(journalFile)
+    if (journal === undefined) {
+      await rm(journalFile, { force: true }).catch(() => undefined)
+      return
+    }
+    const root = resolve(this.directory) + sep
+    const journalPaths = [journal.target, journal.backup, journal.markerTemporary, journal.staging]
+    if (journalPaths.some(path => !resolve(path).startsWith(root))) {
+      await rm(journalFile, { force: true }).catch(() => undefined)
+      return
+    }
+    const current = markerVersion(this.directory)
+    if (current !== journal.version) {
+      if (await this.exists(journal.backup)) {
+        await rm(journal.target, { recursive: true, force: true })
+        await rename(journal.backup, journal.target)
+      } else if (journal.oldVersion !== journal.version) {
+        await rm(journal.target, { recursive: true, force: true })
+      }
+    } else {
+      await rm(journal.backup, { recursive: true, force: true })
+    }
+    await Promise.all([
+      rm(journal.staging, { recursive: true, force: true }),
+      rm(journal.markerTemporary, { force: true }),
+      rm(journalFile, { force: true }),
+    ])
+    await syncDirectory(this.directory).catch(() => undefined)
+  }
+
+  private async exists(path: string): Promise<boolean> {
+    try {
+      await stat(path)
+      return true
+    } catch {
+      return false
+    }
   }
 
   /**
@@ -277,7 +399,7 @@ export class DesktopOfficeComponent {
     try {
       // A dangling link means the bundle moved; treat it as not installed.
       statSync(join(runtime, 'runtime.json'))
-      statSync(join(runtime, 'dependencies', 'python', 'bin', 'python3'))
+      statSync(officePythonRuntime(runtime).executable)
       statSync(join(runtime, 'dependencies', 'node', 'bin', 'node'))
     } catch {
       return undefined
@@ -406,17 +528,17 @@ export class DesktopOfficeComponent {
       await rm(link, { recursive: true, force: true })
       await symlink(join(this.primaryRuntime, 'dependencies', name), link, 'dir')
     }
-    const python = join(runtime, 'dependencies', 'python', 'bin', 'python3')
+    const python = officePythonRuntime(runtime)
     const engine = join(runtime, 'node_modules', '@deepseek-ai', 'libreoffice-kit', 'lib', 'cli.js')
     try {
-      await stat(python)
+      await stat(python.executable)
       await stat(join(root, 'office-skills'))
       await stat(engine)
     } catch (error) {
       throw new ComponentFailure('archive', error)
     }
     try {
-      await run(python, ['-c', REQUIRED_IMPORTS], { timeout: 120_000, env: { PATH: '/usr/bin:/bin' } })
+      await run(python.executable, ['-c', REQUIRED_IMPORTS], { timeout: 120_000, env: { PATH: python.path } })
     } catch (error) {
       throw new ComponentFailure('python', error)
     }
@@ -425,15 +547,36 @@ export class DesktopOfficeComponent {
 
   private async commit(staging: string, version: string): Promise<void> {
     const target = join(this.directory, 'versions', version)
-    await rm(target, { recursive: true, force: true })
-    await rename(staging, target)
+    const backup = join(this.directory, 'versions', `.backup-${suffix()}`)
     const marker = join(this.directory, 'current.json')
     const temporary = `${marker}.${suffix()}`
-    await writeFile(temporary, `${JSON.stringify({ version }, undefined, 2)}\n`)
-    await rename(temporary, marker)
-    // Previous versions are unreachable once the marker moved.
-    for (const entry of readdirSync(join(this.directory, 'versions'))) {
-      if (entry !== version) await rm(join(this.directory, 'versions', entry), { recursive: true, force: true })
+    const journalFile = join(this.directory, 'rename-journal.json')
+    const journal: RenameJournal = {
+      oldVersion: markerVersion(this.directory),
+      version,
+      target,
+      backup,
+      markerTemporary: temporary,
+      staging,
+    }
+    await durableWrite(journalFile, `${JSON.stringify(journal)}\n`)
+    try {
+      if (await this.exists(target)) await rename(target, backup)
+      await rename(staging, target)
+      await syncDirectory(join(this.directory, 'versions'))
+      await durableWrite(temporary, `${JSON.stringify({ version }, undefined, 2)}\n`)
+      await rename(temporary, marker)
+      await syncDirectory(this.directory)
+      await rm(backup, { recursive: true, force: true })
+      await rm(journalFile, { force: true })
+      await syncDirectory(this.directory)
+      // Previous versions are unreachable once the marker moved.
+      for (const entry of readdirSync(join(this.directory, 'versions'))) {
+        if (entry !== version) await rm(join(this.directory, 'versions', entry), { recursive: true, force: true })
+      }
+    } catch (error) {
+      // Keep the journal: the next Host start can choose one complete tree.
+      throw error
     }
   }
 }

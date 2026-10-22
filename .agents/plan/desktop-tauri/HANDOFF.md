@@ -69,6 +69,8 @@ Mục tiêu và acceptance đầy đủ ở `PLAN.md` § "Cấu trúc mục tiê
 
 ## 3. Việc nên làm tiếp (theo thứ tự giá trị)
 
+**Ưu tiên: Linux trước — macOS và Windows để pending** (2026-10-22). Lane chỉ mở việc cho macOS/Windows khi có runner + chứng thư; ma trận portability trong PLAN là hồ sơ, không phải việc đang làm.
+
 **Kế hoạch chốt Goal 2 nằm trong `PLAN.md` § "Kế hoạch chốt Goal 2 (2026-10-22)"**: B1 phát hành `0.2.1-rc.4` → B2 chạy lại release lane → B3 bằng chứng GUI (CSP + lượt model thật) → B4 chốt ngân sách bộ nhớ + workload typing/scroll → B5 portability → B6 lượt soi phần deferred.
 
 
@@ -142,6 +144,10 @@ Audit để lại 13 unit deferred (ngân sách agent) — đáng để soi trư
 | **`TMPDIR` trong repo làm hỏng lane snapshot** | Đặt `TMPDIR=/tmp/opencode/...` hoặc `apps/desktop/.desktop-build/tmp`. |
 | **Cây đóng gói đã bị dọn** | `apps/desktop/.desktop-build/targets/linux-x64/` phải dựng lại (`pack-linux.sh` + `prepare:primary-runtime` + `prepare-linux-runtime.ts`) trước khi chạy `update-probe.sh`, `desktop-lease-probe.sh`, `image-parity-probe.sh`, `entry-parity-probe.sh`, `office-component-probe.sh`. |
 | **Probe cần `apps/desktop/.desktop-build/tmp` writable** | Không chạy được trên `/tmp` tmpfs còn trống ít. |
+| **Hai phiên Codex song song giết trẻ của nhau** | Chạy 2 CLI session cùng lúc ⇒ subagent của session cũ bị dừng giữa chừng ("stopped before it finished"), không để lại thay đổi. Grant OAuth Codex xoay vòng refresh token ⇒ session mới làm hỏng token của session cũ. **Một phiên Codex tại một thời điểm**; các vòng subagent chạy tuần tự |
+| **Probe L3 phải dùng binary release của cargo** | AppDir đóng gói trong cây build có thể cũ hơn các hook đo (cờ console) ⇒ probe không thấy `webview-auth=200` và bị chặn. Các probe khác dùng `apps/desktop-tauri/src-tauri/target/release/dsh-desktop-tauri` ✓ |
+| **Đừng commit khi subagent còn đang sửa file** | Hook pre-commit (lint-staged) **stash phần chưa stage** rồi restore; nếu phần đó đang là thay đổi của child thì restore **fail** ⇒ commit abort **và thay đổi của child bị mất** (đã xảy ra 1 lần với `apps/desktop-tauri/src-tauri/src/main.rs`). Chỉ commit khi **không còn phiên Codex nào chạy**, và `git add` hết phần unstaged trước khi commit |
+| **Probe chạy chậm khi máy bận** | `packaged-csp-probe.sh` chờ auth tới 120 s ⇒ khi còn session Codex chạy song song thì probe có thể vượt timeout của người gọi. Chạy probe khi máy rảnh |
 | **Node strip-only không chịu parameter property** | Các probe boot Host *từ source* phải qua tsx (đã sửa `bridge-probe.sh`, `pty-probe.sh`, `terminal-page-probe.sh`). |
 | **Đo đồ họa phải nhìn MÀN HÌNH, không chỉ webview** | `hardware-acceleration-policy=Never` làm webview vẽ nội bộ 60 fps mà cửa sổ vẫn **đen**; ảnh chụp từ API webview vẫn "0 pixel khác" vì nó chụp nội bộ. Phép so đúng: `grim -o eDP-1` rồi đo `content_mean` (đen ⇒ ≈0, 1 màu) |
 | **Đo trong weston headless cho kết quả NGƯỢC** | Headless không có GPU: tắt dmabuf thấy nhẹ hơn 73 MiB, trên máy có GPU thật nó **nặng hơn ~185 MiB**. Mọi số đo đường đồ họa phải đo trên session thật |
