@@ -305,7 +305,7 @@ describe.skipIf(process.platform === 'win32')('office component install', () => 
           controller.error(Object.assign(new Error('no space left on device'), { code: 'ENOSPC' }))
         },
       }))
-    }) as typeof fetch
+    })
     const component = new DesktopOfficeComponent({ feed: 'http://127.0.0.1/', directory, primaryRuntime, fetch: fetchImpl, publicKey })
 
     const settled = await component.install()
