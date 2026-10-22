@@ -18,7 +18,7 @@ import { prepareDesktopProfile } from './profile-lifecycle.ts'
 import { launchDesktopProfile } from './desktop-launch.ts'
 import { DesktopOfficeComponent } from './components/office.ts'
 import * as desktopOffice from './office.ts'
-import { createAppImageDriver } from './update/appimage.ts'
+import { createUpdateDriver } from './update/appimage.ts'
 import { updateTarget } from './update/manifest.ts'
 import { DesktopUpdateService, type DesktopUpdateAdmission } from './update/service.ts'
 
@@ -200,6 +200,11 @@ function createDesktopUpdates(
   const feed = process.env.DSH_DESKTOP_UPDATE_FEED
   const currentVersion = process.env.DSH_DESKTOP_VERSION
   if (feed === undefined || feed === '' || currentVersion === undefined || currentVersion === '') return undefined
+  const driver = createUpdateDriver()
+  if (driver === undefined) {
+    console.error('desktop updates: no installer driver for this platform; updates disabled')
+    return undefined
+  }
   try {
     return new DesktopUpdateService({
       feed,
@@ -212,7 +217,7 @@ function createDesktopUpdates(
       currentVersion,
       target: updateTarget(process.platform, process.arch),
       directory: join(resolveDshHome(), 'updates'),
-      driver: createAppImageDriver(),
+      driver,
       confirm: prompt => new Promise<boolean>((resolve) => {
         const promptId = nextPromptRequest++
         const timer = setTimeout(() => {

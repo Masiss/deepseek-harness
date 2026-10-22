@@ -168,6 +168,20 @@ export function appImageTarget(env: NodeJS.ProcessEnv): string | undefined {
 }
 
 /**
+ * Select the installer driver this platform can run.
+ *
+ * AppImage is the only installer this Host can replace today. A platform
+ * without a driver keeps updates disabled instead of offering a download
+ * that would fail at install.
+ *
+ * @param platform - Host platform; defaults to `process.platform`.
+ * @returns The AppImage driver on Linux, otherwise undefined.
+ */
+export function createUpdateDriver(platform: NodeJS.Platform = process.platform): UpdateInstallerDriver | undefined {
+  return platform === 'linux' ? createAppImageDriver() : undefined
+}
+
+/**
  * Build the driver for a shell packaged as an AppImage.
  *
  * @param env - Process environment supplying `$APPIMAGE`; replaced in tests.

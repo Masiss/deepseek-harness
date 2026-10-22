@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   appImageTarget,
   createAppImageDriver,
+  createUpdateDriver,
   installAppImage,
   UpdateInstallError,
   verifyArtifact,
@@ -133,6 +134,14 @@ describe('createAppImageDriver', () => {
     await driver.install({ version: '0.3.0', artifactPath: next.path, sha256: next.sha256, size: next.size })
 
     expect(await readFile(target, 'utf8')).toBe(NEW_IMAGE)
+  })
+})
+
+describe('createUpdateDriver', () => {
+  it('offers the AppImage driver only where it can replace an image', () => {
+    expect(createUpdateDriver('linux')?.kind).toBe('appimage')
+    expect(createUpdateDriver('darwin')).toBeUndefined()
+    expect(createUpdateDriver('win32')).toBeUndefined()
   })
 })
 

@@ -99,7 +99,7 @@ Không dùng L0 để thay L2/L3. Một mục chỉ được coi là "release-gr
 | Sandbox | Landlock | **Chưa có** | **Chưa có** | Native layer theo OS; không đổi policy engine |
 | Office component | `bin/python3`, `PATH=/usr/bin:/bin`, symlink POSIX | **Chưa có payload/đường dẫn** | Cần payload + `bin/python3` | Tách hằng số theo target; archive riêng cho từng OS |
 | Packaging | AppImage/deb/rpm | **Chưa có** | **Chưa có** | Script Linux-only; cần MSI/DMG + ký |
-| Update driver | AppImage | **Chưa có** | **Chưa có** | Manifest đã đa target; driver thay thế mới là Linux |
+| Update driver | AppImage | **Tắt cập nhật có kiểm soát** | **Tắt cập nhật có kiểm soát** | `createUpdateDriver` trả undefined ngoài Linux ⇒ không offer update rồi fail lúc cài; cần driver MSI/DMG |
 | Image provider | Rust portable | Cần build | Cần build | Kiểm tra libwebp/toolchain trên runner |
 | PTY | Provider POSIX | **Chưa xác minh** | POSIX | Windows cần ConPTY; chưa port |
 
