@@ -7,3 +7,6 @@
 # Rust build output for the native client core
 /client-core/target/
 /native-app/target/
+
+# Native app packaging output
+/native-app/*.AppImage
