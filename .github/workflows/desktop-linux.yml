@@ -131,6 +131,9 @@ jobs:
       - name: Test the native provider crate
         run: cargo test --manifest-path native/dsh-native/Cargo.toml --lib
 
+      - name: Test the native client core
+        run: cargo test --manifest-path apps/desktop-tauri/client-core/Cargo.toml
+
       - name: Test the desktop shell
         run: cargo test --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml
 
