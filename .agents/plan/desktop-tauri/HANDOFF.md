@@ -41,7 +41,7 @@ Mục tiêu và acceptance đầy đủ ở `PLAN.md` § "Cấu trúc mục tiê
 - **Sharp fallback**: `image-parity-probe.sh` 11/11; khác byte JPEG/GIF/TIFF/resize là đã chấp nhận (D39).
 - **Benchmark**: Host cold start 1,98–2,09 s (warm), idle RSS 179–182 MiB; shell 0,55 s → 0,77 s → 4,54 s trên weston headless. `resident-probe.sh`: idle toàn app **RSS 605–607 MiB / PSS 430–432 MiB** (shell 192 + Host 169 + WebKit 167 + network 56).
 
-**L1 đã có**: Desktop Linux lane xanh tại [run 39731893444](https://github.com/Masiss/deepseek-harness/actions/runs/39731893444), gồm bước mới `Desktop shell tests` (drift gate, runtime policy, CSP).
+**L1 đã có**: Desktop Linux lane xanh tại [run 39740515325](https://github.com/Masiss/deepseek-harness/actions/runs/39740515325), gồm bước mới `Desktop shell tests` (drift gate, runtime policy, CSP).
 
 **Sửa theo source audit (2026-10-22)**: 8 finding của `~/downloads/DSH_L3_Source_Audit_b0a2313d09.md` đã được tái hiện và sửa (kết luận chi tiết: `…verdict.md`): gate cold-start/resident giờ hỏi **chính WebView** (`dsh: webview-auth=200`) thay vì `curl` của probe; probe không còn giết tiến trình lạ và dùng `mktemp -d`; Host báo lỗi khi chết sau READY (`ready` về false, có unit test); shell xoá cookie `dsh-auth-*` của WebKit trước lần đổi token nên cookie jar không phình nữa; retry token so **origin**; console webview chỉ bật khi `DSH_DESKTOP_WEB_CONSOLE=1`; launch token được redact trong log; quit hỏi Host ở thread riêng. Còn mở: cổng hồi quy cho `custom-protocol`/431 (chỉ có unit test), và A/B workload typing/scroll.
 
