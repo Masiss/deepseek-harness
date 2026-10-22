@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -7,8 +7,21 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { parseComponentsManifest } from '../src/components/manifest.ts'
 import { DesktopOfficeComponent } from '../src/components/office.ts'
 import { extractTar, extractZstdTar } from '../src/components/tar.ts'
+import { signedComponentBytes } from '../src/update/signing.ts'
 
 const roots: string[] = []
+
+/** One release key for the fixtures; the published key is pinned in signing.ts. */
+const keys = generateKeyPairSync('ed25519')
+const publicKey = keys.publicKey.export({ type: 'spki', format: 'pem' }).toString()
+
+/** Sign a component document the way publish-release.ts does. */
+function signed(document: { schemaVersion: number; components: readonly unknown[] }): Record<string, unknown> {
+  return {
+    ...document,
+    signature: sign(null, signedComponentBytes(document), keys.privateKey).toString('base64'),
+  }
+}
 
 function scratch(): string {
   const root = mkdtempSync(join(tmpdir(), 'dsh-components-'))
@@ -71,20 +84,31 @@ describe('component manifest', () => {
   }
 
   it('accepts the published shape', () => {
-    expect(parseComponentsManifest(valid)).toEqual(valid)
+    const manifest = signed(valid)
+    expect(parseComponentsManifest(manifest, publicKey)).toEqual(manifest)
+  })
+
+  it('refuses a manifest without a signature', () => {
+    expect(() => parseComponentsManifest(valid, publicKey)).toThrow('unsigned manifest')
+  })
+
+  it('refuses a manifest whose signature does not cover its components', () => {
+    const manifest = signed(valid)
+    const components = [{ ...valid.components[0], sha256: 'b'.repeat(64) }]
+    expect(() => parseComponentsManifest({ ...manifest, components }, publicKey)).toThrow('invalid signature')
   })
 
   it.each([
-    ['wrong schema', { ...valid, schemaVersion: 2 }],
-    ['malformed id', { ...valid, components: [{ ...valid.components[0], id: 'Office_1' }] }],
-    ['missing version', { ...valid, components: [{ ...valid.components[0], version: undefined }] }],
-    ['path in file', { ...valid, components: [{ ...valid.components[0], file: '../x' }] }],
-    ['zero bytes', { ...valid, components: [{ ...valid.components[0], bytes: 0 }] }],
-    ['an archive larger than the ceiling', { ...valid, components: [{ ...valid.components[0], bytes: 2 ** 40 }] }],
-    ['short digest', { ...valid, components: [{ ...valid.components[0], sha256: 'abc' }] }],
-    ['duplicate id', { ...valid, components: [valid.components[0], valid.components[0]] }],
+    ['wrong schema', { ...signed(valid), schemaVersion: 2 }],
+    ['malformed id', signed({ ...valid, components: [{ ...valid.components[0], id: 'Office_1' }] })],
+    ['missing version', signed({ ...valid, components: [{ ...valid.components[0], version: undefined }] })],
+    ['path in file', signed({ ...valid, components: [{ ...valid.components[0], file: '../x' }] })],
+    ['zero bytes', signed({ ...valid, components: [{ ...valid.components[0], bytes: 0 }] })],
+    ['an archive larger than the ceiling', signed({ ...valid, components: [{ ...valid.components[0], bytes: 2 ** 40 }] })],
+    ['short digest', signed({ ...valid, components: [{ ...valid.components[0], sha256: 'abc' }] })],
+    ['duplicate id', signed({ ...valid, components: [valid.components[0], valid.components[0]] })],
   ])('rejects %s', (_name, value) => {
-    expect(() => parseComponentsManifest(value)).toThrow(/invalid manifest|duplicate component/u)
+    expect(() => parseComponentsManifest(value, publicKey)).toThrow(/invalid manifest|duplicate component/u)
   })
 })
 
@@ -214,10 +238,10 @@ describe.skipIf(process.platform === 'win32')('office component install', () => 
       const url = input instanceof Request ? input.url : String(input)
       calls.push(url)
       if (url.endsWith('/components.json')) {
-        return new Response(JSON.stringify({
+        return new Response(JSON.stringify(signed({
           schemaVersion: 1,
           components: [{ id: 'office', version: '3.12.0', file: 'office.tar.zst', bytes: payload.length, sha256: digest }],
-        }))
+        })))
       }
       const bytes = new Uint8Array(payload.byteLength)
       bytes.set(payload)
@@ -231,7 +255,7 @@ describe.skipIf(process.platform === 'win32')('office component install', () => 
     const digest = createHash('sha256').update(payload).digest('hex')
     const { primaryRuntime, directory } = fixture()
     const { fetch, calls } = fetcher(payload, digest)
-    const component = new DesktopOfficeComponent({ feed: 'http://feed.test/', directory, primaryRuntime, fetch })
+    const component = new DesktopOfficeComponent({ feed: 'http://127.0.0.1/', directory, primaryRuntime, fetch, publicKey })
 
     expect(component.presentation).toMatchObject({ installed: false, phase: 'idle' })
     expect(component.installed()).toBeUndefined()
@@ -256,10 +280,22 @@ describe.skipIf(process.platform === 'win32')('office component install', () => 
     const payload = archive()
     const { primaryRuntime, directory } = fixture()
     const { fetch } = fetcher(payload, 'b'.repeat(64))
-    const component = new DesktopOfficeComponent({ feed: 'http://feed.test', directory, primaryRuntime, fetch })
+    const component = new DesktopOfficeComponent({ feed: 'http://127.0.0.1', directory, primaryRuntime, fetch, publicKey })
 
     const settled = await component.install()
     expect(settled).toMatchObject({ installed: false, phase: 'error', failure: 'integrity' })
     expect(component.installed()).toBeUndefined()
+  })
+
+  it('refuses a component feed that is not HTTPS or loopback', async () => {
+    const payload = archive()
+    const digest = createHash('sha256').update(payload).digest('hex')
+    const { primaryRuntime, directory } = fixture()
+    const { fetch, calls } = fetcher(payload, digest)
+    const component = new DesktopOfficeComponent({ feed: 'http://feed.test', directory, primaryRuntime, fetch, publicKey })
+
+    const settled = await component.install()
+    expect(settled).toMatchObject({ installed: false, phase: 'error', failure: 'feed' })
+    expect(calls).toEqual([])
   })
 })

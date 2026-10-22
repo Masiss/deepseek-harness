@@ -8,6 +8,7 @@ import {
   createAppImageDriver,
   installAppImage,
   UpdateInstallError,
+  verifyArtifact,
 } from '../src/update/appimage.ts'
 
 let root: string
@@ -90,6 +91,26 @@ describe('installAppImage', () => {
     await installAppImage({ artifactPath: next.path, targetPath: target, sha256: next.sha256, size: next.size })
 
     expect(await readFile(target, 'utf8')).toBe(NEW_IMAGE)
+  })
+})
+
+describe('verifyArtifact', () => {
+  it('accepts the bytes the manifest describes', async () => {
+    const next = await artifact('verified.AppImage', NEW_IMAGE)
+    await expect(verifyArtifact(next.path, next.sha256, next.size)).resolves.toBeUndefined()
+  })
+
+  it('refuses a staged copy whose bytes changed after the source was checked', async () => {
+    const next = await artifact('staged.AppImage', NEW_IMAGE)
+    await writeFile(next.path, 'x'.repeat(Buffer.byteLength(NEW_IMAGE)))
+
+    await expect(verifyArtifact(next.path, next.sha256, next.size)).rejects.toMatchObject({ failure: 'digest-mismatch' })
+  })
+
+  it('refuses a staged copy whose length changed', async () => {
+    const next = await artifact('staged.AppImage', NEW_IMAGE)
+
+    await expect(verifyArtifact(next.path, next.sha256, next.size + 1)).rejects.toMatchObject({ failure: 'size-mismatch' })
   })
 })
 

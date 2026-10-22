@@ -181,7 +181,8 @@ fn scan_webp(data: &[u8]) -> ContainerFacts {
             b"XMP " => facts.xmp = true,
             b"ICCP" => facts.icc = true,
             b"VP8X" => {
-                let flags = data[start];
+                // A chunk that declares no payload carries no flags.
+                let flags = data.get(start).copied().unwrap_or(0);
                 if flags & 0x08 != 0 {
                     facts.exif = true;
                 }

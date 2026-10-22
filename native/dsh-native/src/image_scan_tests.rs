@@ -30,3 +30,39 @@ fn a_jpeg_without_metadata_reports_none() {
     assert!(!facts.carries_metadata());
     assert_eq!(facts.orientation, None);
 }
+
+/// A RIFF container with one image chunk and a trailing VP8X header whose
+/// declared payload length is zero.
+fn webp_with_empty_trailing_chunk() -> Vec<u8> {
+    let mut webp: Vec<u8> = Vec::new();
+    webp.extend_from_slice(b"RIFF");
+    webp.extend_from_slice(&0u32.to_le_bytes());
+    webp.extend_from_slice(b"WEBP");
+    webp.extend_from_slice(b"VP8 ");
+    webp.extend_from_slice(&4u32.to_le_bytes());
+    webp.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+    webp.extend_from_slice(b"VP8X");
+    webp.extend_from_slice(&0u32.to_le_bytes());
+    let size = (webp.len() - 8) as u32;
+    webp[4..8].copy_from_slice(&size.to_le_bytes());
+    webp
+}
+
+#[test]
+fn a_webp_with_an_empty_trailing_chunk_reports_no_metadata() {
+    let facts = scan_container(&webp_with_empty_trailing_chunk(), ImageFormat::WebP);
+    assert_eq!(facts.pages, 1);
+    assert!(!facts.carries_metadata());
+}
+
+#[test]
+fn a_webp_vp8x_chunk_still_reports_its_flags() {
+    let mut webp = webp_with_empty_trailing_chunk();
+    // Give the VP8X chunk a one-byte payload carrying the EXIF flag.
+    webp[28..32].copy_from_slice(&1u32.to_le_bytes());
+    webp.push(0x08);
+    let size = (webp.len() - 8) as u32;
+    webp[4..8].copy_from_slice(&size.to_le_bytes());
+    let facts = scan_container(&webp, ImageFormat::WebP);
+    assert!(facts.exif);
+}

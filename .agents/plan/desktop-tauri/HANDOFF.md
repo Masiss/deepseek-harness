@@ -28,21 +28,20 @@ Cập nhật 2026-10-22. Mục đích: session mới đọc file này là biết
 
 ## 3. Việc nên làm tiếp (theo thứ tự giá trị)
 
-### (A) Sửa 7 phát hiện của audit bảo mật — **ưu tiên cao nhất**
+### (A) 7 phát hiện của audit bảo mật — **ĐÃ SỬA HẾT (2026-10-22)**
 Bản đầy đủ: `~/security-audit-skill/deepseek-harness/run-1/` (`REPORT.md`, `FINDINGS-DETAIL.md`, `findings.json`).
-Mỗi phát hiện có sẵn đường truyền, điều kiện, cách tái hiện trong sandbox và bản vá đề xuất (trong `findings.json` ⇒ `remediation.code_changes`).
 
-| # | Mức | File cần sửa | Sửa gì |
+| # | Mức | Đã sửa | Test hồi quy |
 |---|---|---|---|
-| 1 | **high** | `apps/desktop-host/src/components/manifest.ts`, `apps/desktop-host/src/components/office.ts`, `apps/desktop-tauri/scripts/publish-release.ts` | Ký `components.json` bằng **cùng key** của update feed + client verify trước khi tải bất cứ byte nào; chặn scheme không phải https/loopback. **Đây là cái quan trọng nhất**: archive tải về được **thực thi**. |
-| 2 | medium | `apps/desktop-host/src/components/tar.ts` (+ `manifest.ts`) | ~~**ĐÃ SỬA (2026-10-22)**~~ chặn *khi ghi* luồng giải nén + giới hạn `bytes` mà manifest khai; xem §3.1 |
-| 3 | medium | `native/dsh-native/src/image_scan.rs` (+ test) | Đọc byte flags của chunk VP8X bằng `data.get(start)` ⇒ hết panic ⇒ hết SIGABRT. **Đây là code Rust của chính phiên này viết.** |
-| 4 | medium | `apps/desktop-tauri/scripts/pack-appimage.sh` (+ `pack-rpm.sh`) | Ghim digest của `appimagetool` (và image `fedora:41` theo digest) trước khi chạy. |
-| 5 | low | `apps/desktop-host/src/desktop-bridge.ts` | Gọi `parseShortcutEdit` / `parseShortcutDefinitions` ở cửa vào (Electron đã làm vậy ở `apps/desktop/src/keyboard.ts:89`). |
-| 6 | low | `apps/desktop-host/src/update/appimage.ts` | Digest + size-check **chính bản staged** trước khi rename đè lên ảnh đang chạy. |
-| 7 | low | `apps/desktop-host/src/tauri.ts` (+ `update/service.ts`) | Nhả admission lock khi cài thất bại (Electron có rollback ở `apps/desktop/src/main.ts:633`). |
+| 1 | **high** | `components.json` ký Ed25519 bằng đúng key update feed (`signedComponentBytes`), Host verify trước khi tải byte nào; feed chỉ HTTPS/loopback (D40) | `components.spec.ts` (unsigned/tampered/bad-scheme) |
+| 2 | medium | bom giải nén zstd + trần `bytes` manifest — xem §3.1 | `components.spec.ts` (bomb 2.106 B) |
+| 3 | medium | `image_scan.rs` đọc flags VP8X bằng `data.get(start)` ⇒ hết panic/SIGABRT | `image_scan_tests.rs` (empty VP8X + flags) |
+| 4 | medium | `appimagetool` ghim sha256 cho cả hai arch; `fedora:41` ghim digest | `bash -n` + verify thủ công digest tải về |
+| 5 | low | bridge gọi `parseShortcutEdit`/`parseShortcutDefinitions`, trả 400 | `desktop-bridge.spec.ts` (2 ca) |
+| 6 | low | `installAppImage` verify **bản staged** (size + digest) trước rename | `update-appimage.spec.ts` (`verifyArtifact`) |
+| 7 | low | `releaseAdmission` nhả lock khi driver fail (khớp rollback Electron) | `update-service.spec.ts` |
 
-Sau khi sửa: chạy lại `bunx vitest run apps/desktop-host`, `cargo test --manifest-path native/dsh-native/Cargo.toml --lib`, `bun run typecheck`, `bun run lint` ✓ và bổ sung **test hồi quy** cho mỗi cái (mỗi phát hiện đều có sẵn cách tái hiện trong sandbox để làm mẫu).
+Đã chạy: `bunx vitest run apps/desktop-host` 148/148 ✓, `cargo test --lib` 14/14 ✓, `bun run typecheck` 5/5 ✓, `bun run lint` sạch (1 warning có sẵn) ✓. `office-component-probe.sh` giờ tự ký manifest bằng key tạm và truyền public key cho Host.
 
 ### (A1) Sửa xong: bom giải nén zstd (2026-10-22)
 - `apps/desktop-host/src/components/tar.ts`: `extractZstdTar` nhận `limits` và **chặn luồng giải nén khi nó đang ghi** (`boundedStream` ⇒ vượt `totalBytes` là throw) ⇒ file scratch luôn bị xoá kể cả khi thất bại.
@@ -51,13 +50,14 @@ Sau khi sửa: chạy lại `bunx vitest run apps/desktop-host`, `cargo test --m
 - Đã đo lại: bom 2.106 B ⇒ `RESULT bomb=REFUSED`, `/tmp` không còn bị chiếm (fixture cũ 1,8 GB đã xoá).
 - **Archive Office thật vẫn cài được**: `office-component-probe.sh` ⇒ `status_install` ready, `python_imports=ok`, engine compose ✓.
 
-### (B) F14 — bỏ ~34 MB rác trong payload
-Cây `dsh/node_modules` mang 21 package `dsh-experimental-*` (32 MB là `sherpa-onnx-linux-x64` — model giọng nói) trong khi profile desktop **không mount** package experimental nào. Lọc dependency closure trong `apps/desktop-tauri/scripts/stage-payload.sh` (đúng cách đã bỏ `sharp`/`koffi`/`node-pty`) ⇒ AppImage 90 MB → ~62 MB.
+### (B) F14 — **ĐÃ SỬA (2026-10-22)**
+Cây `dsh/node_modules` mang 24 package `dsh-experimental-*` + model `sherpa-onnx-*` (dùng bởi một package experimental duy nhất) trong khi profile desktop chỉ mount `@deepseek-ai/dsh-base` + `@deepseek-ai/dsh-web-app`. `linuxRuntimeFileExclusion` lọc cả hai nhóm (D41) ⇒ `dsh/node_modules` **255 → 190 MB**, AppImage **90 → 76.446.200 B**, cây cài **290 MB** (budget 400). Đã kiểm: không package runtime nào ngoài `packages/experimental` phụ thuộc chúng (`sdk/client` chỉ devDependency). Test: `apps/desktop-tauri/tests/linux-runtime-file-policy.spec.ts`. Bằng chứng: `entry-parity=OK`, `appimage-probe` `host=OK`, `size-gate=OK`.
 
-### (C) Bằng chứng vào CI
-- Đưa `entry-parity-probe.sh` vào **lane release** (lane đó *có* cây đóng gói; lane CI thì không) ⇒ mỗi bản phát hành đều chứng minh cả hai entrypoint Host vẫn boot.
-- Thêm **gate drift** cho `apps/desktop/`: chặn thay đổi ngoài `package.json` + `desktop-build-paths.mjs` (hai file đã biết).
-- **Không** thêm bước build Electron vào CI: fork không sửa phần đóng gói của Electron, và bằng chứng quan trọng hơn (entry Electron boot được) đã có ở probe.
+### (C) Bằng chứng vào CI — **ĐÃ LÀM (2026-10-22)**
+- `entry-parity-probe.sh` chạy trong **lane release** ngay sau khi dựng cây runtime, trước khi đóng gói/phát hành; probe tự ký component manifest bằng key tạm (bắt buộc từ D40).
+- **Gate drift** `apps/desktop-tauri/scripts/desktop-drift-gate.ts`: so `origin/<base>...HEAD`, chỉ cho `apps/desktop/package.json` + `apps/desktop/scripts/desktop-build-paths.mjs`; đã chạy thật (`2 changed file(s), all allowed`), test riêng.
+- Lane CI `desktop-linux.yml` thêm `permissions: contents: read`, `fetch-depth: 0`, `persist-credentials: false`.
+- **Không** thêm bước build Electron vào CI (giữ nguyên lý do cũ).
 
 ### (D) A9 — diff transcript với model sống
 Đường đã có: `live-transcript-probe.sh` (lượt thật + replay + diff). Nếu cần *diff* với bản ghi sẵn của upstream thì phải dùng provider deepseek (cần `DEEPSEEK_API_KEY`); nếu không, diff live-vs-replay (hiện tại) là bằng chứng đủ cho "transcript không đổi".
@@ -67,6 +67,15 @@ Resample của libvips khác `fast_image_resize` (max 6/255 mỗi kênh) ⇒ byt
 
 ### (F) Cần môi trường ngoài máy này
 P3 ký macOS/Windows (chứng thư) · P4 ba target còn lại (runner macOS/Windows) · P5-win32 phần ACL (runner Windows) · P6 brotli/ripgrep (tùy chọn) · welcome/onboarding (đã hoãn).
+
+### (G) Khoảng trống §4 — **ĐÃ XỬ LÝ (2026-10-22)**
+- Workflow CI: `permissions: contents: read` + `persist-credentials: false` + `fetch-depth: 0` (cho drift gate) ✓
+- `landlock-run.rs`: 5 unit test cho `parse` + `fs_mask_for_abi` ✓
+- `profile-lifecycle.ts`: `prepareProfile` chạy **sau** lease, lỗi thì nhả lease (D42) ✓
+- `tauri.conf.json`: bỏ `csp: null`, bỏ feature `devtools` ở release (D43) ✓
+- `lib.rs`: `spawn` từ chối pid 0; `kill` bỏ qua pid ≤ 0 ⇒ không bao giờ `killpg`/`waitpid` vào process group của Host ✓
+- `office.ts#officeEngineCli`: **chấp nhận** — engine chỉ đến từ component archive đã verify chữ ký + sha256 (D40); sửa cây sau khi cài là quyền của chính user (cùng mức với việc sửa payload)
+- `native/{koffi,flock}.cjs` + `execve`/`fcntl`: vẫn deferred (không có phát hiện mới; cần một lượt soi riêng nếu muốn đóng)
 
 ## 4. Khoảng trống phủ kín còn lại (chưa ai soi)
 Audit để lại 13 unit deferred (ngân sách agent) — đáng để soi trước:
@@ -106,6 +115,8 @@ cd /home/masis/deepseek-harness
 bun run typecheck && bun run lint                 # gate (lint ~90 s; lint hẹp: bunx oxlint <path>, 3 s nhưng có thể báo giả "error type" ở file import build output)
 bunx vitest run apps/desktop-host                # test Host
 cargo test --manifest-path native/dsh-native/Cargo.toml --lib
+cargo test --manifest-path native/dsh-native/Cargo.toml --features landlock-bin --bin landlock-run
+bun apps/desktop-tauri/scripts/desktop-drift-gate.ts origin/master   # chỉ 2 file apps/desktop được đổi
 bash apps/desktop-tauri/scripts/update-probe.sh          # feed ký hợp lệ → available; sửa chữ ký → idle
 bash apps/desktop-tauri/scripts/desktop-lease-probe.sh   # lease: hai carrier không ghi chung state
 bash apps/desktop-tauri/scripts/image-parity-probe.sh    # shim ảnh vs sharp thật

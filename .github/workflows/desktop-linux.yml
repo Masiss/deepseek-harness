@@ -10,6 +10,9 @@ concurrency:
   group: desktop-linux-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   desktop:
     name: Build, check, and compile the Linux desktop shell
@@ -17,12 +20,24 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The drift gate compares against the branch base, so the full
+          # history is required.
+          fetch-depth: 0
+          # The job runs contributor code; the token must not stay in
+          # .git/config while it does.
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@v2
         with:
           # Pinned: a moving Bun version makes the lane's environment drift
           # even though the lockfile freezes the dependencies.
           bun-version: 1.4.3
+
+      - name: Refuse edits to the Electron carrier
+        env:
+          DSH_DESKTOP_DRIFT_BASE: origin/${{ github.base_ref || 'master' }}
+        run: bun apps/desktop-tauri/scripts/desktop-drift-gate.ts "$DSH_DESKTOP_DRIFT_BASE"
 
       # The workspace is installed with pnpm, the lane that owns the release
       # packaging. pnpm's hoisted layout exposes every workspace package to

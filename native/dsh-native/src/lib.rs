@@ -265,7 +265,11 @@ pub fn spawn(
     let child = pair.slave.spawn_command(command).map_err(reason)?;
     // Closing the slave keeps the master's reads ending at child exit.
     drop(pair.slave);
-    let pid = child.process_id().unwrap_or(0) as i32;
+    // Pid 0 would make `waitpid`/`killpg` address the caller's own process
+    // group, so a child without an id is refused rather than guessed.
+    let pid = child
+        .process_id()
+        .ok_or_else(|| Error::from_reason("spawn: the child reported no process id"))? as i32;
     // The waiter below reaps this pid directly so the exit report carries the
     // exact signal; the handle holds no ownership after spawn.
     drop(child);
@@ -382,6 +386,11 @@ impl Pty {
     /// Signal the terminal's process group, falling back to the child itself.
     #[napi]
     pub fn kill(&self, signal: Option<String>) -> Result<()> {
+        // A terminal without a recorded pid never signals: pid 0 would address
+        // the Host's own process group.
+        if self.pid <= 0 {
+            return Ok(());
+        }
         let signal = signal_from_name(signal.as_deref());
         let pid = Pid::from_raw(self.pid);
         if killpg(pid, signal).is_err() {

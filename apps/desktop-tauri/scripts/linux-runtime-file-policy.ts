@@ -46,6 +46,16 @@ export function linuxRuntimeFileExclusion(
   if ((name === 'sharp' || name.startsWith('@img/')) && options.rustProvider) {
     return 'sharp package replaced by the Rust provider'
   }
+  // The Desktop profile mounts the Web application and the base layer; an
+  // experimental package the profile never names costs payload without
+  // supplying anything the Host can compose.
+  if (name.startsWith('@deepseek-ai/dsh-experimental-')) {
+    return 'experimental package the Desktop profile does not mount'
+  }
+  // The local speech model is reachable only from an experimental bundle.
+  if (name.startsWith('sherpa-onnx-')) {
+    return 'speech model used only by an unmounted experimental bundle'
+  }
   // The Office engine travels with the on-demand Office component.
   if (name.startsWith('@deepseek-ai/libreoffice-kit')) return 'Office engine moved to the Office component'
   if (name.startsWith('@deepseek-ai/node-addon-system-') && /^bin\/(?:glibc|musl)\/system\.node$/u.test(entry)) {

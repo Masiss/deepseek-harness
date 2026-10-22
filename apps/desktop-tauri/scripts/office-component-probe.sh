@@ -24,11 +24,28 @@ work=${DSH_ISOLATION_DIR:?set DSH_ISOLATION_DIR}
 home="$work/home/.dsh"
 profile="$home/desktop-project"
 rm -rf "$work/home" "$work/tmp" "$work/cache" "$work/config"
-mkdir -p "$work/home" "$work/tmp" "$work/cache" "$work/config" "$home"
+mkdir -p "$work/home" "$work/tmp" "$work/cache" "$work/config" "$home" "$work/components"
 cp -a "$root/project" "$profile"
+# The Host verifies the component manifest with the release key, so this
+# rehearsal signs the tree's manifest with an ephemeral key and hands the Host
+# the matching public key.
+cp -a "$components/." "$work/components/"
+cat > "$work/sign.mjs" <<'SIGNER'
+import { generateKeyPairSync, sign } from 'node:crypto'
+import { readFileSync, writeFileSync } from 'node:fs'
+const [source, destination, publicFile] = process.argv.slice(2)
+const { privateKey, publicKey } = generateKeyPairSync('ed25519')
+const manifest = JSON.parse(readFileSync(source, 'utf8'))
+const document = { schemaVersion: 1, components: manifest.components }
+const signature = sign(null, Buffer.from(JSON.stringify(document), 'utf8'), privateKey).toString('base64')
+writeFileSync(destination, `${JSON.stringify({ ...document, signature }, undefined, 2)}\n`)
+writeFileSync(publicFile, publicKey.export({ type: 'spki', format: 'pem' }).toString())
+SIGNER
+"$root/runtime/bin/node" "$work/sign.mjs" \
+  "$work/components/components.json" "$work/components/components.json" "$work/public.pem"
 
 echo "RESULT bundle_python=$([ -d "$root/runtime/primary-runtime/dependencies/python" ] && echo present || echo absent)"
-echo "RESULT component=$("$root/runtime/bin/node" -e "const m=require('$components/components.json');process.stdout.write(m.components[0].file+' bytes='+m.components[0].bytes)")"
+echo "RESULT component=$("$root/runtime/bin/node" -e "const m=require('$work/components/components.json');process.stdout.write(m.components[0].file+' bytes='+m.components[0].bytes)")"
 
 cat > "$work/serve.mjs" <<'SERVER'
 import { createReadStream, statSync, writeFileSync } from 'node:fs'
@@ -50,7 +67,7 @@ const server = createServer((request, response) => {
 server.listen(0, '127.0.0.1', () => { writeFileSync(portFile, String(server.address().port)) })
 SERVER
 
-"$root/runtime/bin/node" "$work/serve.mjs" "$components" "$work/port" &
+"$root/runtime/bin/node" "$work/serve.mjs" "$work/components" "$work/port" &
 server=$!
 for _ in $(seq 1 40); do [ -s "$work/port" ] && break; sleep 0.1; done
 feed="http://127.0.0.1:$(cat "$work/port")"
@@ -66,6 +83,7 @@ exec env -i PATH=/usr/bin:/bin HOME="$work/home" TMPDIR="$work/tmp" \\
   DSH_DESKTOP_PNPM_ENTRY="$root/runtime/primary-runtime/dependencies/pnpm/bin/pnpm.mjs" \\
   DSH_DESKTOP_NODE_BIN="$root/runtime/bin" DSH_DESKTOP_VERSION=1.0.0 \\
   DSH_DESKTOP_COMPONENT_FEED="$feed" \\
+  DSH_DESKTOP_COMPONENT_PUBLIC_KEY="$(cat "$work/public.pem")" \\
   "$root/bin/desktop-host" "$root/dsh" "$profile" "$root/runtime/primary-runtime" \\
   "$root/runtime/primary-runtime/dependencies/pnpm/bin/pnpm.mjs" "$root/runtime/bin"
 EOF

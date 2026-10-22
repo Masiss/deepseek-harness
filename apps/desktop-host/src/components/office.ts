@@ -59,6 +59,13 @@ export interface DesktopOfficeComponentOptions {
   readonly directory: string
   /** Bundled primary runtime supplying `runtime.json`, Node, and pnpm. */
   readonly primaryRuntime: string
+  /**
+   * PEM public key the component manifest's signature is verified against.
+   *
+   * The pinned update-feed key is the trust anchor; another key is only for
+   * a caller that checks a document against a key of its own.
+   */
+  readonly publicKey?: string
   /** Fetch implementation, replaced at the network test boundary. */
   readonly fetch?: (url: string, init: RequestInit) => Promise<Response>
   /** Manifest request deadline in milliseconds. */
@@ -170,6 +177,7 @@ export class DesktopOfficeComponent {
   private readonly directory: string
   private readonly primaryRuntime: string
   private readonly feed: string
+  private readonly publicKey: string | undefined
   private readonly fetchImpl: NonNullable<DesktopOfficeComponentOptions['fetch']>
   private readonly timeoutMs: number
   private readonly artifactTimeoutMs: number
@@ -184,6 +192,7 @@ export class DesktopOfficeComponent {
     this.directory = options.directory
     this.primaryRuntime = options.primaryRuntime
     this.feed = options.feed.replace(/\/+$/u, '')
+    this.publicKey = options.publicKey
     this.fetchImpl = options.fetch ?? ((url, init) => fetch(url, init))
     this.timeoutMs = options.timeoutMs ?? 30_000
     this.artifactTimeoutMs = options.artifactTimeoutMs ?? 30 * 60_000
@@ -303,6 +312,7 @@ export class DesktopOfficeComponent {
   }
 
   private async readArtifact(): Promise<DesktopComponentArtifact> {
+    this.assertFeedIsDownloadable()
     let response: Response
     try {
       response = await this.fetchImpl(`${this.feed}/components.json`, { signal: AbortSignal.timeout(this.timeoutMs) })
@@ -312,13 +322,33 @@ export class DesktopOfficeComponent {
     if (!response.ok) throw new ComponentFailure('feed')
     let manifest
     try {
-      manifest = parseComponentsManifest(JSON.parse(await boundedText(response, MAX_MANIFEST_BYTES)))
+      manifest = parseComponentsManifest(JSON.parse(await boundedText(response, MAX_MANIFEST_BYTES)), this.publicKey)
     } catch (error) {
       throw new ComponentFailure(error instanceof ComponentFailure ? error.kind : 'feed', error)
     }
     const artifact = manifest.components.find((entry: { id: string }) => entry.id === 'office')
     if (artifact === undefined) throw new ComponentFailure('feed')
     return artifact
+  }
+
+  /**
+   * Refuse a feed the network layer cannot authenticate.
+   *
+   * The component archive is executed, so the feed that names it must travel
+   * over HTTPS; HTTP is accepted only on the loopback interface, where a local
+   * rehearsal cannot be intercepted on the wire.
+   */
+  private assertFeedIsDownloadable(): void {
+    let url: URL
+    try {
+      url = new URL(this.feed)
+    } catch (error) {
+      throw new ComponentFailure('feed', error)
+    }
+    if (url.protocol === 'https:') return
+    const loopback = url.protocol === 'http:'
+      && (url.hostname === '127.0.0.1' || url.hostname === '::1' || url.hostname === 'localhost')
+    if (!loopback) throw new ComponentFailure('feed')
   }
 
   /**

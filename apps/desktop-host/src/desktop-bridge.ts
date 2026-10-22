@@ -29,10 +29,12 @@ import { cpus, release, totalmem } from 'node:os'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { writeFileAtomic } from '@deepseek-ai/dsh-atomic-write'
-import { ShortcutPersistence } from '@deepseek-ai/dsh-client-shortcuts/protocol'
+import {
+  parseShortcutDefinitions,
+  parseShortcutEdit,
+  ShortcutPersistence,
+} from '@deepseek-ai/dsh-client-shortcuts/protocol'
 import type {
-  ShortcutDefinition,
-  ShortcutEdit,
   ShortcutPlatform,
   ShortcutRevision,
 } from '@deepseek-ai/dsh-client-shortcuts/protocol'
@@ -233,16 +235,27 @@ async function dispatch(
     case '/shortcuts-get': {
       const definitions = field(request, 'definitions')
       if (!Array.isArray(definitions)) return { status: 400, payload: { error: 'invalid-definitions' } }
-      shortcuts.setDefinitions(definitions as readonly ShortcutDefinition[])
+      let catalog
+      try {
+        catalog = parseShortcutDefinitions(definitions)
+      } catch {
+        return { status: 400, payload: { error: 'invalid-definitions' } }
+      }
+      shortcuts.setDefinitions(catalog)
       return { status: 200, payload: await shortcuts.readCurrent() }
     }
     case '/shortcuts-edit': {
-      const edit = field(request, 'edit')
       const revision = field(request, 'revision')
       if (typeof revision !== 'string') return { status: 400, payload: { error: 'invalid-revision' } }
+      let edit
+      try {
+        edit = parseShortcutEdit(field(request, 'edit'))
+      } catch {
+        return { status: 400, payload: { error: 'invalid-edit' } }
+      }
       return {
         status: 200,
-        payload: await shortcuts.edit(edit as ShortcutEdit, revision as ShortcutRevision),
+        payload: await shortcuts.edit(edit, revision as ShortcutRevision),
       }
     }
     case '/shortcuts-recording':

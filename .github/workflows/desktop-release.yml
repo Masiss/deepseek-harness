@@ -118,6 +118,11 @@ jobs:
       - name: Prepare the Linux runtime tree
         run: pnpm exec tsx apps/desktop-tauri/scripts/prepare-linux-runtime.ts "$DSH_DESKTOP_TARGET"
 
+      # The release is the first build a user can install, so both Host entries
+      # must prove they boot the same profile before the artifacts publish.
+      - name: Prove both Host entries boot
+        run: bash apps/desktop-tauri/scripts/entry-parity-probe.sh "$DSH_DESKTOP_TARGET"
+
       # The artifacts carry the feed URL, and the feed is a release of its
       # own whose documents move with every release. An application that
       # shipped with one version therefore reads the feed of the newest

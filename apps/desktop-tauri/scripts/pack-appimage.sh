@@ -100,13 +100,34 @@ chmod +x "$appdir/AppRun" "$appdir/usr/bin/dsh-desktop-tauri"
 
 # Pinned release: the `continuous` build's desktop-file check waits on a child
 # with WUNTRACED and reports a valid file as broken, so it never packs here.
+#
+# The tool is executed and decides the published image's bytes, so its digest
+# is pinned and checked on every run. A cached copy is re-verified rather than
+# trusted by path.
+case "$appimage_arch" in
+  x86_64) appimagetool_sha256=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0 ;;
+  aarch64) appimagetool_sha256=f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158 ;;
+  *) echo "pack-appimage: no pinned appimagetool for $appimage_arch" >&2; exit 2 ;;
+esac
 tool="$HOME/.cache/dsh-appimage/appimagetool-1.9.1-$appimage_arch.AppImage"
-if [ ! -x "$tool" ]; then
+verify_tool() {
+  [ -f "$1" ] || return 1
+  [ "$(sha256sum "$1" | cut -d' ' -f1)" = "$appimagetool_sha256" ]
+}
+if ! verify_tool "$tool"; then
   mkdir -p "$(dirname "$tool")"
   echo "pack-appimage: fetching appimagetool 1.9.1"
-  curl -fsSL -o "$tool" \
+  tmp="$tool.download.$$"
+  rm -f "$tmp"
+  curl -fsSL --proto '=https' --tlsv1.2 -o "$tmp" \
     "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-$appimage_arch.AppImage"
-  chmod +x "$tool"
+  if ! verify_tool "$tmp"; then
+    echo "pack-appimage: appimagetool digest mismatch for $appimage_arch" >&2
+    rm -f "$tmp"
+    exit 1
+  fi
+  chmod +x "$tmp"
+  mv "$tmp" "$tool"
 fi
 
 echo "pack-appimage: packing $out"

@@ -46,6 +46,15 @@ export interface DesktopLaunchOptions {
   readonly projectDir: string
   /** Package manager the booted profile uses; absent when the carrier has none. */
   readonly packageManager?: DesktopPackageManager
+  /**
+   * Prepare the profile after this Host owns the shared state.
+   *
+   * A carrier that repairs the profile (the Tauri shell rewrites its bundle
+   * list) must not do so while another carrier may be running on the same
+   * harness home, so the callback runs after the lease is taken and before
+   * the profile is loaded.
+   */
+  readonly prepareProfile?: (projectDir: string) => void
   /** Carrier-specific cleanup that runs before the profile shuts down. */
   readonly onStopping?: () => void | Promise<void>
   /** Carrier-specific composition that runs once the profile booted. */
@@ -76,11 +85,19 @@ export interface DesktopLaunch {
 export async function launchDesktopProfile(options: DesktopLaunchOptions): Promise<DesktopLaunch> {
   const { transport } = options
   const installAnchor = join(options.runtimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')
-  const profile = loadProfileDirectory('dsh', options.projectDir, installAnchor)
-  reportSkippedBundles('dsh', profile)
   // The Tauri shell and the Electron application can both be installed; only
-  // one Host may own the state they share.
+  // one Host may own the state they share. The lease comes first: profile
+  // preparation writes the same directory another carrier could be reading.
   const lease = acquireDesktopLease(resolveDshHome())
+  let profile: ReturnType<typeof loadProfileDirectory>
+  try {
+    options.prepareProfile?.(options.projectDir)
+    profile = loadProfileDirectory('dsh', options.projectDir, installAnchor)
+    reportSkippedBundles('dsh', profile)
+  } catch (error) {
+    lease.release()
+    throw error
+  }
   const application = runProfile({
     environment: loadLayeredEnv('dsh'),
     profile: 'desktop',

@@ -24,7 +24,12 @@ import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from '
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { signedFeedBytes, type SignedFeedDocument } from '../../desktop-host/src/update/signing.ts'
+import {
+  signedComponentBytes,
+  signedFeedBytes,
+  type SignedComponentDocument,
+  type SignedFeedDocument,
+} from '../../desktop-host/src/update/signing.ts'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 const target = process.argv[2] ?? 'linux-x64'
@@ -98,7 +103,9 @@ function componentManifest(): string | undefined {
   if (!Array.isArray(manifest.components) || manifest.components.length === 0) {
     throw new Error('publish-release: the component manifest names no archive')
   }
-  return `${JSON.stringify(manifest, undefined, 2)}\n`
+  const document: SignedComponentDocument = { schemaVersion: 1, components: manifest.components }
+  const signature = signDocument(signedComponentBytes(document))
+  return `${JSON.stringify({ ...document, signature }, undefined, 2)}\n`
 }
 
 /**
@@ -109,12 +116,17 @@ function componentManifest(): string | undefined {
  * published, because a client that verifies signatures would refuse it.
  */
 function signFeedDocument(document: SignedFeedDocument): string {
+  // The bytes come from the client's own canonicalization, so the signer and
+  // the verifier cannot drift apart.
+  return signDocument(signedFeedBytes(document))
+}
+
+/** Sign canonical bytes with the release channel's private key. */
+function signDocument(bytes: Buffer): string {
   const pem = process.env.DSH_RELEASE_SIGNING_KEY ?? ''
   if (pem === '') throw new Error('publish-release: DSH_RELEASE_SIGNING_KEY is missing')
   const key = createPrivateKey(pem)
-  // The bytes come from the client's own canonicalization, so the signer and
-  // the verifier cannot drift apart.
-  return sign(null, signedFeedBytes(document), key).toString('base64')
+  return sign(null, bytes, key).toString('base64')
 }
 
 /** The artifacts this target contributes to the shared release. */

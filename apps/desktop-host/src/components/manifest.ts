@@ -10,6 +10,8 @@
  * @module @deepseek-ai/dsh-desktop-host/components/manifest
  */
 
+import { UpdateSignatureError, verifyComponentFeedSignature } from '../update/signing.ts'
+
 /** Component identifiers this Host knows how to install. */
 export type DesktopComponentId = 'office'
 
@@ -31,6 +33,8 @@ export interface DesktopComponentArtifact {
 export interface DesktopComponentsManifest {
   /** Format version; only 1 is accepted. */
   readonly schemaVersion: 1
+  /** Base64 Ed25519 signature over the manifest's signed fields. */
+  readonly signature?: string
   /** Every artifact this release publishes. */
   readonly components: readonly DesktopComponentArtifact[]
 }
@@ -56,11 +60,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * Validate a decoded component manifest.
  *
+ * The manifest names archives whose interpreter and packages execute during
+ * the install, so it is signed with the update feed's release key and the
+ * signature is verified against the pinned public key before any artifact is
+ * downloaded.
+ *
  * @param value - Parsed JSON from the feed; untrusted.
+ * @param publicKey - The PEM public key to verify the signature against; the pinned one by default.
  * @returns The manifest with exactly the fields the installer uses.
- * @throws When the format, an identifier, a version, a file name, or a digest is invalid.
+ * @throws When the format, an identifier, a version, a file name, a digest, or the signature is invalid.
  */
-export function parseComponentsManifest(value: unknown): DesktopComponentsManifest {
+export function parseComponentsManifest(value: unknown, publicKey?: string): DesktopComponentsManifest {
   if (!isRecord(value) || value.schemaVersion !== 1 || !Array.isArray(value.components)) {
     throw new Error('desktop components: invalid manifest')
   }
@@ -79,5 +89,22 @@ export function parseComponentsManifest(value: unknown): DesktopComponentsManife
     seen.add(id)
     return { id: id as DesktopComponentId, version, file, bytes, sha256 }
   })
-  return { schemaVersion: 1, components }
+  // The signature covers the documents that name the archives, so it is
+  // checked before the manifest is returned to a caller that may act on it.
+  const document = { schemaVersion: 1 as const, components: value.components }
+  try {
+    verifyComponentFeedSignature(document, typeof value.signature === 'string' ? value.signature : undefined, publicKey)
+  } catch (error) {
+    if (error instanceof UpdateSignatureError) {
+      throw new Error(error.failure === 'missing-signature'
+        ? 'desktop components: unsigned manifest'
+        : 'desktop components: invalid signature', { cause: error })
+    }
+    throw error
+  }
+  return {
+    schemaVersion: 1,
+    ...(typeof value.signature === 'string' ? { signature: value.signature } : {}),
+    components,
+  }
 }

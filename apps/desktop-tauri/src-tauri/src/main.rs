@@ -413,13 +413,31 @@ fn run_menu_command(app: &AppHandle, command: &str) {
             let _ = window.eval("location.reload()");
         }
         "toggle-devtools" => {
-            if window.is_devtools_open() {
-                window.close_devtools();
-            } else {
-                window.open_devtools();
-            }
+            toggle_devtools(&window);
         }
         _ => {}
+    }
+}
+
+/// Toggle WebView developer tools when this build carries them.
+///
+/// The menu item exists only in development builds, and debug builds carry the
+/// inspector; release builds compile the call out because the Tauri `devtools`
+/// feature is not enabled.
+///
+/// @param window - window whose devtools are toggled.
+fn toggle_devtools(window: &tauri::WebviewWindow) {
+    #[cfg(debug_assertions)]
+    {
+        if window.is_devtools_open() {
+            window.close_devtools();
+        } else {
+            window.open_devtools();
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = window;
     }
 }
 

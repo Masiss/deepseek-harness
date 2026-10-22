@@ -79,8 +79,11 @@ fi
 /usr/share/icons/hicolor/1024x1024/apps/deepseek-harness.png
 EOF
 
-echo "pack-rpm: building in fedora:41"
-docker run --rm -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" -v "$work:/rpm" "fedora:41" sh -c '
+# The build container decides the packed RPM's bytes, so the image is pinned
+# by digest rather than by a moving tag.
+fedora_image="fedora:41@sha256:f1a3fab47bcb3c3ddf3135d5ee7ba8b7b25f2e809a47440936212a3a50957f3d"
+echo "pack-rpm: building in fedora:41 ($fedora_image)"
+docker run --rm -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" -v "$work:/rpm" "$fedora_image" sh -c '
   set -e
   # The previous build may have left root-owned artifacts behind.
   rm -rf /rpm/work /rpm/rpmbuild.log /rpm/*.rpm

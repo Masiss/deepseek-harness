@@ -25,6 +25,25 @@ host="$tree/dsh/node_modules/@deepseek-ai/dsh-desktop-host"
 [ -f "$tree/components/components.json" ] || { echo "RESULT entry-parity=FAIL reason=missing-components"; exit 1; }
 home="$work/home"
 
+# The Host verifies the component manifest against the release key, so this
+# rehearsal signs the tree's manifest with an ephemeral key and hands the Host
+# the matching public key.
+mkdir -p "$work/components"
+cp -a "$tree/components/." "$work/components/"
+cat > "$work/sign.mjs" <<'SIGNER'
+import { generateKeyPairSync, sign } from 'node:crypto'
+import { readFileSync, writeFileSync } from 'node:fs'
+const [source, destination, publicFile] = process.argv.slice(2)
+const { privateKey, publicKey } = generateKeyPairSync('ed25519')
+const manifest = JSON.parse(readFileSync(source, 'utf8'))
+const document = { schemaVersion: 1, components: manifest.components }
+const signature = sign(null, Buffer.from(JSON.stringify(document), 'utf8'), privateKey).toString('base64')
+writeFileSync(destination, `${JSON.stringify({ ...document, signature }, undefined, 2)}\n`)
+writeFileSync(publicFile, publicKey.export({ type: 'spki', format: 'pem' }).toString())
+SIGNER
+"$tree/runtime/bin/node" "$work/sign.mjs" \
+  "$work/components/components.json" "$work/components/components.json" "$work/public.pem"
+
 # The component feed, served from the tree's own components directory.
 cat > "$work/serve.mjs" <<'SERVER'
 import { createReadStream, statSync, writeFileSync } from 'node:fs'
@@ -45,7 +64,7 @@ const server = createServer((request, response) => {
 })
 server.listen(0, '127.0.0.1', () => { writeFileSync(portFile, String(server.address().port)) })
 SERVER
-"$tree/runtime/bin/node" "$work/serve.mjs" "$tree/components" "$work/port" &
+"$tree/runtime/bin/node" "$work/serve.mjs" "$work/components" "$work/port" &
 server_pid=$!
 for _ in $(seq 1 40); do [ -s "$work/port" ] && break; sleep 0.1; done
 feed="http://127.0.0.1:$(cat "$work/port")"
@@ -59,6 +78,7 @@ export DSH_DESKTOP_PNPM_ENTRY="$tree/runtime/primary-runtime/dependencies/pnpm/b
 export DSH_DESKTOP_NODE_BIN="$tree/runtime/bin"
 export DSH_DESKTOP_VERSION="1.0.0"
 export DSH_DESKTOP_COMPONENT_FEED="$feed"
+export DSH_DESKTOP_COMPONENT_PUBLIC_KEY="$(cat "$work/public.pem")"
 
 # Start one entry and wait for it to report the profile it serves.
 # @param label - The name of the run.

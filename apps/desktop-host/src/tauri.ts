@@ -53,14 +53,14 @@ async function main(): Promise<void> {
     feed: process.env.DSH_DESKTOP_COMPONENT_FEED ?? '',
     directory: join(resolveDshHome(), 'components'),
     primaryRuntime,
+    // The component manifest carries the release channel's signature; the
+    // pinned update key is the default, and an operator may point this Host
+    // at another channel's key.
+    ...(process.env.DSH_DESKTOP_COMPONENT_PUBLIC_KEY === undefined
+      || process.env.DSH_DESKTOP_COMPONENT_PUBLIC_KEY === ''
+      ? {}
+      : { publicKey: process.env.DSH_DESKTOP_COMPONENT_PUBLIC_KEY }),
   })
-  const preparation = prepareDesktopProfile(projectDir)
-  if (preparation.droppedBundles.length > 0) {
-    console.error(`dsh: dropped incompatible application bundle(s) from the Desktop profile: ${preparation.droppedBundles.join(', ')}`)
-  }
-  if (preparation.restoredBundle) {
-    console.error('dsh: restored the Web application bundle in the Desktop profile')
-  }
   let stopping = false
 
   /**
@@ -90,6 +90,15 @@ async function main(): Promise<void> {
     transport,
     runtimeDir,
     projectDir,
+    prepareProfile: (profileDir) => {
+      const preparation = prepareDesktopProfile(profileDir)
+      if (preparation.droppedBundles.length > 0) {
+        console.error(`dsh: dropped incompatible application bundle(s) from the Desktop profile: ${preparation.droppedBundles.join(', ')}`)
+      }
+      if (preparation.restoredBundle) {
+        console.error('dsh: restored the Web application bundle in the Desktop profile')
+      }
+    },
     ...(process.argv[5] === undefined ? {} : {
       packageManager: {
         command: process.execPath,
@@ -220,6 +229,11 @@ function createDesktopUpdates(
           })
       }),
       restart: async () => { await transport.send({ type: 'restart' }) },
+      releaseAdmission: async (): Promise<void> => {
+        const decide = taskControl()
+        if (decide === undefined) return
+        await decide('unlock')
+      },
       beforeInstall: async (): Promise<DesktopUpdateAdmission> => {
         const decide = taskControl()
         if (decide === undefined) return 'unavailable'

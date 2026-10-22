@@ -35,6 +35,17 @@ export interface SignedFeedDocument {
   readonly artifacts: Readonly<Record<string, unknown>>
 }
 
+/**
+ * The document a component-feed signature covers.
+ *
+ * The component manifest names archives whose contents are executed, so it
+ * carries the update feed's trust anchor over its own fields.
+ */
+export interface SignedComponentDocument {
+  readonly schemaVersion: number
+  readonly components: readonly unknown[]
+}
+
 /** Why a feed signature did not verify. */
 export type UpdateSignatureFailure =
   | 'missing-signature'
@@ -74,6 +85,19 @@ export function signedFeedBytes(document: SignedFeedDocument): Buffer {
 }
 
 /**
+ * The exact bytes a component-feed signature covers.
+ *
+ * Components keep their published order: there is no key to sort, and the
+ * signer and verifier both read the array the manifest carries.
+ *
+ * @param document - The component manifest's signed fields.
+ * @returns The canonical bytes to sign or verify.
+ */
+export function signedComponentBytes(document: SignedComponentDocument): Buffer {
+  return Buffer.from(JSON.stringify({ schemaVersion: document.schemaVersion, components: document.components }), 'utf8')
+}
+
+/**
  * Verify a feed's signature against a public key.
  *
  * The key defaults to the pinned one, which is the trust anchor a client
@@ -91,6 +115,30 @@ export function verifyUpdateFeedSignature(
   signature: string | undefined,
   publicKey: string = UPDATE_FEED_PUBLIC_KEY,
 ): void {
+  verifySignedBytes(signedFeedBytes(document), signature, publicKey)
+}
+
+/**
+ * Verify a component feed's signature against a public key.
+ *
+ * The component manifest names executable content, so it uses the same pinned
+ * key and the same failure classification as the update feed.
+ *
+ * @param document - The component manifest's signed fields.
+ * @param signature - The base64 signature the manifest carries.
+ * @param publicKey - The PEM public key to verify against.
+ * @throws {UpdateSignatureError} when the signature is absent, malformed, or does not verify.
+ */
+export function verifyComponentFeedSignature(
+  document: SignedComponentDocument,
+  signature: string | undefined,
+  publicKey: string = UPDATE_FEED_PUBLIC_KEY,
+): void {
+  verifySignedBytes(signedComponentBytes(document), signature, publicKey)
+}
+
+/** The verification both feeds share. */
+function verifySignedBytes(bytes: Buffer, signature: string | undefined, publicKey: string): void {
   if (signature === undefined || signature === '') {
     throw new UpdateSignatureError('missing-signature', 'the manifest carries no signature')
   }
@@ -100,12 +148,12 @@ export function verifyUpdateFeedSignature(
   } catch (error) {
     throw new UpdateSignatureError('unsupported-key', error instanceof Error ? error.message : String(error))
   }
-  let bytes: Buffer
+  let signatureBytes: Buffer
   try {
-    bytes = Buffer.from(signature, 'base64')
+    signatureBytes = Buffer.from(signature, 'base64')
   } catch (error) {
     throw new UpdateSignatureError('malformed-signature', error instanceof Error ? error.message : String(error))
   }
-  const verified = verify(null, signedFeedBytes(document), key, bytes)
+  const verified = verify(null, bytes, key, signatureBytes)
   if (!verified) throw new UpdateSignatureError('invalid-signature', 'the signature does not match the manifest')
 }

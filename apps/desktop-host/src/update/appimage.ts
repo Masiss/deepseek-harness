@@ -66,6 +66,24 @@ export async function fileDigest(path: string): Promise<string> {
   return hash.digest('hex')
 }
 
+/**
+ * Check one file against the identity the signed manifest names.
+ *
+ * The install calls this on the source artifact and again on the staged copy,
+ * because the copy — not the path that was checked first — becomes the
+ * running image.
+ *
+ * @param path - File to measure.
+ * @param sha256 - Expected lowercase SHA-256.
+ * @param size - Expected length in bytes.
+ * @throws {UpdateInstallError} with `size-mismatch` or `digest-mismatch`.
+ */
+export async function verifyArtifact(path: string, sha256: string, size: number): Promise<void> {
+  const file = await stat(path)
+  if (!file.isFile() || file.size !== size) throw new UpdateInstallError('size-mismatch', path)
+  if (await fileDigest(path) !== sha256) throw new UpdateInstallError('digest-mismatch', path)
+}
+
 /** Flush one directory entry so a rename that returned survives a power loss. */
 async function syncDirectory(directory: string): Promise<void> {
   const handle = await open(directory, 'r')
@@ -128,9 +146,12 @@ export async function installAppImage(options: AppImageInstallOptions): Promise<
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
     })
     await copyFile(artifactPath, stagedPath)
+    // The staged copy, not the source, is what becomes the running image, so
+    // the identity that was signed is checked against the copy itself.
+    await verifyArtifact(stagedPath, sha256, size)
     await chmod(stagedPath, 0o755)
-    const staged = await open(stagedPath, 'r+')
-    try { await staged.sync() } finally { await staged.close() }
+    const handle = await open(stagedPath, 'r+')
+    try { await handle.sync() } finally { await handle.close() }
     await rename(stagedPath, targetPath)
   } catch (error) {
     await rm(stagedPath, { force: true })

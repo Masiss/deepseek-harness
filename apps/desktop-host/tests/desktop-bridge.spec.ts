@@ -125,7 +125,9 @@ describe('desktop bridge', () => {
     { name: 'an unknown method', path: '/absent', body: null, status: 404 },
     { name: 'a malformed body', path: '/device-info', body: 'not-json', status: 400 },
     { name: 'definitions that are not an array', path: '/shortcuts-get', body: { definitions: 1 }, status: 400 },
+    { name: 'definitions the reader would reject', path: '/shortcuts-get', body: { definitions: [{ id: 'Bad Id', defaults: {} }] }, status: 400 },
     { name: 'an edit without a revision', path: '/shortcuts-edit', body: { edit: { type: 'reset-all' } }, status: 400 },
+    { name: 'an edit the reader would reject', path: '/shortcuts-edit', body: { edit: { type: 'set' }, revision: 'r' }, status: 400 },
   ])('refuses $name', async ({ path, body, status }) => {
     const response = await fetch(`${base()}${BRIDGE_PATH}${path}`, {
       method: 'POST',

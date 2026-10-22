@@ -228,6 +228,20 @@ describe('DesktopUpdateService', () => {
     await expect(updates.install('0.3.0')).resolves.toMatchObject({ phase: 'error', failure: 'install' })
   })
 
+  it('releases the admission lock when the replacement fails', async () => {
+    serveArtifact()
+    const released = vi.fn(async () => undefined)
+    const updates = service({
+      driver: { kind: 'test', install: async () => { throw new Error('driver refused') } },
+      releaseAdmission: released,
+    })
+    await updates.check(true)
+    await updates.download('0.3.0')
+
+    await expect(updates.install('0.3.0')).resolves.toMatchObject({ phase: 'error', failure: 'install' })
+    expect(released).toHaveBeenCalledTimes(1)
+  })
+
   it('runs check, download, install, and relaunch after both confirmations', async () => {
     serveArtifact()
     const prompts: string[] = []

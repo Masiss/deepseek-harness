@@ -81,6 +81,14 @@ export interface DesktopUpdateServiceOptions {
   /** Task admission and shutdown authorization, performed immediately before an install. */
   readonly beforeInstall?: () => Promise<DesktopUpdateAdmission>
   /**
+   * Release the task admission taken by `beforeInstall`.
+   *
+   * A successful replacement restarts the Host, which drops the lock with the
+   * process; a failed one leaves the Host running, so the lock must not
+   * outlive the attempt.
+   */
+  readonly releaseAdmission?: () => Promise<void> | void
+  /**
    * Ask the user before downloading or installing.
    * @defaultValue absent, which proceeds: only a shell that has no dialog reaches this.
    */
@@ -404,6 +412,9 @@ export class DesktopUpdateService {
       // artifact unusable, so the attempt ends here instead of retrying.
       this.prepared = undefined
       await rm(plan.artifactPath, { force: true })
+      // The Host keeps running after a failed replacement, so the admission
+      // lock must not outlive the attempt.
+      await this.options.releaseAdmission?.()
       return this.publish(this.fail(failure, plan.version))
     }
   }

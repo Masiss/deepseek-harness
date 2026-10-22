@@ -372,3 +372,50 @@ fn main() {
     }
     exec_command(&cli.command);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(values: &[&str]) -> Vec<OsString> {
+        values.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn parses_grants_and_the_command_after_the_separator() {
+        let cli = parse(&args(&["--ro", "/usr", "--rw", "/tmp", "--", "sh", "-c", "true"]));
+        assert!(!cli.probe);
+        assert_eq!(cli.read_only, args(&["/usr"]));
+        assert_eq!(cli.read_write, args(&["/tmp"]));
+        assert_eq!(cli.command, args(&["sh", "-c", "true"]));
+    }
+
+    #[test]
+    fn parses_a_command_without_grants() {
+        let cli = parse(&args(&["--", "/bin/true"]));
+        assert!(cli.read_only.is_empty());
+        assert_eq!(cli.command, args(&["/bin/true"]));
+    }
+
+    #[test]
+    fn parses_the_probe_mode() {
+        let cli = parse(&args(&["--probe"]));
+        assert!(cli.probe);
+        assert!(cli.command.is_empty());
+    }
+
+    #[test]
+    fn an_abi_one_kernel_does_not_get_newer_access_bits() {
+        assert_eq!(fs_mask_for_abi(1), ABI1_MASK);
+    }
+
+    #[test]
+    fn the_access_mask_grows_with_the_kernel_abi() {
+        let abi2 = fs_mask_for_abi(2);
+        assert_ne!(abi2 & LL_FS_REFER, 0);
+        assert_eq!(abi2 & LL_FS_TRUNCATE, 0);
+        let abi5 = fs_mask_for_abi(5);
+        assert_ne!(abi5 & LL_FS_TRUNCATE, 0);
+        assert_ne!(abi5 & LL_FS_IOCTL_DEV, 0);
+    }
+}
