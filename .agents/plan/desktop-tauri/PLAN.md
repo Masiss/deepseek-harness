@@ -128,11 +128,11 @@ Ngoài ra: bật `enable-write-console-messages-to-stdout` của WebKit ⇒ **m�
 | `dsh/node_modules` | **190 MB** | Trước prune 255 MB |
 | Host cold start (warm cache) | **1,98–2,09 s** | `measure-linux-tree.sh`, 3 lần |
 | Host cold start (first run) | **4,83 s** | Page cache lạnh |
-| Shell: window → start page → Host URL | **0,55 s → 0,77 s → 4,54 s** | `cold-start-probe.sh` (weston headless) |
+| Shell: window → start page → Host URL → **app trên màn hình** | **0,24 s → 0,32 s → 2,53 s → 4,25 s** | `cold-start-probe.sh`; số cũ (0,77 s) chỉ đo tới trang start, app chưa nạp |
 | Host idle RSS | **179–182 MiB** | Chưa gồm WebKitGTK |
 | Desktop idle RSS, app **chưa** chạy (trang rỗng) | **605–607 MiB** | `resident-probe.sh`; đo lúc webview chỉ có trang trắng |
-| Desktop idle RSS, app **đang chạy** | **730 MiB** | web 274, shell 191, Host 188, network 58 |
-| Desktop idle PSS, app **đang chạy** | **571 MiB** | PSS chia đều trang shared; số công bằng hơn RSS |
+| Desktop idle RSS, app **đang chạy** | **733 MiB** | web 272, shell 192, Host 188, network 60 |
+| Desktop idle PSS, app **đang chạy** | **577 MiB** | PSS chia đều trang shared; số công bằng hơn RSS |
 
 **Sàn bộ nhớ (vì sao < 350 MiB không khả thi):** shell GTK/WebKit riêng đã 191 MiB RSS, Host Node 188 MiB — cộng lại 379 MiB RSS **trước khi** webview được tính. Muốn xuống 350 MiB phải bỏ WebKitGTK hoặc bỏ Node khỏi tiến trình, tức là đổi kiến trúc. Những gì đã làm và đo được:
 

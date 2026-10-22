@@ -85,8 +85,20 @@ env -i PATH=/usr/bin:/bin HOME="$work/home" TMPDIR="$work/tmp" \
   "$shell" > "$work/out" 2> "$work/err" &
 shell_pid=$!
 
-for _ in $(seq 1 600); do
-  [ "$(grep -c '"event":"page-load-finished"' "$work/err" 2>/dev/null)" -ge 2 ] && break
+# The shell loads the start page, then the Host's page; the number of
+# finished loads therefore settles once the application is on screen. Waiting
+# for a fixed count would stop at the Host's first response instead.
+last=0
+stable=0
+for _ in $(seq 1 1200); do
+  count=$(grep -c '"event":"page-load-finished"' "$work/err" 2>/dev/null)
+  if [ "$count" = "$last" ]; then
+    stable=$((stable + 1))
+    [ "$stable" -ge 30 ] && break
+  else
+    stable=0
+    last=$count
+  fi
   kill -0 "$shell_pid" 2>/dev/null || break
   sleep 0.1
 done
