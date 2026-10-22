@@ -11,6 +11,7 @@ pub mod follow;
 pub mod models;
 pub mod session;
 pub mod sessions;
+pub mod terminal;
 pub mod transport;
 
 #[derive(Debug, thiserror::Error)]
