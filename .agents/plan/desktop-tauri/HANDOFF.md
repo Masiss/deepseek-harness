@@ -7,7 +7,7 @@ Cập nhật 2026-10-22. Mục đích: session mới đọc file này là biết
 | Mục | Giá trị |
 |---|---|
 | Nhánh | `chore/web-bun-migration` (upstream `origin/master` không đụng) |
-| HEAD | `fbe6ea0fe7` (D41–D43) + commit Goal 2 (2026-10-22) — **chưa push**; xem `git log -1` |
+| HEAD | `fbe6ea0fe7` (D41–D43) + 3 commit Goal 2 (2026-10-22) — **chưa push**; xem `git log -3` |
 | Version | `0.2.1-rc.3` (đã bump **toàn bộ** 343 package — xem bẫy §5) |
 | Release đã publish | `desktop-v0.2.1-rc.3-linux-x64` + `-linux-arm64`, feed `desktop-feed-linux-{x64,arm64}` **có chữ ký Ed25519** ✓ |
 | Lint | `bun run lint` sạch (1 warning có sẵn ở `packages/experimental/client-ui-cot-translation`) |
@@ -37,7 +37,7 @@ Mục tiêu và acceptance đầy đủ ở `PLAN.md` § "Cấu trúc mục tiê
 - **Update trọn luồng** (`update-flow-probe.mjs`): sau D40 probe này **bị hỏng** (manifest schema 1 + không ký) và đã sửa: schemaVersion 2, ký Ed25519 bằng key tạm, truyền `DSH_DESKTOP_UPDATE_PUBLIC_KEY`; giờ `RESULT update-flow=OK` (prompt download/install, `restart`, ảnh được thay).
 - **Profile contention**: `desktop-lease-probe.sh` vẫn `OK`.
 - **Sharp fallback**: `image-parity-probe.sh` 11/11; khác byte JPEG/GIF/TIFF/resize là đã chấp nhận (D39).
-- **Benchmark**: Host cold start 1,98–2,09 s (warm), idle RSS 179–182 MiB; shell 0,55 s → 0,77 s → 4,54 s trên weston headless.
+- **Benchmark**: Host cold start 1,98–2,09 s (warm), idle RSS 179–182 MiB; shell 0,55 s → 0,77 s → 4,54 s trên weston headless. `resident-probe.sh`: idle toàn app **RSS 605–607 MiB / PSS 430–432 MiB** (shell 192 + Host 169 + WebKit 167 + network 56).
 
 Còn lại của Goal 2: đưa các probe mới vào CI; bằng chứng GUI thật (CSP/console); crash giữa download/rename; portability matrix (Windows ACL/sandbox/Office path/update driver); đo WebView RSS.
 

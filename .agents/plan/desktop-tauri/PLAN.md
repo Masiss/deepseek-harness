@@ -116,8 +116,10 @@ Không dùng L0 để thay L2/L3. Một mục chỉ được coi là "release-gr
 | Host cold start (first run) | **4,83 s** | Page cache lạnh |
 | Shell: window → start page → Host URL | **0,55 s → 0,77 s → 4,54 s** | `cold-start-probe.sh` (weston headless) |
 | Host idle RSS | **179–182 MiB** | Chưa gồm WebKitGTK |
+| Desktop idle RSS (shell + Host + WebKit) | **605–607 MiB** | `resident-probe.sh`, 2 mẫu, 10 s settle |
+| Desktop idle PSS (cùng cây) | **430–432 MiB** | PSS chia đều trang shared; số công bằng hơn RSS |
 
-Chưa tối ưu thêm nếu không có số đo chứng minh. Ứng viên chỉ được mở khi vượt ngân sách: RSS WebView, thời gian chờ Host, kích thước Python.
+Chưa tối ưu thêm nếu không có số đo chứng minh. Ứng viên chỉ được mở khi vượt ngân sách: WebKit (167 MiB web + 56 MiB network), shell GTK (192 MiB), Host (169 MiB), thời gian chờ Host, kích thước Python. Chưa có ngưỡng RSS cho desktop, nên chưa mở tối ưu.
 
 ### Acceptance của Goal 2
 
