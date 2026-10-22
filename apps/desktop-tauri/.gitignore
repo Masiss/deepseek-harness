@@ -6,3 +6,4 @@
 
 # Rust build output for the native client core
 /client-core/target/
+/native-app/target/

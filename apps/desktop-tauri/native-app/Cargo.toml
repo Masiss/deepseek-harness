@@ -1,0 +1,12 @@
+[package]
+name = "dsh-desktop-native-app"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Native egui desktop shell for DeepSeek Harness"
+
+[dependencies]
+# eframe provides the native window lifecycle and egui rendering without a webview.
+eframe = { version = "0.36", default-features = true }
+# client-core owns the Host transport and typed session viewer used by this shell.
+dsh-client-core = { package = "dsh-client-core", path = "../client-core" }
