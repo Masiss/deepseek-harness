@@ -1,10 +1,81 @@
 //! Native desktop shell: a pure egui window that reads the Host session inventory through client-core.
 
+mod dialog;
 mod host;
+mod updater;
 
 use dsh_client_core::{session::SessionViewer, transport::HttpTransport};
 use eframe::egui;
+use fs2::FileExt;
 use host::Host;
+use std::fs::{File, OpenOptions};
+use std::path::PathBuf;
+use tray_icon::menu::{Menu, MenuItem};
+use tray_icon::{Icon, TrayIconBuilder};
+
+
+fn lock_path() -> PathBuf {
+    let home = std::env::var_os("DSH_HOME")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|path| path.join(".deepseek-harness")))
+        .unwrap_or_else(|| PathBuf::from("."));
+    home.join(".native-app.lock")
+}
+
+fn acquire_instance_lock() -> Option<File> {
+    let path = lock_path();
+    if let Some(parent) = path.parent() {
+        if let Err(error) = std::fs::create_dir_all(parent) {
+            eprintln!("single-instance directory creation failed: {error}");
+            return None;
+        }
+    }
+    let file = match OpenOptions::new().create(true).write(true).open(path) {
+        Ok(file) => file,
+        Err(error) => {
+            eprintln!("single-instance lock open failed: {error}");
+            return None;
+        }
+    };
+    if let Err(error) = file.try_lock_exclusive() {
+        eprintln!("native app is already running: {error}");
+        return None;
+    }
+    Some(file)
+}
+
+fn setup_tray() -> Option<tray_icon::TrayIcon> {
+    let menu = Menu::new();
+    let show = MenuItem::new("Show/Hide", true, None);
+    let quit = MenuItem::new("Quit", true, None);
+    if let Err(error) = menu.append(&show) {
+        eprintln!("tray menu setup failed: {error}");
+        return None;
+    }
+    if let Err(error) = menu.append(&quit) {
+        eprintln!("tray menu setup failed: {error}");
+        return None;
+    }
+    let icon = match Icon::from_rgba(vec![0x33, 0x66, 0xcc, 0xff], 1, 1) {
+        Ok(icon) => icon,
+        Err(error) => {
+            eprintln!("tray icon setup failed: {error}");
+            return None;
+        }
+    };
+    match TrayIconBuilder::new()
+        .with_menu(Box::new(menu))
+        .with_tooltip("DeepSeek Harness")
+        .with_icon(icon)
+        .build()
+    {
+        Ok(tray) => Some(tray),
+        Err(error) => {
+            eprintln!("tray setup failed: {error}");
+            None
+        }
+    }
+}
 
 /// Application state owns the transport and the last session-list result so UI rendering stays local.
 struct DesktopApp {
@@ -16,7 +87,6 @@ struct DesktopApp {
 }
 
 impl DesktopApp {
-    /// Constructs the shell; an absent Host URL leaves the app usable in disconnected mode.
     fn new() -> Self {
         let host = Host::start();
         let host_url = host.host_url().map(str::to_owned);
@@ -54,7 +124,6 @@ impl DesktopApp {
         }
     }
 
-    /// Refreshes the visible inventory through client-core, preserving typed errors for the status line.
     fn refresh_sessions(&mut self) {
         let Some(transport) = self.transport.as_ref() else {
             return;
@@ -70,10 +139,8 @@ impl DesktopApp {
 }
 
 impl eframe::App for DesktopApp {
-    /// Logic runs before painting; nothing to do here yet.
     fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {}
 
-    /// Renders the title bar, session list, and connection status each frame.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         egui::Panel::top("title_bar").show(ui, |ui| {
             ui.heading("DeepSeek Harness");
@@ -93,6 +160,12 @@ impl eframe::App for DesktopApp {
                 for session_id in &self.sessions {
                     let _ = ui.selectable_label(false, session_id);
                 }
+            }
+            if ui.button("Open file").clicked() {
+                let _ = dialog::open_file();
+            }
+            if ui.button("Save file").clicked() {
+                let _ = dialog::save_file();
             }
         });
         egui::Panel::bottom("status").show(ui, |ui| {
@@ -114,8 +187,13 @@ impl eframe::App for DesktopApp {
     }
 }
 
-/// Starts the pure-egui native window; no webview is created.
+/// Starts the native window after enforcing single-instance ownership.
 fn main() -> eframe::Result {
+    let Some(_instance_lock) = acquire_instance_lock() else {
+        return Ok(());
+    };
+    updater::check();
+    let _tray = setup_tray();
     let options = eframe::NativeOptions::default();
     eframe::run_native(
         "DeepSeek Harness",

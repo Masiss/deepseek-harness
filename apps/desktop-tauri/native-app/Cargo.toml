@@ -10,3 +10,14 @@ description = "Native egui desktop shell for DeepSeek Harness"
 eframe = { version = "0.36", default-features = true }
 # client-core owns the Host transport and typed session viewer used by this shell.
 dsh-client-core = { package = "dsh-client-core", path = "../client-core" }
+# fs2 provides the cross-platform process lock used by the single-instance guard.
+fs2 = "0.4"
+# tray-icon provides the native system-tray menu and icon; GTK integration is unavailable in minimal builds.
+tray-icon = { version = "0.25", default-features = false, features = ["ksni"] }
+# rfd provides native file-open and file-save dialogs.
+rfd = "0.16"
+# dirs provides the user home directory for the lock file path.
+dirs = "6"
+# reqwest blocking performs the optional startup updater metadata request.
+reqwest = { version = "0.12", default-features = true, features = ["blocking", "json"] }
+serde = { version = "1", features = ["derive"] }
