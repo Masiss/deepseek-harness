@@ -149,10 +149,11 @@ Còn lại: **A07** (harness `app_ready` đã có phần WebView + CPU idle; m�
 | Shell: window → start page → Host URL → **app trên màn hình** | **0,24 s → 0,32 s → 2,53 s → 4,25 s** | `cold-start-probe.sh`; số cũ (0,77 s) chỉ đo tới trang start, app chưa nạp |
 | Host idle RSS | **179–182 MiB** | Chưa gồm WebKitGTK |
 | Desktop idle RSS, app **chưa** chạy (trang rỗng) | **605–607 MiB** | `resident-probe.sh`; đo lúc webview chỉ có trang trắng |
-| Desktop idle RSS, app **đang chạy** | **765 MiB** | web 297, shell 200, Host 189, network 58; `graphics-probe.sh`, có `webview-auth=200` |
-| Desktop idle PSS, app **đang chạy** | **597 MiB** | PSS chia đều trang shared; số công bằng hơn RSS |
+| Desktop idle RSS, app **đang chạy** (GUI thật) | **719–728 MiB** | web 330–338, shell 138–139, Host 192–193, network 58–59; `graphics-probe.sh` + đo trên session Hyprland |
+| Desktop idle PSS, app **đang chạy** (GUI thật) | **551–559 MiB** | PSS chia đều trang shared; số công bằng hơn RSS |
 | CPU idle của cả cây tiến trình | **0,4–0,6 %** | `resident-probe.sh`, cửa sổ 5 s |
-| FPS của webview (page thật) | **58–63** | đo bằng `requestAnimationFrame` trong app; compositing GPU chỉ 51–57 |
+| FPS của webview (page thật) | **57** | đo bằng `requestAnimationFrame` trong app trên session thật |
+| **Màn hình app (GUI thật)** | **phải có nội dung** | `grim` chụp eDP-1 rồi đo `content_mean`; màn đen = `content_mean≈0`, 1 màu. Đây là phép so duy nhất bắt được lỗi "webview vẽ nội bộ nhưng không hiện lên màn hình" |
 | Khối lượng tài nguyên app tải | **65 tài nguyên / 5,2 MB** | `performance.getEntriesByType('resource')` |
 
 **Còn có thể bóp, nhưng đụng kiến trúc:** web process 297 MiB (client SPA nạp 5,2 MB / 64 bundle plugin) — cắt bằng lazy-loading ở `packages/client` (ảnh hưởng cả web app); Host 189 MiB (node trần 44 MiB ⇒ phần lớn là đồ thị module của harness); shell 200 MiB (GTK + WebKit UI) và network process 58 MiB là của WebKitGTK, không cắt được nếu giữ webview.
@@ -161,9 +162,10 @@ Còn lại: **A07** (harness `app_ready` đã có phần WebView + CPU idle; m�
 
 | Thay đổi | Tác dụng | Số đo |
 |---|---|---|
-| `hardware-acceleration-policy=Never` (mặc định mới) | tắt compositing **gia tốc**, giữ renderer dmabuf | **A/B trên máy có GPU thật: RSS 724–736 (so 742–751 với compositing GPU), PSS 567–577, và FPS 58–60 (so 51–53) ⇒ nhẹ hơn *và* mượt hơn. Ảnh chụp từ chính webview: **0 pixel khác** so với đường GPU (cùng cấu hình chạy 2 lần cũng 0 ⇒ phép so lặp lại được)** |
-| Tắt page cache + WebGL (mặc định mới) | không cache tiền xử lý, không WebGL | không đo được khác biệt; UI của harness không dùng WebGL |
-| **KHÔNG** tắt renderer dmabuf | — | **Sai lầm đã sửa**: đo trong weston headless (không GPU) thì tắt dmabuf *nhẹ* hơn 73 MiB, nhưng trên session thật (GPU Intel Iris Xe) nó **nặng hơn ~185 MiB** (compositor phải copy mỗi frame) và đổi chút antialiasing (1588 pixel khác) ⇒ mặc định **giữ** dmabuf, chỉ tắt compositing gia tốc |
+| `hardware-acceleration-policy=Never` | tắt compositing **gia tốc** | **Không dùng**: webview vẽ nội bộ (rAF 60 fps) nhưng cửa sổ trên session Hyprland **đen** ⇒ không dùng làm mặc định. Đo được: RSS 724–736 (nhẹ hơn ~10 MiB) — không đáng đổi bằng màn đen |
+| Tắt page cache + WebGL | không cache tiền xử lý, không WebGL | không đo được khác biệt; UI của harness không dùng WebGL |
+| **KHÔNG** tắt renderer dmabuf | — | **Sai lầm đã sửa**: đo trong weston headless (không GPU) thì tắt dmabuf *nhẹ* hơn 73 MiB, nhưng trên session thật (GPU Intel Iris Xe) nó **nặng hơn ~185 MiB** (compositor phải copy mỗi frame) và đổi chút antialiasing (1588 pixel khác) ⇒ mặc định **giữ** dmabuf |
+| **Mặc định cuối: không chỉnh WebKit** | đường GPU + dmabuf, như WebKit mặc định | App chạy thật trên session: **RSS 719–728 MiB / PSS 551–559**, FPS 57, UI render đầy đủ. Mọi knob còn lại để `DSH_DESKTOP_WEBKIT_*` cho đo lại |
 | `--optimize-for-size` cho Host (có sẵn) | giảm heap V8 | Host 189 MiB RSS; `--max-semi-space-size` không đo được khác biệt |
 | `--jitless` cho Host (**không** dùng) | bỏ JIT code | Host 189 → 162 MiB (−27), nhưng Host sẵn sàng lúc **1269–1901 ms → 3219–3948 ms** (khởi động chậm gấp đôi) và CPU của vòng lặp agent nặng hơn ⇒ không đáng |
 

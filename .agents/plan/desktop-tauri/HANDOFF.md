@@ -43,7 +43,9 @@ Mục tiêu và acceptance đầy đủ ở `PLAN.md` § "Cấu trúc mục tiê
 
 **L1 đã có**: Desktop Linux lane xanh tại [run 39740515325](https://github.com/Masiss/deepseek-harness/actions/runs/39740515325), gồm bước mới `Desktop shell tests` (drift gate, runtime policy, CSP).
 
-**Bộ nhớ (đo lại 2026-10-22, có ảnh chụp từ chính webview)**: mặc định mới = **giữ renderer dmabuf + tắt compositing gia tốc** ⇒ 765 MiB RSS / 597 MiB PSS, FPS 58–63, **0 pixel khác** so với đường GPU. Bẫy: đo trong weston headless (không GPU) cho kết quả **ngược** (tắt dmabuf thấy nhẹ hơn 73 MiB) — trên máy có GPU thật, tắt dmabuf **nặng hơn ~185 MiB**. Đừng tin số đo headless cho đường đồ họa.
+**Bộ nhớ (đo lại 2026-10-22 trên GUI thật)**: mặc định cuối = **không chỉnh WebKit** (đường GPU + dmabuf) ⇒ **719–728 MiB RSS / 551–559 MiB PSS**, FPS 57, UI render đầy đủ. Bẫy 1: đo trong weston headless (không GPU) cho kết quả **ngược** (tắt dmabuf thấy nhẹ hơn 73 MiB) — trên máy có GPU thật, tắt dmabuf **nặng hơn ~185 MiB**. Bẫy 2: `hardware-acceleration-policy=Never` tiết kiệm ~10 MiB nhưng **cửa sổ đen** trên session (webview vẽ nội bộ 60 fps, màn hình không đổi) ⇒ **đã bỏ khỏi mặc định**; phải so *màn hình* (`grim` + `content_mean`), ảnh chụp từ webview không bắt được lỗi này.
+
+**Engine Office trong AppImage (2026-10-22)**: cây runtime không mang `@deepseek-ai/libreoffice-kit` (engine đi theo component on-demand) ⇒ plugin `office-to-pdf` của profile không import được ⇒ app in `1 entry did not activate` và mất tính năng chuyển PDF. Sửa: loader trỏ engine về stub khi không có component lẫn engine (`native/office-engine-stub/`), nên plugin activate và lượt convert báo `unavailable`. Probe `office-engine-probe.sh` (trong release lane) chứng minh cả hai trạng thái.
 
 **Perf cuối (2026-10-22, commit `c013718847` trên `chore/web-bun-migration`, CI run 39750055886 xanh ✓)**: mặc định WebKit giờ **giữ renderer dmabuf + tắt compositing gia tốc** (`hardware-acceleration-policy=Never`, cache tắt, WebGL tắt, mọi thứ qua `DSH_DESKTOP_WEBKIT_*`; đảo qua `DSH_DESKTOP_WEBKIT_LIGHT=0` để đo lại). Báo cáo bộ nhớ đã cập trong §2b.
 
