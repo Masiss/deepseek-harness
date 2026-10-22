@@ -4,6 +4,7 @@
 //! interface rendering and Host lifecycle remain outside this crate.
 
 pub mod auth;
+pub mod chat;
 pub mod envelope;
 pub mod session;
 pub mod transport;
