@@ -39,12 +39,34 @@ Goal 1 chứng minh **có thể thay Electron bằng Tauri mà không đổi lõ
 | Mốc | Nội dung | Trạng thái | Bằng chứng / việc còn lại |
 |---|---|---|---|
 | G2-M1 | Chốt D40–D43 + regression | **Xong** | Commit `fbe6ea0fe7`; build + build:check xanh; typecheck/lint/test xanh |
-| G2-M2 | User journey trên packaged runtime | **Đang làm** | Plugin + Session + profile contention + update PASS; CSP mới có boot headless; còn GUI thật và session có nội dung |
-| G2-M3 | Fault injection | **Đang làm** | 6 kịch bản Host + disk-full PASS; còn update hỏng digest ở mức packaged, crash giữa download, mất điện |
-| G2-M4 | CI evidence theo cấp | **Đang làm** | Lane Linux **xanh** ([run 39740515325](https://github.com/Masiss/deepseek-harness/actions/runs/39740515325)) + bước `Desktop shell tests`; probe packaged nằm trong release lane nhưng chưa chạy lại; chưa có CI Windows/macOS |
-| G2-M5 | Portability matrix Windows/macOS | **Đang làm** | Ma trận dưới đây; chỉ sửa blocker nhỏ, không mở full port |
-| G2-M6 | Benchmark startup/idle/footprint | **Đang làm** | Số đo dưới đây; chưa chốt ngân sách và chưa đo WebView riêng |
-| G2-M7 | Tài liệu & bàn giao | **Đang làm** | PLAN/MEMORY/HANDOFF; sẽ cập nhật sau mỗi mốc |
+| G2-M2 | User journey trên packaged runtime | **Đang làm** | Plugin + Session + profile contention + update PASS; **CSP đã đọc được trên app thật** (console WebKit bật bằng `DSH_DESKTOP_WEB_CONSOLE=1`); còn: lượt model thật **trong GUI** (B3) và bản phát hành mới (B1) |
+| G2-M3 | Fault injection | **Xong (L2)** | 6 kịch bản Host + disk-full + crash-download + crash-extract + manifest bị sửa **PASS**; còn "mất điện giữa rename" (cần fault injection ở mức filesystem/VM) |
+| G2-M4 | CI evidence theo cấp | **Đang làm** | Lane Linux **xanh** ([run 39774116751](https://github.com/Masiss/deepseek-harness/actions/runs/39774116751)) gồm `Desktop shell tests` + `Keyless recorded-session replay`; **release lane chưa chạy lại** sau wave audit (B2); chưa có CI Windows/macOS |
+| G2-M5 | Portability matrix Windows/macOS | **Đang làm** | Ma trận dưới đây; chỉ sửa blocker nhỏ, không mở full port (B5) |
+| G2-M6 | Benchmark startup/idle/footprint | **Đang làm** | Số đo dưới đây trên **GUI thật**; chưa chốt ngân sách và chưa đo workload typing/scroll (B4) |
+| G2-M7 | Tài liệu & bàn giao | **Đang làm** | PLAN/MEMORY/HANDOFF; cập nhật sau mỗi mốc và mỗi quyết định |
+
+### Kế hoạch chốt Goal 2 (2026-10-22)
+
+Sáu bước theo thứ tự giá trị. **B1 là bước chặn người dùng**: AppImage đã sửa (engine Office) chỉ tới được máy sau khi có bản phát hành mới.
+
+| Bước | Nội dung | Lệnh | Bằng chứng đích |
+|---|---|---|---|
+| **B1** | Phát hành `0.2.1-rc.4` cho **mọi** package của family | `bun run release:dsh 0.2.1-rc.4` (tự commit + in lệnh tag) → `git tag desktop-v0.2.1-rc.4 && git push fork desktop-v0.2.1-rc.4` | Lane release xanh (2 target); feed `desktop-feed-linux-{x64,arm64}` ký Ed25519; AppImage tải về **không** còn `1 entry did not activate`; `/api/officeToPdf/render` tồn tại (404 ⇒ plugin chưa activate) |
+| **B2** | L1 packaged: chạy lại release lane trên code hiện tại | Tag ở B1 kích hoạt `desktop-release.yml` | 6 probe xanh: `entry-parity`, `packaged-journey`, `fault`, `crash-download`, `crash-extract`, **`office-engine`** (mới) |
+| **B3** | Bằng chứng GUI thật: CSP + lượt model thật trong app | App trên session Hyprland; `curl -sI` đọc header CSP của trang Host phục vụ; `DSH_DESKTOP_WEB_CONSOLE=1`; gõ một prompt trong composer (route Codex `gpt-5.6-luna`) | Header CSP có `default-src 'self'`, `object-src 'none'`, **không** `unsafe-eval`; ảnh `grim` chứa câu trả lời của model; `content_mean` > 0 (không màn đen) |
+| **B4** | Chốt ngân sách bộ nhớ + workload typing/scroll (A07) | Đo workload trên **mặc định** — sau khi revert, không còn cấu hình thay thế để A/B, nên phép so chuyển thành số ngân sách | §Benchmark có ngân sách ghi rõ (idle RSS ≤ 750 MiB; sàn đo được 719–728; `< 350 MiB` **không khả thi** với WebKitGTK + Node) và số độ trễ input→paint lặp lại được |
+| **B5** | Portability: sửa blocker nhỏ đọc được từ source | Ma trận §Portability matrix | Mỗi dòng có owner hoặc điều kiện; mục "nhỏ và độc lập" đã sửa kèm test |
+| **B6** | Lượt soi riêng cho phần deferred của audit | `native/{koffi,flock}.cjs`, `execve`/`fcntl` | Kết luận ghi ở MEMORY: sửa / chấp nhận / cần môi trường ngoài |
+
+**Bẫy của B1 (đã mắc lần trước):**
+
+- Một bản release dùng **một** version cho cả family ⇒ bump thiếu một package là `pack-linux.sh` fail (`dsh release members must share one version`) hoặc `prepare-linux-runtime.ts` fail (`@deepseek-ai/dsh@0.2.1-rc.3 does not match Desktop 0.2.1-rc.4`).
+- Private key ký release **không** được nằm trên đĩa (đã từng có bản sao ở `/tmp/opencode/signkey.pem` mode 644 ⇒ đã xoá). Key chỉ ở secret `DSH_RELEASE_SIGNING_KEY` của fork.
+- `TMPDIR` trong repo làm hỏng lane snapshot ⇒ đặt `TMPDIR=/tmp/opencode/...` hoặc `apps/desktop/.desktop-build/tmp`.
+- Tag phải trỏ vào commit đã có trên nhánh phát hành; lane release chạy theo tag, không chạy theo push.
+
+**Điều kiện dừng:** lane release đỏ ⇒ dừng ở B1, không publish tiếp, đọc log lane trước khi tag lại. B3 dừng nếu phải gõ bàn phím vào session của người dùng đang bận — bằng chứng L3 bổ sung lúc nào rảnh.
 
 ### Định nghĩa cấp bằng chứng
 
@@ -64,13 +86,13 @@ Không dùng L0 để thay L2/L3. Một mục chỉ được coi là "release-gr
 | Plugin: cài từ tarball, Host apply, restart, gỡ | `packaged-journey-probe.sh` | L2 | **PASS** (`plugin-install`, `plugin-list`, `plugin-after-restart`, `plugin-remove`) |
 | Session: tạo, rename, restart, đọc lại | `packaged-journey-probe.sh` | L2 | **PASS** (cùng `sessionId` sau restart) |
 | Hai carrier tranh profile | `desktop-lease-probe.sh` | L2 | **PASS** (`second_refused=OK`, takeover sau khi chết) |
-| CSP của release | `security-config.spec.ts` + `cold-start-probe.sh` | L0 + L2.5 | **Một phần** — config khẳng định `default-src 'self'`, `object-src 'none'`, không `unsafe-eval`; window + page load xong; chưa đọc được console WebKit thật |
+| CSP của release | `security-config.spec.ts` + `cold-start-probe.sh` + app thật | L0 + L2.5 + L3 | **Một phần** — config khẳng định `default-src 'self'`, `object-src 'none'`, không `unsafe-eval`; window + page load xong; console WebKit thật đã đọc được (`DSH_DESKTOP_WEB_CONSOLE=1`); còn đọc **header CSP** từ app đang phục vụ (B3) |
 | Sharp fallback | `image-parity-probe.sh` | L2 | **PASS 11/11**; JPEG/GIF/TIFF/resize khác byte (đã chấp nhận, D39) |
 | Update feed ký | `update-probe.sh` | L2 (shell thật, headless) | **PASS** — feed hợp lệ `available`, feed bị sửa `idle` |
 | Update trọn luồng | `update-flow-probe.mjs` | L2 | **PASS** — prompt download/install, `restart`, ảnh được thay |
 | Offline update/component | `fault-probe.sh` | L2 | **PASS** — `check-network`, `feed-network`, không cài dở |
 | Disk-full khi tải component | `disk-full-probe.sh` (dưới `isolated-run.sh`) | L2 | **PASS** — `phase=error`, `failure=download`, không còn `download-*`/`current.json` |
-| Session có nội dung + model thật | `live-transcript-probe.sh` | L3 (cần key) | **PASS** ở lần chạy trước; chưa lặp trong Goal 2 |
+| Session có nội dung + model thật | `live-transcript-probe.sh` | L3 (cần key) | **PASS** ở lần chạy trước; trong Goal 2 đã có một lượt thật qua route Codex (`gpt-5.6-luna` trả lời đúng sentinel) ở mức CLI; còn lượt thật **trong GUI** (B3) |
 | GUI thật: cửa sổ thật + WebKit thật trên Hyprland | `grim` chụp màn hình, `hyprctl clients`, `ss` đếm phiên WebSocket | **L3** | **PASS** — app render đầy đủ (sidebar, composer, chọn model), 6 phiên WebSocket tới Host, cookie phiên dùng được |
 | Welcome/onboarding | — | L3 | **Chưa có** (đã hoãn) |
 
@@ -182,8 +204,9 @@ Còn lại: **A07** (harness `app_ready` đã có phần WebView + CPU idle; m�
 
 ### Blocker hiện tại
 
+- **Bản phát hành mới**: AppImage `0.2.1-rc.3` còn lỗi engine Office (B1) — lane release chưa chạy lại từ 21/10.
 - **Chứng thư + runner macOS/Windows** cho signing, ACL, MSI/DMG, update driver.
-- **GUI thật (L3)** cần compositor + WebKit console; hiện chỉ có weston headless và probe đọc trạng thái.
+- **GUI thật (L3)**: đã có (app trên Hyprland, ảnh chụp, console WebKit) — còn một lượt model thật **trong** app (B3), và thao tác gõ cần session của người dùng rảnh tay.
 - **Power-loss/rename crash** cần fault injection ở mức filesystem hoặc VM, chưa có trong môi trường này.
 - **Image byte parity** với Electron chỉ đúng cho phiên không đính kèm ảnh (D39); muốn đóng phải port arithmetic của libvips.
 

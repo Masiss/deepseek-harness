@@ -57,6 +57,9 @@ Probe mới đã vào **release lane** (`packaged-journey`, `fault-probe`, `cras
 
 ## 3. Việc nên làm tiếp (theo thứ tự giá trị)
 
+**Kế hoạch chốt Goal 2 nằm trong `PLAN.md` § "Kế hoạch chốt Goal 2 (2026-10-22)"**: B1 phát hành `0.2.1-rc.4` → B2 chạy lại release lane → B3 bằng chứng GUI (CSP + lượt model thật) → B4 chốt ngân sách bộ nhớ + workload typing/scroll → B5 portability → B6 lượt soi phần deferred.
+
+
 ### (A) 7 phát hiện của audit bảo mật — **ĐÃ SỬA HẾT (2026-10-22)**
 Bản đầy đủ: `~/security-audit-skill/deepseek-harness/run-1/` (`REPORT.md`, `FINDINGS-DETAIL.md`, `findings.json`).
 
