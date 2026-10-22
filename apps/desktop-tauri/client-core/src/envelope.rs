@@ -70,14 +70,26 @@ impl<'de> serde::Deserialize<'de> for ResponseResult {
 
 impl RequestEnvelope {
     pub fn new(rpc_id: impl Into<String>, method: impl Into<String>, payload: Value) -> Self {
-        Self { message_type: "client-request".into(), rpc_id: rpc_id.into(), method: method.into(), payload }
+        Self {
+            message_type: "client-request".into(),
+            rpc_id: rpc_id.into(),
+            method: method.into(),
+            payload,
+        }
     }
 }
 
 impl ResponseEnvelope {
     pub fn validate(&self, expected_rpc_id: &str) -> Result<&ResponseResult, crate::Error> {
-        if self.message_type != "server-response" { return Err(crate::Error::InvalidEnvelope("server-response type")); }
-        if self.rpc_id != expected_rpc_id { return Err(crate::Error::CorrelationMismatch { expected: expected_rpc_id.into(), actual: self.rpc_id.clone() }); }
+        if self.message_type != "server-response" {
+            return Err(crate::Error::InvalidEnvelope("server-response type"));
+        }
+        if self.rpc_id != expected_rpc_id {
+            return Err(crate::Error::CorrelationMismatch {
+                expected: expected_rpc_id.into(),
+                actual: self.rpc_id.clone(),
+            });
+        }
         Ok(&self.result)
     }
 }
@@ -87,14 +99,25 @@ mod tests {
     use super::*;
     #[test]
     fn serializes_browser_request() {
-        let value = serde_json::to_value(RequestEnvelope::new("r1", "goals/get", serde_json::json!({"args":{}}))).unwrap();
-        assert_eq!(value, serde_json::json!({"type":"client-request","rpc_id":"r1","method":"goals/get","payload":{"args":{}}}));
+        let value = serde_json::to_value(RequestEnvelope::new(
+            "r1",
+            "goals/get",
+            serde_json::json!({"args":{}}),
+        ))
+        .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({"type":"client-request","rpc_id":"r1","method":"goals/get","payload":{"args":{}}})
+        );
     }
     #[test]
     fn validates_success_and_correlation() {
         let response: ResponseEnvelope = serde_json::from_value(serde_json::json!({"type":"server-response","rpc_id":"r1","result":{"ok":true,"value":7}})).unwrap();
         assert!(response.validate("r1").is_ok());
-        assert!(matches!(response.validate("r2"), Err(crate::Error::CorrelationMismatch { .. })));
+        assert!(matches!(
+            response.validate("r2"),
+            Err(crate::Error::CorrelationMismatch { .. })
+        ));
     }
     #[test]
     fn preserves_error_shape() {
