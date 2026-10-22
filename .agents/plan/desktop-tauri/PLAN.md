@@ -215,6 +215,57 @@ Lane tập trung **Linux**; **macOS và Windows để pending** cho tới khi c�
 
 ---
 
+## Goal 3 — Desktop native (egui), bỏ webview (mở 2026-10-22)
+
+**Quyết định (sau grill với chủ dự án):** bản release webview hiện tại (`0.2.1-rc.4`) là bản cuối của hướng webview; sau đó lane **chuyển hẳn** sang ứng dụng desktop native (Rust + egui) và **giữ nguyên** tính năng gốc của dsh.
+
+**Vì sao (số đo, không phải cảm tính):**
+
+| Số đo | Giá trị | Nguồn |
+|---|---|---|
+| App webview đang chạy | **719–728 MiB RSS / 551–559 MiB PSS** | đo trên session Hyprland, GUI thật |
+| WebKit (shell + web + network) với **trang trắng** | **~360–530 MiB** | `resident-probe.sh` lúc webview chỉ có trang trắng |
+| Host Node đứng một mình | **~190 MiB** (node trần 44 ⇒ 145 MiB là đồ thị module) | `resident-probe.sh` |
+| Trọng lượng client mà app nạp | 64 resource / **5,23 MB** (`dsh-web-app` 60 / 4,67 MB) | `load-weight-probe.sh` (mới 2026-10-22) |
+| **Trọng lượng nạp mà desktop không với tới được** | **0 B** | cùng probe ⇒ **đổi composition không thu được byte nào** |
+
+⇒ `< 300 MiB` **không thể đạt với WebKitGTK** (webview rỗng + Host đã > 500 MiB) ⇒ phải **bỏ webview** ⇒ UI native.
+
+**Còn giữ nguyên:** toàn bộ tính năng dsh nằm ở **Host** (tools, plugin, session, model, provider, terminal, sandbox) — client native nói chuyện với Host qua **đúng API** web client dùng ⇒ không mất tính năng harness. Mất là **bề mặt UI** (66 package `packages/client/*`) phải viết lại, và **UX mới của upstream không tự về** ⇒ có quy trình đối chiếu (M9).
+
+**Mốc (thứ tự theo rủi ro, Q13):**
+
+| Mốc | Nội dung | Cổng chặn (acceptance) |
+|---|---|---|
+| **M1** | `client-core` Rust: lớp protocol (mọi RPC + stream của Host), xác thực bằng cookie của app, reconnect, cancel | Test đối chiếu với client web trên **cùng một** Host: cùng request ⇒ cùng response ✓; unit test ✓ |
+| **M2** | Viewer: đọc session đã có, log, trạng thái tool | Chạy được trên session thật ✓, số đo RSS ghi lại ✓ |
+| **M3** | Chat: gửi prompt, stream, cancel, hiển thị tool call | Lượt model thật trong app native ✓ (probe tương tự `gui-evidence-probe.sh`) |
+| **M4** | Duyệt quyền + chọn model + danh sách session | Parity với 3 màn hình web tương ứng ✓ |
+| **M5** | Terminal (PTY) | Parity ✓ |
+| **M6** | Settings, marketplace, document preview, plugin | Parity ✓ |
+| **M7** | Đóng gói: AppImage, updater, tray, single-instance, dialog | Probe packaged xanh ✓, update flow thật ✓ |
+| **M8** | **Cổng parity**: checklist từng màn hình của web client | 100% xanh ✓ |
+| **M9** | Quy trình kịp upstream: mỗi release upstream ⇒ rà UX + checklist | Checklist trong `.agents/plan/` cập mỗi release ✓ |
+
+**Điều kiện "xong" của Goal 3 (Q14 — đủ cả bốn):**
+
+1. **Parity tính năng**: checklist từng màn hình của web client xanh hết ✓.
+2. **Bộ nhớ**: RSS của cây tiến trình **< 300 MiB**, đo trên máy thật ✓.
+3. **Probe**: các probe của lane (auth, session journey, update flow, lease) chạy trên app native ✓.
+4. **Đóng gói**: AppImage ký được + update flow thật ✓.
+
+**Rủi ro đã biết:**
+
+| Rủi ro | Xử lý |
+|---|---|
+| Lớp protocol lớn hơn dự kiến | M1 là cổng chặn đầu tiên; nếu số RPC vượt dự kiến thì báo, đổi phạm vi M2 |
+| Parity 66 package client nhiều tháng | Mốc nhỏ theo màn hình; mỗi mốc đều chạy được |
+| UX upstream trễ | M9 (checklist theo release) |
+| Sàn bộ nhớ thật của hướng native | **đang đo** (Host không mang package client-UI) — con số này quyết định có đạt < 300 MiB không |
+| Mất bản release webview để quay lại | Release `0.2.1-rc.4` là bản cuối của hướng webview và **đã publish** ✓; web client của upstream vẫn chạy bình thường ✓ |
+
+**Cách chia việc (Q15/Q16):** agent chia nhỏ từng màn hình thành task cho subagent (Codex, effort cao), review + chạy gate; **báo chủ dự án mỗi mốc** và hỏi khi có quyết định sản phẩm hoặc rủi ro lớn.
+
 # Phần I — Bối cảnh và mục tiêu
 
 ## 1.1 Hiện trạng
@@ -449,6 +500,28 @@ Tốc độ test đến từ kiến trúc client/server, không từ định d�
 **Hệ quả.** Shell Rust không thêm dòng nào; không Tauri command, không capability remote. ADR-0007 (nạp thẳng Host URL) là điều kiện tiên quyết. Hợp đồng TS phía client không đổi.
 
 **Giới hạn v1 (có chủ ý).** `browser` vắng mặt (không có tương đương `WebContentsView`). `keyboard.subscribe`, `shortcuts.subscribe`, `updates.subscribe` trả disposer không bao giờ phát: một cửa sổ, chưa có native accelerator, và client tự áp snapshot từ `get`/`edit`. `updates.status()` trả `idle` cho tới P3.
+
+## ADR-0012 — Desktop native (egui) thay webview; Tauri rời khỏi lane
+
+**Trạng thái:** accepted · 2026-10-22 (sau grill với chủ dự án)
+
+**Bối cảnh.** Bản release webview `0.2.1-rc.4` là bản cuối của hướng webview. Số đo trên máy thật: app đang chạy giữ **719–728 MiB RSS**; phần WebKit giữ ~530 MiB **ngay cả khi trang trắng**; Host Node giữ ~190 MiB. Mục tiêu `< 300 MiB` không thể đạt với WebKitGTK. Đo thêm: app chỉ nạp phần client mà nó dùng (trọng lượng không với tới được = **0 B**) ⇒ **đổi composition không giải quyết vấn đề bộ nhớ**; chỉ bỏ webview mới giải quyết.
+
+**Quyết định.** Ứng dụng desktop viết UI bằng **Rust + egui** trên `tao`/`winit`; **Tauri rời khỏi lane** (upstream giữ Electron của họ; lane giữ Electron cầu tạm ở upstream ✓). Host **vẫn là Node sidecar** ✓ — toàn bộ tính năng dsh nằm ở Host ✓ và client native dùng **cùng API** với web client ✓. Profile desktop **không mang** package client-UI ✓ (web profile của upstream vẫn giữ nguyên ✓).
+
+**Hệ quả.**
+
+- Rust trở thành phần lớn của *client*; phần *shell* Tauri (updater AppImage, tray, single-instance, dialog, cửa sổ + auth) được port sang `tao`/`winit` ✓; `host.rs` (sidecar + frame NDJSON) tái dùng nguyên ✓.
+- Bề mặt UI phải viết lại theo `packages/client/*` (66 package) ⇒ **UX upstream không tự về** ⇒ quy trình đối chiếu theo release (M9) ✓.
+- Code Rust chia theo vai: `client-core` (protocol) dùng chung cho app egui **và** TUI/CLI sau này ✓.
+- Sàn bộ nhớ: Host không mang client-UI là con số đang đo; mục tiêu `< 300 MiB` (Q14) là điều kiện xong ✓.
+
+**Phương án bị loại.**
+
+- **Tauri + webview** (hướng hiện tại): ~720 MiB ⇒ không đạt mục tiêu ✗.
+- **Tauri + UI nhúng egui**: Tauri v2 không host được UI native ✓ ⇒ vô nghĩa ✗.
+- **Bỏ Host Node, viết lại toàn bộ bằng Rust**: phá plugin ecosystem (ADR-0001 đã loại ✓) ✗.
+
 
 ---
 

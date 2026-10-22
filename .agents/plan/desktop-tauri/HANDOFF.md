@@ -67,6 +67,16 @@ Mục tiêu và acceptance đầy đủ ở `PLAN.md` § "Cấu trúc mục tiê
 | Credential Codex thật | `~/.dsh/.credentials.yaml` ⇒ grant `llm-pi-ai/openai-codex` (OAuth, hết hạn ~25 h kể từ 21/10); nguồn gốc: `~/.pi/agent/auth.json` (script `apps/desktop-tauri/scripts/codex-credential.ts`) |
 | Cây build | `apps/desktop/.desktop-build/targets/linux-x64` — đã vá tay loader + stub (probe dùng cây này) |
 
+## 2d. Hướng mới: desktop native (egui) — 2026-10-22
+
+Sau grill với chủ dự án, lane **chuyển hẳn** sang ứng dụng native (Rust + egui, `tao`/`winit`); **Tauri rời khỏi lane**; Host Node vẫn là sidecar ✓ và client native dùng **cùng API** với web client ✓. Bản release webview `0.2.1-rc.4` là bản cuối của hướng webview ✓.
+
+- Quyết định + mốc + điều kiện "xong": `PLAN.md` § "Goal 3 — Desktop native (egui)" và ADR-0012 ✓.
+- Bốn điều kiện xong: parity đủ màn hình · **RSS < 300 MiB** (đo trên máy thật) · probe của lane chạy trên app native · AppImage ký được + update flow thật ✓.
+- Số đo quyết định: app webview **719–728 MiB**; WebKit ~530 MiB kể cả trang trắng; Host ~190 MiB; app chỉ nạp **5,23 MB** mà nó dùng (**0 B** không với tới được) ⇒ đổi composition không giúp gì, chỉ bỏ webview mới giảm được ✓.
+- Mốc đầu tiên: **M1 `client-core` Rust** (lớp protocol) — cổng chặn: đối chiếu với client web trên cùng Host ✓.
+- Việc còn đo: **sàn bộ nhớ thật** của hướng native (Host không mang package client-UI) — subagent đang đo ✓.
+
 ## 3. Việc nên làm tiếp (theo thứ tự giá trị)
 
 **Ưu tiên: Linux trước — macOS và Windows để pending** (2026-10-22). Lane chỉ mở việc cho macOS/Windows khi có runner + chứng thư; ma trận portability trong PLAN là hồ sơ, không phải việc đang làm.
