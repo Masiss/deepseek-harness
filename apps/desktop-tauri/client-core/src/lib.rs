@@ -5,6 +5,7 @@
 
 pub mod auth;
 pub mod envelope;
+pub mod session;
 pub mod transport;
 
 #[derive(Debug, thiserror::Error)]
@@ -30,5 +31,7 @@ pub enum Error {
 }
 
 impl From<serde_json::Error> for Error {
-    fn from(_: serde_json::Error) -> Self { Self::InvalidEnvelope("JSON decoding") }
+    fn from(_: serde_json::Error) -> Self {
+        Self::InvalidEnvelope("JSON decoding")
+    }
 }

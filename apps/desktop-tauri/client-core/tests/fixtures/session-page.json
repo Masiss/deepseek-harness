@@ -1,0 +1,10 @@
+{
+  "records": [
+    {"type":"event","event":{"type":"tool/call","seq":1,"time":1,"data":{"turn":1,"step":1,"callId":"call-ok","name":"read","arguments":"{}"}}},
+    {"type":"event","event":{"type":"tool/result","seq":2,"time":2,"data":{"turn":1,"step":1,"message":{"role":"tool","toolCallId":"call-ok","content":[{"type":"text","text":"done"}],"isError":false}}}},
+    {"type":"event","event":{"type":"tool/call","seq":3,"time":3,"data":{"turn":1,"step":1,"callId":"call-failed","name":"write","arguments":"{}"}}},
+    {"type":"event","event":{"type":"tool/result","seq":4,"time":4,"data":{"turn":1,"step":1,"message":{"role":"tool","toolCallId":"call-failed","content":[{"type":"text","text":"no"}],"isError":true}}}},
+    {"type":"event","event":{"type":"tool/call","seq":5,"time":5,"data":{"turn":1,"step":1,"callId":"call-pending","name":"shell","arguments":"{}"}}}
+  ],
+  "hasMore": false
+}
