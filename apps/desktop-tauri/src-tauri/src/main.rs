@@ -25,6 +25,28 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use host::HostClient;
 
+/// Whether the shell runs WebKit with its light settings.
+///
+/// @returns true unless the environment turns the light settings off.
+fn webkit_light() -> bool {
+    match std::env::var("DSH_DESKTOP_WEBKIT_LIGHT") {
+        Ok(value) => value != "0",
+        Err(_) => true,
+    }
+}
+
+/// Read a WebKit setting switch.
+///
+/// @param name - environment variable carrying the switch.
+/// @param fallback - the value the master switch implies.
+/// @returns true when the setting applies.
+fn webkit_switch(name: &str, fallback: bool) -> bool {
+    match std::env::var(name) {
+        Ok(value) => value != "0",
+        Err(_) => fallback,
+    }
+}
+
 /// Keep WebKit's idle footprint down.
 ///
 /// GPU compositing keeps a large dmabuf surface alive for an application
@@ -38,12 +60,16 @@ fn configure_webkit(window: &tauri::WebviewWindow) {
             eprintln!("desktop shell: the webview has no settings");
             return;
         };
-        // The light settings cost some rendering speed and save a large
-        // amount of memory. A measurement may want the default renderer, so
-        // the choice is a switch.
-        if std::env::var("DSH_DESKTOP_WEBKIT_LIGHT").is_ok_and(|value| value != "0") {
+        // The light settings cost rendering speed and save memory. Each one
+        // has its own switch so a measurement can attribute the saving.
+        let light = webkit_light();
+        if webkit_switch("DSH_DESKTOP_WEBKIT_ACCEL", light) {
             settings.set_hardware_acceleration_policy(HardwareAccelerationPolicy::Never);
+        }
+        if webkit_switch("DSH_DESKTOP_WEBKIT_CACHE", light) {
             settings.set_enable_page_cache(false);
+        }
+        if webkit_switch("DSH_DESKTOP_WEBKIT_WEBGL", light) {
             settings.set_enable_webgl(false);
         }
         // Console messages carry whatever the page logs, so they are written
@@ -99,6 +125,46 @@ fn clear_session_cookies(window: &tauri::WebviewWindow) {
 fn report_webview_authentication(window: &tauri::WebviewWindow) {
     let _ = window.eval(
         "if (location.protocol === 'http:') { fetch('/__dsh-desktop/updates-status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: 'null' }).then(function (response) { console.log('dsh: webview-auth=' + response.status); }).catch(function () { console.log('dsh: webview-auth=error'); }); }",
+    );
+}
+
+/// Save a picture of what the webview painted.
+///
+/// The snapshot comes from the webview itself, so a measurement can compare
+/// two renderings without a compositor that could show a window on the user's
+/// session.
+///
+/// @param window - window whose content is captured.
+/// @param path - file the picture is written to.
+#[cfg(target_os = "linux")]
+fn save_webview_snapshot(window: &tauri::WebviewWindow, path: &str) {
+    use webkit2gtk::WebViewExt;
+    let path = path.to_owned();
+    let _ = window.with_webview(move |webview| {
+        webview.inner().snapshot(
+            webkit2gtk::SnapshotRegion::Visible,
+            webkit2gtk::SnapshotOptions::NONE,
+            None::<&webkit2gtk::gio::Cancellable>,
+            move |result: Result<cairo::Surface, webkit2gtk::glib::Error>| {
+                if let Ok(surface) = result {
+                    if let Ok(mut file) = std::fs::File::create(&path) {
+                        let _ = surface.write_to_png(&mut file);
+                    }
+                }
+            },
+        );
+    });
+}
+
+/// Measure how fast the webview paints.
+///
+/// The page counts the frames it receives over two seconds, so a measurement
+/// can tell a setting that costs smoothness from one that does not.
+///
+/// @param window - window whose page is measured.
+fn report_webview_frame_rate(window: &tauri::WebviewWindow) {
+    let _ = window.eval(
+        "if (location.protocol === 'http:') { var frames = 0; var started = performance.now(); function tick() { frames += 1; var elapsed = performance.now() - started; if (elapsed < 2000) { requestAnimationFrame(tick); } else { var resources = performance.getEntriesByType('resource'); var bytes = 0; resources.forEach(function (entry) { bytes += entry.transferSize || 0; }); console.log('dsh: webview-fps=' + Math.round(frames / (elapsed / 1000))); console.log('dsh: webview-resources=' + resources.length + ' bytes=' + bytes); } } requestAnimationFrame(tick); }",
     );
 }
 
@@ -556,7 +622,11 @@ fn toggle_devtools(window: &tauri::WebviewWindow) {
 /// variable is read when the web process starts, so it is set before the
 /// window exists.
 fn tune_webkit_process_environment() {
-    if !std::env::var("DSH_DESKTOP_WEBKIT_LIGHT").is_ok_and(|value| value != "0") {
+    // The dmabuf renderer hands the frames to the compositor without a copy.
+    // Turning it off makes the shell copy every frame, which costs far more
+    // memory on a machine with a graphics device than the renderer saves, so
+    // it stays on unless a measurement asks for the copy.
+    if !webkit_switch("DSH_DESKTOP_WEBKIT_DMABUF", false) {
         return;
     }
     // SAFETY: the shell is single-threaded at this point, and no other thread
@@ -618,6 +688,11 @@ fn main() {
                             return;
                         }
                         report_webview_authentication(&window);
+                        report_webview_frame_rate(&window);
+                        if let Ok(path) = std::env::var("DSH_DESKTOP_WEBVIEW_SNAPSHOT") {
+                            #[cfg(target_os = "linux")]
+                            save_webview_snapshot(&window, &path);
+                        }
                         // The Host answers the token request with the
                         // application, but the session cookie it mints belongs
                         // to the Host's origin, and a browser only keeps it

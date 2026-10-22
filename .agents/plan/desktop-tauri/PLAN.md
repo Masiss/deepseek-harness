@@ -149,17 +149,23 @@ Còn lại: **A07** (harness `app_ready` đã có phần WebView + CPU idle; m�
 | Shell: window → start page → Host URL → **app trên màn hình** | **0,24 s → 0,32 s → 2,53 s → 4,25 s** | `cold-start-probe.sh`; số cũ (0,77 s) chỉ đo tới trang start, app chưa nạp |
 | Host idle RSS | **179–182 MiB** | Chưa gồm WebKitGTK |
 | Desktop idle RSS, app **chưa** chạy (trang rỗng) | **605–607 MiB** | `resident-probe.sh`; đo lúc webview chỉ có trang trắng |
-| Desktop idle RSS, app **đang chạy** | **763 MiB** | web ~280, shell 192, Host 188, network 60; `resident-probe.sh`, có `webview-auth=200` |
-| Desktop idle PSS, app **đang chạy** | **604 MiB** | PSS chia đều trang shared; số công bằng hơn RSS |
+| Desktop idle RSS, app **đang chạy** | **765 MiB** | web 297, shell 200, Host 189, network 58; `graphics-probe.sh`, có `webview-auth=200` |
+| Desktop idle PSS, app **đang chạy** | **597 MiB** | PSS chia đều trang shared; số công bằng hơn RSS |
 | CPU idle của cả cây tiến trình | **0,4–0,6 %** | `resident-probe.sh`, cửa sổ 5 s |
+| FPS của webview (page thật) | **58–63** | đo bằng `requestAnimationFrame` trong app; compositing GPU chỉ 51–57 |
+| Khối lượng tài nguyên app tải | **65 tài nguyên / 5,2 MB** | `performance.getEntriesByType('resource')` |
+
+**Còn có thể bóp, nhưng đụng kiến trúc:** web process 297 MiB (client SPA nạp 5,2 MB / 64 bundle plugin) — cắt bằng lazy-loading ở `packages/client` (ảnh hưởng cả web app); Host 189 MiB (node trần 44 MiB ⇒ phần lớn là đồ thị module của harness); shell 200 MiB (GTK + WebKit UI) và network process 58 MiB là của WebKitGTK, không cắt được nếu giữ webview.
 
 **Sàn bộ nhớ (vì sao < 350 MiB không khả thi):** shell GTK/WebKit riêng đã 191 MiB RSS, Host Node 188 MiB — cộng lại 379 MiB RSS **trước khi** webview được tính. Muốn xuống 350 MiB phải bỏ WebKitGTK hoặc bỏ Node khỏi tiến trình, tức là đổi kiến trúc. Những gì đã làm và đo được:
 
 | Thay đổi | Tác dụng | Số đo |
 |---|---|---|
-| `WEBKIT_DISABLE_DMABUF_RENDERER=1` + tắt page cache + WebGL + `hardware-acceleration-policy=Never` | bỏ GPU renderer, cache tiền xử lý, WebGL | **A/B thật (2 mẫu mỗi bên, app đang chạy): 763 MiB RSS / 604 MiB PSS với setting nhẹ, 836 / 658 với renderer mặc định ⇒ tiết kiệm ~73 MiB RSS, CPU idle không đổi (0,4 %). Bật/tắt bằng `DSH_DESKTOP_WEBKIT_LIGHT=0` để đo lại** |
-| `--optimize-for-size` cho Host (có sẵn) | giảm heap V8 | Host 217 → 174 MiB RSS |
-| `--jitless` cho Host (**chưa** dùng) | bỏ JIT code | Host 174 → 151 MiB RSS, đổi lại CPU rất nhiều |
+| `hardware-acceleration-policy=Never` (mặc định mới) | tắt compositing **gia tốc**, giữ renderer dmabuf | **A/B trên máy có GPU thật: RSS 724–736 (so 742–751 với compositing GPU), PSS 567–577, và FPS 58–60 (so 51–53) ⇒ nhẹ hơn *và* mượt hơn. Ảnh chụp từ chính webview: **0 pixel khác** so với đường GPU (cùng cấu hình chạy 2 lần cũng 0 ⇒ phép so lặp lại được)** |
+| Tắt page cache + WebGL (mặc định mới) | không cache tiền xử lý, không WebGL | không đo được khác biệt; UI của harness không dùng WebGL |
+| **KHÔNG** tắt renderer dmabuf | — | **Sai lầm đã sửa**: đo trong weston headless (không GPU) thì tắt dmabuf *nhẹ* hơn 73 MiB, nhưng trên session thật (GPU Intel Iris Xe) nó **nặng hơn ~185 MiB** (compositor phải copy mỗi frame) và đổi chút antialiasing (1588 pixel khác) ⇒ mặc định **giữ** dmabuf, chỉ tắt compositing gia tốc |
+| `--optimize-for-size` cho Host (có sẵn) | giảm heap V8 | Host 189 MiB RSS; `--max-semi-space-size` không đo được khác biệt |
+| `--jitless` cho Host (**không** dùng) | bỏ JIT code | Host 189 → 162 MiB (−27), nhưng Host sẵn sàng lúc **1269–1901 ms → 3219–3948 ms** (khởi động chậm gấp đôi) và CPU của vòng lặp agent nặng hơn ⇒ không đáng |
 
 Ứng viên còn lại, chỉ mở khi có ngưỡng: cắt bundle client (web process 227 MiB PSS), giảm đồ thị module của Host (182 MiB PSS), `JSC` tắt JIT (không khuyến nghị). Chưa có ngưỡng RSS cho desktop, nên chưa mở tối ưu.
 

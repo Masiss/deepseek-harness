@@ -71,6 +71,7 @@ env -i PATH=/usr/bin:/bin HOME="$work/home" TMPDIR="$work/tmp" \
   DSH_DESKTOP_NODE_BIN="$tree/runtime/bin" \
   DSH_DESKTOP_VERSION=1.0.0 DSH_CLIENT_VERSION=1.0.0 \
   DSH_DESKTOP_WEB_CONSOLE=1 \
+  DSH_DESKTOP_NODE_FLAGS="${DSH_DESKTOP_NODE_FLAGS:---optimize-for-size}" \
   DSH_DESKTOP_LAUNCH_URL=1 \
   "$shell" > "$work/out" 2> "$work/err" &
 shell_pid=$!

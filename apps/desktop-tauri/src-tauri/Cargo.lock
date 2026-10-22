@@ -824,6 +824,7 @@ dependencies = [
 name = "dsh-desktop-tauri"
 version = "0.0.0"
 dependencies = [
+ "cairo-rs",
  "serde_json",
  "tauri",
  "tauri-build",
