@@ -32,6 +32,9 @@ PY
 )
 [ -n "$archive" ] || { echo 'RESULT crash-download=FAIL reason=no-artifact'; exit 1; }
 
+# The archive copy is only needed while the probe runs; keep its logs.
+trap 'rm -f "$work/feed/$archive"' EXIT
+
 cat > "$work/sign.mjs" <<'SIGNER'
 import { generateKeyPairSync, sign } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
