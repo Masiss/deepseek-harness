@@ -22,8 +22,7 @@ shell="$repo/apps/desktop-tauri/src-tauri/target/release/dsh-desktop-tauri"
 [ -x "$shell" ] || { echo "RESULT shell=missing"; exit 1; }
 [ -x "$tree/bin/desktop-host" ] || { echo "RESULT host=missing"; exit 1; }
 
-work=${DSH_RESIDENT_WORK:-/tmp/dsh-resident}
-rm -rf "$work"
+work=${DSH_RESIDENT_WORK:-$(mktemp -d /tmp/dsh-resident.XXXXXX)}
 mkdir -p "$work/run" "$work/home" "$work/tmp"
 chmod 700 "$work/run"
 
@@ -39,26 +38,8 @@ trap cleanup EXIT
 
 # Stop only the shell's descendants, so a probe failure cannot reach the
 # user's session applications.
-kill_tree() {
-  local root=$1
-  python3 - "$root" <<'PY'
-import os, signal, subprocess, sys
-root = int(sys.argv[1])
-rows = {}
-for line in subprocess.check_output(['ps', '-eo', 'pid=,ppid='], text=True).splitlines():
-    pid, ppid = line.split()
-    rows.setdefault(int(ppid), []).append(int(pid))
-stack = [root]
-while stack:
-    pid = stack.pop()
-    for child in rows.get(pid, []):
-        stack.append(child)
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-PY
-}
+# shellcheck source=probe-lib.sh
+. "$repo/apps/desktop-tauri/scripts/probe-lib.sh"
 
 display=""
 for _ in $(seq 1 100); do
@@ -82,30 +63,30 @@ env -i PATH=/usr/bin:/bin HOME="$work/home" TMPDIR="$work/tmp" \
   DSH_DESKTOP_PNPM_ENTRY="$tree/runtime/primary-runtime/dependencies/pnpm/bin/pnpm.mjs" \
   DSH_DESKTOP_NODE_BIN="$tree/runtime/bin" \
   DSH_DESKTOP_VERSION=1.0.0 DSH_CLIENT_VERSION=1.0.0 \
+  DSH_DESKTOP_WEB_CONSOLE=1 \
+  DSH_DESKTOP_WEBKIT_LIGHT="${DSH_DESKTOP_WEBKIT_LIGHT:-1}" \
   "$shell" > "$work/out" 2> "$work/err" &
 shell_pid=$!
 
 # The shell loads the start page, then the Host's page; the number of
 # finished loads therefore settles once the application is on screen. Waiting
 # for a fixed count would stop at the Host's first response instead.
-last=0
-stable=0
-for _ in $(seq 1 1200); do
-  count=$(grep -c '"event":"page-load-finished"' "$work/err" 2>/dev/null)
-  if [ "$count" = "$last" ]; then
-    stable=$((stable + 1))
-    [ "$stable" -ge 30 ] && break
-  else
-    stable=0
-    last=$count
-  fi
+auth=none
+for _ in $(seq 1 600); do
+  auth=$(grep -ho 'dsh: webview-auth=[A-Za-z0-9]*' "$work/out" "$work/err" 2>/dev/null | tail -1)
+  [ "$auth" = "dsh: webview-auth=200" ] && break
   kill -0 "$shell_pid" 2>/dev/null || break
-  sleep 0.1
+  sleep 0.25
 done
 sleep "$settle"
 
+echo "RESULT webview_auth=$auth"
+if [ "$auth" != "dsh: webview-auth=200" ]; then
+  echo "RESULT resident=FAIL reason=webview-not-authorized"
+fi
+
 python3 - "$shell_pid" <<'PY'
-import subprocess, sys
+import os, subprocess, sys, time
 root = int(sys.argv[1])
 rows = {}
 for line in subprocess.check_output(['ps', '-eo', 'pid=,ppid=,rss=,comm='], text=True).splitlines():
@@ -141,6 +122,38 @@ while stack:
     parts.append((rss, pid, comm))
     stack.extend(children.get(pid, []))
 parts.sort(reverse=True)
+
+def cpu_ticks(pids):
+    ticks = 0
+    for pid in pids:
+        try:
+            with open(f'/proc/{pid}/stat') as stat:
+                fields = stat.read().rsplit(')', 1)[1].split()
+        except OSError:
+            continue
+        ticks += int(fields[11]) + int(fields[12])
+    return ticks
+
+def usage(pids):
+    used = 0
+    for pid in pids:
+        try:
+            with open(f'/proc/{pid}/stat') as stat:
+                fields = stat.read().rsplit(')', 1)[1].split()
+        except OSError:
+            continue
+        used += int(fields[11]) + int(fields[12])
+    return used
+
+pids = sorted(seen)
+before = usage(pids)
+started = time.monotonic()
+time.sleep(5)
+after = usage(pids)
+elapsed = time.monotonic() - started
+hz = os.sysconf('SC_CLK_TCK')
+percent = (after - before) / hz / elapsed * 100 if elapsed > 0 else 0.0
+print(f'RESULT cpu_idle_percent={percent:.1f} window_seconds={elapsed:.1f} processes={len(pids)}')
 print(f'RESULT resident=OK total_mib={total / 1024:.1f} pss_mib={shared / 1024:.1f} processes={len(parts)}')
 for rss, pid, comm in parts:
     print(f'RSS {rss / 1024:7.1f} MiB {pid:8d} {comm}')

@@ -11,6 +11,8 @@
 set -u
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+# shellcheck source=probe-lib.sh
+. "$repo/apps/desktop-tauri/scripts/probe-lib.sh"
 target=${DSH_DESKTOP_TARGET:-linux-x64}
 tree=$repo/apps/desktop/.desktop-build/targets/$target
 mkdir -p "$tree/probe"
@@ -23,8 +25,7 @@ shell_pid=""
 
 cleanup() {
   [ -n "$shell_pid" ] && kill -9 "$shell_pid" 2>/dev/null
-  ps -eo pid,args --no-headers | grep -F "release/dsh-desktop-tauri" | grep -v grep | awk '{print $1}' \
-    | while read -r pid; do kill -9 "$pid" 2>/dev/null; done
+  kill_tree "$shell_pid"
   true
 }
 trap cleanup EXIT
@@ -34,6 +35,7 @@ boot_shell() {
   local run=$1
   mkdir -p "$run"
   env DSH_DESKTOP_HOST_BIN="$tree/bin/desktop-host" \
+  DSH_DESKTOP_LAUNCH_URL=1 \
     DSH_DESKTOP_RUNTIME_DIR="$tree/dsh" \
     DSH_DESKTOP_PROJECT_DIR="$tree/project" \
     DSH_DESKTOP_PRIMARY_RUNTIME="$tree/runtime/primary-runtime" \
@@ -73,6 +75,7 @@ echo "lease_owner=$(tr -d '\n' < "$lease")"
 
 # A second Host on the same state finds the lease taken and must refuse.
 env DSH_DESKTOP_HOST_BIN="$tree/bin/desktop-host" \
+  DSH_DESKTOP_LAUNCH_URL=1 \
   DSH_DESKTOP_RUNTIME_DIR="$tree/dsh" \
   DSH_DESKTOP_PROJECT_DIR="$tree/project" \
   DSH_DESKTOP_PRIMARY_RUNTIME="$tree/runtime/primary-runtime" \

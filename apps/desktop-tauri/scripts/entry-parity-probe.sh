@@ -16,8 +16,7 @@ set -u
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 target=${1:-linux-x64}
 tree=$(CDPATH= cd -- "$repo/apps/desktop/.desktop-build/targets/$target" && pwd)
-work="$tree/probe/entry-parity"
-rm -rf "$work"
+work=$(mktemp -d "$tree/probe/entry-parity.XXXXXX")
 mkdir -p "$work/home" "$work/tmp"
 
 host="$tree/dsh/node_modules/@deepseek-ai/dsh-desktop-host"

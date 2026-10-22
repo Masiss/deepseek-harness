@@ -86,6 +86,24 @@ Chạy app thật trên Hyprland của máy (Hyprland 0.56.2, `grim`/`wtype` có
 
 Ngoài ra: bật `enable-write-console-messages-to-stdout` của WebKit ⇒ **mọi message console của webview (kể cả CSP) rơi vào log của shell** ⇒ đây là cơ chế lấy bằng chứng CSP ở mức L3.
 
+### Sửa theo source audit L3 (2026-10-22)
+
+Bản audit ở `~/downloads/DSH_L3_Source_Audit_b0a2313d09.md`, kết luận của tôi ở `…verdict.md`. Đã sửa theo thứ tự đề xuất:
+
+| Mã | Việc | Kết quả |
+|---|---|---|
+| A01 | Gate phải chứng minh **chính WebView** đã authorized, không phải `curl` của probe | Shell hỏi Host từ trong page bằng cookie của browser và ghi `dsh: webview-auth=<status>`; probe chỉ PASS khi thấy `200`. Repro `repro-probe-false-pass.sh` ⇒ **FIXED** (trước đó: `cold_start=OK` với webview 401) |
+| A02 | Probe không giết tiến trình không thuộc nó, không đụng thư mục cố định | `probe-lib.sh` có `kill_tree`; mọi probe dùng `mktemp -d` và chỉ giết cây tiến trình của mình. Repro `repro-probe-cleanup-hazard.sh` ⇒ **FIXED** |
+| A03 | Cookie jar phình theo port ⇒ `431` không có đường recovery | Shell xoá cookie `dsh-auth-*` trong cookie store của WebKit trước lần đổi token. Đo: sau 3 lần mở app, jar vẫn **1 cookie** (279 B) |
+| A04 | Host chết sau READY ⇒ shell im lặng | `host.rs` báo lỗi cho cả trường hợp trước và sau READY, `ready` về false; có unit test. Repro `repro-host-death-after-ready.sh` ⇒ **FIXED** |
+| A05 | Retry token so **origin** (host+port), có báo lỗi khi exchange không xong | Đã đổi sang `origin()`, và lần lặp thứ hai vẫn còn token ⇒ shell báo "the Host did not accept the session token" |
+| A06 | Console của webview không được bật sẵn trong release | Chỉ bật khi `DSH_DESKTOP_WEB_CONSOLE=1`; probe bật khi cần bằng chứng CSP |
+| A08 | Quit chặn event loop 5 s | `request_quit` hỏi Host ở thread riêng, câu trả lời về event loop |
+| X-01 | Launch token rơi vào stderr/journal | Shell chuyển tiếp stderr của Host đã **redact** token (unit test); `DSH_DESKTOP_LAUNCH_URL=1` để probe cần URL thì mới giữ nguyên |
+| X-02 | Comment thừa trong `cold-start-probe.sh` | Đã xoá khi viết lại probe |
+
+Còn lại: **A07** (harness `app_ready` đã có phần WebView + CPU idle; mới thiếu workload A/B typing/scroll), và **cổng hồi quy cho L3-1/L3-2/L3-3** vẫn chưa có (chỉ có unit test phía Host, chưa có bằng chứng WebKit thật cho `custom-protocol` và 431).
+
 ### Fault matrix
 
 | Lỗi | Kỳ vọng | Bằng chứng | Kết quả |
@@ -131,15 +149,15 @@ Ngoài ra: bật `enable-write-console-messages-to-stdout` của WebKit ⇒ **m�
 | Shell: window → start page → Host URL → **app trên màn hình** | **0,24 s → 0,32 s → 2,53 s → 4,25 s** | `cold-start-probe.sh`; số cũ (0,77 s) chỉ đo tới trang start, app chưa nạp |
 | Host idle RSS | **179–182 MiB** | Chưa gồm WebKitGTK |
 | Desktop idle RSS, app **chưa** chạy (trang rỗng) | **605–607 MiB** | `resident-probe.sh`; đo lúc webview chỉ có trang trắng |
-| Desktop idle RSS, app **đang chạy** | **733 MiB** | web 272, shell 192, Host 188, network 60 |
-| Desktop idle PSS, app **đang chạy** | **577 MiB** | PSS chia đều trang shared; số công bằng hơn RSS |
+| Desktop idle RSS, app **đang chạy** | **763 MiB** | web ~280, shell 192, Host 188, network 60; `resident-probe.sh`, có `webview-auth=200` |
+| Desktop idle PSS, app **đang chạy** | **604 MiB** | PSS chia đều trang shared; số công bằng hơn RSS |
+| CPU idle của cả cây tiến trình | **0,4–0,6 %** | `resident-probe.sh`, cửa sổ 5 s |
 
 **Sàn bộ nhớ (vì sao < 350 MiB không khả thi):** shell GTK/WebKit riêng đã 191 MiB RSS, Host Node 188 MiB — cộng lại 379 MiB RSS **trước khi** webview được tính. Muốn xuống 350 MiB phải bỏ WebKitGTK hoặc bỏ Node khỏi tiến trình, tức là đổi kiến trúc. Những gì đã làm và đo được:
 
 | Thay đổi | Tác dụng | Số đo |
 |---|---|---|
-| `WEBKIT_DISABLE_DMABUF_RENDERER=1` | bỏ dmabuf của GPU renderer | web process 167 → 114 MiB RSS (trang trắng) |
-| Tắt page cache + WebGL, `hardware-acceleration-policy=Never` | bỏ cache tiền xử lý và WebGL | web process PSS 167 → 68 MiB |
+| `WEBKIT_DISABLE_DMABUF_RENDERER=1` + tắt page cache + WebGL + `hardware-acceleration-policy=Never` | bỏ GPU renderer, cache tiền xử lý, WebGL | **A/B thật (2 mẫu mỗi bên, app đang chạy): 763 MiB RSS / 604 MiB PSS với setting nhẹ, 836 / 658 với renderer mặc định ⇒ tiết kiệm ~73 MiB RSS, CPU idle không đổi (0,4 %). Bật/tắt bằng `DSH_DESKTOP_WEBKIT_LIGHT=0` để đo lại** |
 | `--optimize-for-size` cho Host (có sẵn) | giảm heap V8 | Host 217 → 174 MiB RSS |
 | `--jitless` cho Host (**chưa** dùng) | bỏ JIT code | Host 174 → 151 MiB RSS, đổi lại CPU rất nhiều |
 

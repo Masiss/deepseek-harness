@@ -13,6 +13,8 @@
 set -u
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+# shellcheck source=probe-lib.sh
+. "$repo/apps/desktop-tauri/scripts/probe-lib.sh"
 target=${DSH_DESKTOP_TARGET:-linux-x64}
 tree=$repo/apps/desktop/.desktop-build/targets/$target
 mkdir -p "$tree/probe"
@@ -76,8 +78,7 @@ cleanup() {
   kill -9 "$feed_pid" 2>/dev/null
   kill -9 "$weston_pid" 2>/dev/null
   rm -rf "$runtime_dir" 2>/dev/null
-  ps -eo pid,args --no-headers | grep -F "release/dsh-desktop-tauri" | grep -v grep | awk '{print $1}' \
-    | while read -r pid; do kill -9 "$pid" 2>/dev/null; done
+  kill_tree "$shell_pid"
   true
 }
 trap cleanup EXIT
@@ -97,6 +98,7 @@ run_shell() {
     DSH_DESKTOP_NODE_BIN="$tree/runtime/bin" \
     DSH_DESKTOP_UPDATE_FEED="http://127.0.0.1:$feed_port/manifest.json" \
     DSH_DESKTOP_UPDATE_PUBLIC_KEY="$public_key" \
+  DSH_DESKTOP_LAUNCH_URL=1 \
     DSH_DESKTOP_VERSION="1.0.0" \
     XDG_RUNTIME_DIR="$runtime_dir" WAYLAND_DISPLAY="$display" \
     DSH_HOME="$run/home" \

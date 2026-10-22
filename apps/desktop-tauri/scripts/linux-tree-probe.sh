@@ -15,6 +15,7 @@ mkdir -p "$tree/probe"
 work=$(mktemp -d "$tree/probe/linux-tree.XXXXXX")
 
 env DSH_DESKTOP_HOST_BIN="$tree/bin/desktop-host" \
+  DSH_DESKTOP_LAUNCH_URL=1 \
   DSH_DESKTOP_RUNTIME_DIR="$tree/dsh" \
   DSH_DESKTOP_PROJECT_DIR="$tree/project" \
   DSH_DESKTOP_PRIMARY_RUNTIME="$tree/runtime/primary-runtime" \
@@ -29,8 +30,7 @@ shell_pid=$!
 cleanup() {
   printf '@@DSH@@{"type":"shutdown"}\n' > /dev/null 2>&1 || true
   kill -9 "$shell_pid" 2>/dev/null
-  ps -eo pid,args --no-headers | grep -F "release/dsh-desktop-tauri" | grep -v grep | awk '{print $1}' \
-    | while read -r pid; do kill -9 "$pid" 2>/dev/null; done
+  kill_tree "$shell_pid"
   true
 }
 

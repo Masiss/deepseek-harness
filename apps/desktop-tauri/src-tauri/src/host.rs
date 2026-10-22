@@ -61,10 +61,26 @@ impl HostClient {
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .spawn()?;
         let stdin = child.stdin.take().ok_or("desktop host stdin is unavailable")?;
         let stdout = child.stdout.take().ok_or("desktop host stdout is unavailable")?;
+        let stderr = child.stderr.take().ok_or("desktop host stderr is unavailable")?;
+        // The Host prints the URL that carries its launch token, which the
+        // user needs in a terminal but not in a journal. The shell forwards
+        // the Host's output with that token hidden.
+        let show_launch_url = std::env::var("DSH_DESKTOP_LAUNCH_URL").is_ok_and(|value| value == "1");
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                let Ok(line) = line else { break };
+                if show_launch_url {
+                    eprintln!("{line}");
+                } else {
+                    eprintln!("{}", redact_token(&line));
+                }
+            }
+        });
 
         let client = Arc::new(Self {
             child: Mutex::new(child),
@@ -112,9 +128,18 @@ impl HostClient {
             line.clear();
             match reader.read_line(&mut line) {
                 Ok(0) | Err(_) => {
-                    if !self.ready.load(Ordering::SeqCst) {
-                        on_failure("the Host stopped before it was ready".to_owned());
-                    }
+                    // The Host is gone. The shell has to hear about it whether
+                    // or not the Host had reported readiness, and the shell
+                    // asks this flag to know whether the application ever
+                    // worked.
+                    let was_ready = self.ready.swap(false, Ordering::SeqCst);
+                    on_failure(
+                        if was_ready {
+                            "the Host stopped while the application was running".to_owned()
+                        } else {
+                            "the Host stopped before it was ready".to_owned()
+                        },
+                    );
                     break;
                 }
                 Ok(_) => {
@@ -133,6 +158,7 @@ impl HostClient {
                                 .get("message")
                                 .and_then(Value::as_str)
                                 .unwrap_or("unknown failure");
+                            self.ready.store(false, Ordering::SeqCst);
                             on_failure(format!("the Host failed: {message}"));
                             break;
                         }
@@ -304,6 +330,23 @@ impl HostClient {
 }
 
 /// Decode one framed line, ignoring unrelated output and malformed JSON.
+/// Hide the launch token in a line the Host printed.
+///
+/// @param line - line as the Host wrote it.
+/// @returns the line with the token's value replaced.
+fn redact_token(line: &str) -> String {
+    const MARKER: &str = "token=";
+    let Some(start) = line.find(MARKER) else { return line.to_owned() };
+    let value_start = start + MARKER.len();
+    let value_end = line[value_start..]
+        .find(|character: char| {
+            character.is_whitespace() || character == '&' || character == '"' || character == '\''
+        })
+        .map(|offset| value_start + offset)
+        .unwrap_or(line.len());
+    format!("{}token=<redacted>{}", &line[..start], &line[value_end..])
+}
+
 fn parse_frame(line: &str) -> Option<Value> {
     let payload = line.trim().strip_prefix(FRAME_PREFIX)?;
     serde_json::from_str(payload).ok()
@@ -311,7 +354,44 @@ fn parse_frame(line: &str) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_frame;
+    use super::{parse_frame, HostClient};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn reports_the_failure_when_the_host_ends_before_it_is_ready() {
+        let failures = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&failures);
+        let client = HostClient::spawn(
+            "true",
+            &[],
+            |_| {},
+            move |reason| sink.lock().expect("failure sink").push(reason),
+        )
+        .expect("the fake Host starts");
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while failures.lock().expect("failure sink").is_empty() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        assert!(!client.ready(), "a Host that ended is not ready");
+        let reported = failures.lock().expect("failure sink").clone();
+        assert!(
+            reported.iter().any(|reason| reason.contains("stopped before it was ready")),
+            "the shell has to hear that the Host stopped: {reported:?}"
+        );
+    }
+
+    #[test]
+    fn hides_the_launch_token_in_the_hosts_output() {
+        let line = "dsh web: http://127.0.0.1:41234/?token=abcDEF123";
+        let redacted = super::redact_token(line);
+        assert!(!redacted.contains("abcDEF123"), "the token must not survive: {redacted}");
+        assert!(redacted.contains("token=<redacted>"));
+        assert!(redacted.starts_with("dsh web: http://127.0.0.1:41234/?"));
+        assert_eq!(super::redact_token("no token here"), "no token here");
+    }
 
     #[test]
     fn decodes_only_framed_json_objects() {

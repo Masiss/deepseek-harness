@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Reproduce the shell's silence when the Host dies after it was ready.
+# Reproduce the shell's silence when the Host dies after it was ready, and
+# prove the shell now reports it.
 #
 # The reader stops at the end of the Host's output. When the Host had already
 # reported readiness, nothing is reported to the shell, and the readiness flag
@@ -76,8 +77,8 @@ reported=$(grep -c 'desktop shell: the Host\|the Host stopped\|the Host failed' 
 
 echo "RESULT host-died shell_alive=$alive milestones_before=$before milestones_after=$after failure_reports=$reported"
 if [ "$alive" = yes ] && [ "$reported" -eq 0 ]; then
-  echo 'RESULT repro=host-death CONFIRMED: the shell stays silent and keeps the dead page'
-  exit 0
+  echo 'RESULT repro=host-death STILL BROKEN: the shell stays silent and keeps the dead page'
+  exit 1
 fi
-echo 'RESULT repro=host-death REFUTED: the shell reported the failure'
-exit 1
+echo 'RESULT repro=host-death FIXED: the shell reported that the Host stopped'
+exit 0

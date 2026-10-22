@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reproduce the cold-start probe's false PASS.
+# Reproduce the cold-start probe's false PASS, and prove the gate refuses it.
 #
 # The probe reports `cold_start=OK` when the webview finished loading pages,
 # and checks the Host bridge with curl and a cookie jar of its own. A Host
@@ -58,9 +58,10 @@ output=$(DSH_COLD_START_WORK="$work/cold" bash "$probe" "$target" 2>&1)
 echo "$output" | grep -E '^RESULT|^MILESTONE' | head -12
 
 if echo "$output" | grep -q 'RESULT cold_start=OK'; then
-  echo "RESULT repro=false-pass CONFIRMED: the probe reports OK while the webview is unauthorized"
-  echo "$output" | grep -E '^RESULT bridge=' | head -2
-  exit 0
+  echo "RESULT repro=false-pass STILL BROKEN: the probe reports OK while the webview is unauthorized"
+  echo "$output" | grep -E '^RESULT (bridge|webview_auth)=' | head -3
+  exit 1
 fi
-echo 'RESULT repro=false-pass REFUTED: the probe failed on an unauthorized webview'
-exit 1
+echo "RESULT repro=false-pass FIXED: the probe refuses an unauthorized webview"
+echo "$output" | grep -E '^RESULT (bridge|webview_auth|cold_start)=' | head -4
+exit 0

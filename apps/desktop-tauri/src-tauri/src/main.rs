@@ -25,12 +25,11 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use host::HostClient;
 
-/// Keep WebKit's idle footprint down and surface console diagnostics.
+/// Keep WebKit's idle footprint down.
 ///
 /// GPU compositing keeps a large dmabuf surface alive for an application
 /// whose pages are mostly text; the same pages use materially less memory
-/// without it. Console messages reach stderr so a CSP refusal appears in the
-/// shell log instead of only in a developer inspector.
+/// without it.
 #[cfg(target_os = "linux")]
 fn configure_webkit(window: &tauri::WebviewWindow) {
     use webkit2gtk::{HardwareAccelerationPolicy, SettingsExt, WebViewExt};
@@ -39,17 +38,75 @@ fn configure_webkit(window: &tauri::WebviewWindow) {
             eprintln!("desktop shell: the webview has no settings");
             return;
         };
-        settings.set_hardware_acceleration_policy(HardwareAccelerationPolicy::Never);
-        settings.set_enable_page_cache(false);
-        settings.set_enable_webgl(false);
-        settings.set_enable_write_console_messages_to_stdout(true);
+        // The light settings cost some rendering speed and save a large
+        // amount of memory. A measurement may want the default renderer, so
+        // the choice is a switch.
+        if std::env::var("DSH_DESKTOP_WEBKIT_LIGHT").is_ok_and(|value| value != "0") {
+            settings.set_hardware_acceleration_policy(HardwareAccelerationPolicy::Never);
+            settings.set_enable_page_cache(false);
+            settings.set_enable_webgl(false);
+        }
+        // Console messages carry whatever the page logs, so they are written
+        // out only when an operator asks for them.
+        if std::env::var("DSH_DESKTOP_WEB_CONSOLE").is_ok_and(|value| value == "1") {
+            settings.set_enable_write_console_messages_to_stdout(true);
+        }
     }) {
         eprintln!("desktop shell: webview settings: {error}");
     }
 }
 
+/// Remove the Host's session cookies from the webview's store.
+///
+/// The Host names its session cookie after the authority it serves, and every
+/// Host listens on a port of its own, so each launch leaves a cookie behind
+/// that the next one no longer accepts. The jar grows until the request
+/// headers exceed what the server accepts, and then the application cannot
+/// reach the Host at all. Only the cookies this Host family owns are removed,
+/// and the exchange that follows mints a fresh one.
+#[cfg(target_os = "linux")]
+fn clear_session_cookies(window: &tauri::WebviewWindow) {
+    use webkit2gtk::{CookieManagerExt, WebContextExt, WebViewExt};
+    let _ = window.with_webview(|webview| {
+        let view = webview.inner();
+        let Some(context) = view.context() else { return };
+        let Some(manager) = context.cookie_manager() else { return };
+        let deleter = manager.clone();
+        manager.cookies(
+            "http://127.0.0.1/",
+            None::<&webkit2gtk::gio::Cancellable>,
+            move |result| {
+                let Ok(mut cookies) = result else { return };
+                for cookie in cookies.iter_mut() {
+                    if cookie
+                        .name()
+                        .is_some_and(|name| name.starts_with(SESSION_COOKIE_PREFIX))
+                    {
+                        deleter.delete_cookie(cookie, None::<&webkit2gtk::gio::Cancellable>, |_| {});
+                    }
+                }
+            },
+        );
+    });
+}
+
+/// Report the webview's own view of its session.
+///
+/// The page asks the Host the same question the shell asks, with the cookie
+/// the browser holds, so the answer is the webview's own. A probe reads it
+/// from the console output and can tell an authorized application from the
+/// Host's unauthorized page.
+fn report_webview_authentication(window: &tauri::WebviewWindow) {
+    let _ = window.eval(
+        "if (location.protocol === 'http:') { fetch('/__dsh-desktop/updates-status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: 'null' }).then(function (response) { console.log('dsh: webview-auth=' + response.status); }).catch(function () { console.log('dsh: webview-auth=error'); }); }",
+    );
+}
+
 /// Product name used by shell-owned copy: window title, tray tooltip, dialogs.
 const PRODUCT: &str = "DeepSeek Harness";
+
+/// Prefix of the cookie the Host keeps its browser session in.
+const SESSION_COOKIE_PREFIX: &str = "dsh-auth-";
 
 /// Interface name of the StatusNotifier watcher a tray icon registers with.
 #[cfg(target_os = "linux")]
@@ -314,8 +371,8 @@ fn close_to_background(app: &AppHandle) {
 /// still see, so both are asked about. An unreachable Host counts as active:
 /// the shell has no proof that a quit is safe, so it asks instead of
 /// discarding work.
-fn host_has_active_tasks(state: &AppState) -> bool {
-    match state.host.request("quit-inspection") {
+fn host_has_active_tasks(host: &HostClient) -> bool {
+    match host.request("quit-inspection") {
         Ok(frame) => {
             let active = frame.get("activeTasks").and_then(Value::as_bool).unwrap_or(true);
             let scheduled = frame.get("scheduledTasks").and_then(Value::as_bool).unwrap_or(true);
@@ -339,7 +396,26 @@ fn request_quit(app: &AppHandle) {
         app.exit(0);
         return;
     };
-    if !host_has_active_tasks(&state) {
+    // The Host answers on its own thread, and it may take a moment to answer.
+    // Asking it on the event loop would freeze the window and the menu for as
+    // long as the Host takes, so the question goes to a worker thread and the
+    // answer comes back to the event loop.
+    let host = state.host.clone();
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let active = host_has_active_tasks(&host);
+        let answer = handle.clone();
+        let inside = handle.clone();
+        let _ = answer.run_on_main_thread(move || finish_quit(&inside, active));
+    });
+}
+
+/// Leave the application once the running work is known.
+///
+/// @param app - handle that owns the application.
+/// @param active - whether work is still running.
+fn finish_quit(app: &AppHandle, active: bool) {
+    if !active {
         app.exit(0);
         return;
     }
@@ -480,6 +556,9 @@ fn toggle_devtools(window: &tauri::WebviewWindow) {
 /// variable is read when the web process starts, so it is set before the
 /// window exists.
 fn tune_webkit_process_environment() {
+    if !std::env::var("DSH_DESKTOP_WEBKIT_LIGHT").is_ok_and(|value| value != "0") {
+        return;
+    }
     // SAFETY: the shell is single-threaded at this point, and no other thread
     // reads the environment.
     unsafe {
@@ -521,12 +600,15 @@ fn main() {
 
             // The Host's URL, kept until the window has exchanged the token.
             let token_url: Arc<Mutex<Option<tauri::Url>>> = Arc::new(Mutex::new(None));
+            // One report per failure, so the shell does not repeat itself.
+            let reported = Arc::new(AtomicBool::new(false));
             // The window shows the bundled start page while the Host boots.
             // The Host's URL arrives later and replaces it.
             let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App(PathBuf::from("index.html")))
                 .on_page_load({
                     let token_url = Arc::clone(&token_url);
                     let retried = Arc::new(AtomicBool::new(false));
+                    let reported = Arc::clone(&reported);
                     move |window, payload| {
                         report_startup(match payload.event() {
                             tauri::webview::PageLoadEvent::Started => "page-load-started",
@@ -535,6 +617,7 @@ fn main() {
                         if payload.event() != tauri::webview::PageLoadEvent::Finished {
                             return;
                         }
+                        report_webview_authentication(&window);
                         // The Host answers the token request with the
                         // application, but the session cookie it mints belongs
                         // to the Host's origin, and a browser only keeps it
@@ -547,13 +630,32 @@ fn main() {
                         let loaded = payload.url().clone();
                         let Ok(slot) = token_url.lock() else { return };
                         let Some(target) = slot.clone() else { return };
-                        if loaded.host_str() != target.host_str() {
+                        // Only the Host's own origin may receive the token.
+                        if loaded.origin() != target.origin() {
                             return;
                         }
-                        if loaded.query().is_some_and(|query| query.contains("token=")) {
-                            return;
-                        }
+                        let carries_token = loaded
+                            .query()
+                            .is_some_and(|query| query.contains("token="));
                         if retried.swap(true, Ordering::SeqCst) {
+                            // The repetition did not complete the exchange
+                            // either, so the application has no session.
+                            if carries_token {
+                                let app = window.app_handle().clone();
+                                let reported = Arc::clone(&reported);
+                                report_host_failure(
+                                    &app,
+                                    &reported,
+                                    "the Host did not accept the session token".to_owned(),
+                                );
+                            }
+                            return;
+                        }
+                        if carries_token {
+                            // The exchange did not complete, and the
+                            // document is the Host's own, so repeating the
+                            // request from here completes it.
+                            let _ = window.navigate(target);
                             return;
                         }
                         let _ = window.navigate(target);
@@ -565,11 +667,13 @@ fn main() {
                 .theme(None)
                 .build()?;
             #[cfg(target_os = "linux")]
-            configure_webkit(&window);
+            {
+                configure_webkit(&window);
+                clear_session_cookies(&window);
+            }
             report_startup("window-created");
 
             let handle = app.handle().clone();
-            let reported = Arc::new(AtomicBool::new(false));
             let failure_handle = handle.clone();
             let failure_reported = Arc::clone(&reported);
             let ready_window = window.clone();

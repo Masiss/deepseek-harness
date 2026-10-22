@@ -28,8 +28,7 @@ set -u
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 target=${1:-linux-x64}
 tree="$repo/apps/desktop/.desktop-build/targets/$target"
-work=${DSH_FAULT_WORK:-$tree/probe/fault}
-rm -rf "$work"
+work=${DSH_FAULT_WORK:-$(mktemp -d "$tree/probe/fault.XXXXXX")}
 mkdir -p "$work"
 failures=0
 
