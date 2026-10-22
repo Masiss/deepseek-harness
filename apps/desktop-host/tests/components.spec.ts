@@ -314,19 +314,27 @@ describe.skipIf(process.platform === 'win32')('office component install', () => 
     expect(readdirSync(directory).filter(name => name.startsWith('download-'))).toEqual([])
   })
 
-  it('removes scratch files a killed Host left behind', async () => {
+  it('removes scratch files and versions the marker cannot reach', async () => {
     const { primaryRuntime, directory } = fixture()
     mkdirSync(join(directory, 'download-dead'), { recursive: true })
     writeFileSync(join(directory, 'download-dead', 'artifact'), 'partial')
     mkdirSync(join(directory, 'staging-dead'), { recursive: true })
-    mkdirSync(join(directory, 'versions', '1.0.0'), { recursive: true })
+    const keep = join(directory, 'versions', 'keep', 'runtime')
+    mkdirSync(join(keep, 'dependencies', 'python', 'bin'), { recursive: true })
+    mkdirSync(join(keep, 'dependencies', 'node', 'bin'), { recursive: true })
+    writeFileSync(join(keep, 'runtime.json'), '{}')
+    writeFileSync(join(keep, 'dependencies', 'python', 'bin', 'python3'), '')
+    writeFileSync(join(keep, 'dependencies', 'node', 'bin', 'node'), '')
+    writeFileSync(join(directory, 'current.json'), '{"version":"keep"}')
+    mkdirSync(join(directory, 'versions', 'dead'), { recursive: true })
     const component = new DesktopOfficeComponent({ feed: 'http://127.0.0.1/', directory, primaryRuntime, publicKey })
 
     await component.recover()
 
     expect(existsSync(join(directory, 'download-dead'))).toBe(false)
     expect(existsSync(join(directory, 'staging-dead'))).toBe(false)
-    expect(existsSync(join(directory, 'versions', '1.0.0'))).toBe(true)
+    expect(existsSync(join(directory, 'versions', 'dead'))).toBe(false)
+    expect(existsSync(join(directory, 'versions', 'keep'))).toBe(true)
   })
 
   it('refuses a component feed that is not HTTPS or loopback', async () => {

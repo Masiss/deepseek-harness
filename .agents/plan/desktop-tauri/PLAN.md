@@ -64,7 +64,7 @@ Không dùng L0 để thay L2/L3. Một mục chỉ được coi là "release-gr
 | Plugin: cài từ tarball, Host apply, restart, gỡ | `packaged-journey-probe.sh` | L2 | **PASS** (`plugin-install`, `plugin-list`, `plugin-after-restart`, `plugin-remove`) |
 | Session: tạo, rename, restart, đọc lại | `packaged-journey-probe.sh` | L2 | **PASS** (cùng `sessionId` sau restart) |
 | Hai carrier tranh profile | `desktop-lease-probe.sh` | L2 | **PASS** (`second_refused=OK`, takeover sau khi chết) |
-| CSP của release | `cold-start-probe.sh` + `tauri.conf.json` | L2.5 | **Một phần** — window + page load xong, không thấy CSP violation; chưa đọc được console WebKit thật |
+| CSP của release | `security-config.spec.ts` + `cold-start-probe.sh` | L0 + L2.5 | **Một phần** — config khẳng định `default-src 'self'`, `object-src 'none'`, không `unsafe-eval`; window + page load xong; chưa đọc được console WebKit thật |
 | Sharp fallback | `image-parity-probe.sh` | L2 | **PASS 11/11**; JPEG/GIF/TIFF/resize khác byte (đã chấp nhận, D39) |
 | Update feed ký | `update-probe.sh` | L2 (shell thật, headless) | **PASS** — feed hợp lệ `available`, feed bị sửa `idle` |
 | Update trọn luồng | `update-flow-probe.mjs` | L2 | **PASS** — prompt download/install, `restart`, ảnh được thay |
@@ -87,7 +87,7 @@ Không dùng L0 để thay L2/L3. Một mục chỉ được coi là "release-gr
 | Manifest/artifact bị sửa | Từ chối trước khi chạy | `update-probe.sh`, unit tests | **PASS** |
 | Scratch còn lại sau khi Host bị kill | Lần boot sau thu hồi `download-*`/`staging-*`, không đụng version | `fault-probe.sh` → `crash-leftovers` | **PASS** |
 | Kill -9 giữa lúc download | File dở còn lại, boot sau dọn sạch, không cài dở | `crash-download-probe.sh` | **PASS** (`left_before=1`, `cleaned=0`, `current=absent`) |
-| Kill giữa extract/commit | Không để lại version hỏng | Unit test `recover` + `staging-*` seeding | **Một phần** — chưa inject đúng thời điểm extract |
+| Kill -9 giữa extract | Staging và version không marker bị dọn, không cài dở | `crash-extract-probe.sh` | **PASS** (`staging_before=1`, `cleaned=0`, `versions=0`) |
 | Mất điện / kill trong lúc rename | Journal phục hồi hoặc rollback | — | **Chưa phủ** |
 
 ### Portability matrix (đọc từ source hiện tại)

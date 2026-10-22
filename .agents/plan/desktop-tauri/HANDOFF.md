@@ -35,12 +35,13 @@ Mục tiêu và acceptance đầy đủ ở `PLAN.md` § "Cấu trúc mục tiê
 - **Disk-full** (`disk-full-probe.sh` dưới `isolated-run.sh` 48 MB): tải component bị ENOSPC, `phase=error`, `failure=download`, không còn file dở/`current.json`. Source map ENOSPC/EDQUOT/EFBIG/EROFS sang `download` thay vì `download-network`; unit test mới trong `components.spec.ts`.
 - **Crash leftovers**: `DesktopOfficeComponent.recover()` chạy lúc Host khởi động, xoá `download-*`/`staging-*` còn lại, không đụng `versions/`/`current.json`; `fault-probe.sh` thêm kịch bản `crash-leftovers` ⇒ PASS.
 - **Kill giữa download**: `crash-download-probe.sh` phục vụ archive chậm, kill -9 sau khi file dở > 64 KiB; boot lại ⇒ `left_before=1`, `cleaned=0`, `current=absent`.
+- **Kill giữa extract**: `crash-extract-probe.sh` kill -9 khi `staging-*` xuất hiện; boot lại ⇒ `staging=0`, `versions=0`, không cài dở. `recover()` cũng xoá version không được `current.json` trỏ tới.
 - **Update trọn luồng** (`update-flow-probe.mjs`): sau D40 probe này **bị hỏng** (manifest schema 1 + không ký) và đã sửa: schemaVersion 2, ký Ed25519 bằng key tạm, truyền `DSH_DESKTOP_UPDATE_PUBLIC_KEY`; giờ `RESULT update-flow=OK` (prompt download/install, `restart`, ảnh được thay).
 - **Profile contention**: `desktop-lease-probe.sh` vẫn `OK`.
 - **Sharp fallback**: `image-parity-probe.sh` 11/11; khác byte JPEG/GIF/TIFF/resize là đã chấp nhận (D39).
 - **Benchmark**: Host cold start 1,98–2,09 s (warm), idle RSS 179–182 MiB; shell 0,55 s → 0,77 s → 4,54 s trên weston headless. `resident-probe.sh`: idle toàn app **RSS 605–607 MiB / PSS 430–432 MiB** (shell 192 + Host 169 + WebKit 167 + network 56).
 
-Probe mới đã vào **release lane** (`packaged-journey`, `fault-probe`, `crash-download`); chưa chạy lane đó sau khi thêm, nên chưa có L1 thật. Còn lại của Goal 2: chạy release lane để lấy L1; bằng chứng GUI thật (CSP/console); kill đúng lúc extract/commit; portability (Windows ACL/sandbox/Office path/MSI-DMG); ngưỡng RSS desktop.
+Probe mới đã vào **release lane** (`packaged-journey`, `fault-probe`, `crash-download`, `crash-extract`); chưa chạy lane đó sau khi thêm, nên chưa có L1 thật. Còn lại của Goal 2: chạy release lane để lấy L1; bằng chứng GUI thật (CSP/console); portability (Windows ACL/sandbox/Office path/MSI-DMG); ngưỡng RSS desktop.
 
 ## 3. Việc nên làm tiếp (theo thứ tự giá trị)
 

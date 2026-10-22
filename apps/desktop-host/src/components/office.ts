@@ -227,12 +227,14 @@ export class DesktopOfficeComponent {
   }
 
   /**
-   * Remove scratch files a Host killed mid-download or mid-extract left behind.
+   * Remove what a Host killed mid-download, mid-extract, or mid-commit left.
    *
    * `install()` removes its own artifacts when it fails, but a SIGKILL skips
-   * those handlers. Versions and the `current.json` marker are never touched.
+   * those handlers. A committed version is kept only when `current.json`
+   * names a complete installation; a version renamed into place before the
+   * marker was written is unreachable.
    *
-   * @returns Nothing after the scratch names are gone.
+   * @returns Nothing after the unreachable files are gone.
    */
   async recover(): Promise<void> {
     let entries: string[]
@@ -241,9 +243,21 @@ export class DesktopOfficeComponent {
     } catch {
       return
     }
-    await Promise.all(entries
-      .filter(name => name.startsWith('download-') || name.startsWith('staging-'))
-      .map(name => rm(join(this.directory, name), { recursive: true, force: true })))
+    const current = this.installed()?.version
+    let versions: string[] = []
+    try {
+      versions = readdirSync(join(this.directory, 'versions'))
+    } catch {
+      // No version directory yet.
+    }
+    await Promise.all([
+      ...entries
+        .filter(name => name.startsWith('download-') || name.startsWith('staging-'))
+        .map(name => rm(join(this.directory, name), { recursive: true, force: true })),
+      ...versions
+        .filter(name => name !== current)
+        .map(name => rm(join(this.directory, 'versions', name), { recursive: true, force: true })),
+    ])
   }
 
   /**
