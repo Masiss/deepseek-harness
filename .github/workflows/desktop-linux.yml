@@ -133,3 +133,8 @@ jobs:
 
       - name: Desktop Host tests
         run: bunx vitest run apps/desktop-host --pool=forks
+
+      # The shell's own tests cover the Electron drift gate, the runtime file
+      # policy, and the release CSP; none of them live in the Host package.
+      - name: Desktop shell tests
+        run: bunx vitest run apps/desktop-tauri --pool=forks
