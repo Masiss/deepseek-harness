@@ -19,6 +19,23 @@ mkdir -p "$tree/probe"
 work=$(mktemp -d "$tree/probe/update-probe.XXXXXX")
 mkdir -p "$work/feed" "$work/home"
 
+# A headless compositor keeps the probe's window out of the user's session.
+# The socket path has a short length limit, so its runtime directory lives in
+# the private temporary space rather than below the long build tree.
+runtime_dir=$(mktemp -d /tmp/dsh-update-run.XXXXXX)
+chmod 700 "$runtime_dir"
+XDG_RUNTIME_DIR="$runtime_dir" weston --backend=headless-backend.so --width=1280 --height=860 \
+  --no-config > "$work/weston.log" 2>&1 &
+weston_pid=$!
+display=""
+for _ in $(seq 1 100); do
+  display=$(find "$runtime_dir" -maxdepth 1 -name 'wayland-*' -type s 2>/dev/null | head -1)
+  [ -n "$display" ] && break
+  sleep 0.1
+done
+[ -n "$display" ] || { echo "RESULT compositor=FAIL"; tail -5 "$work/weston.log"; exit 1; }
+display=${display##*/}
+
 head -c 65536 /dev/urandom > "$work/feed/app.bin"
 sha=$(sha256sum "$work/feed/app.bin" | cut -d' ' -f1)
 size=$(stat -c %s "$work/feed/app.bin")
@@ -57,6 +74,8 @@ shell_pid=""
 cleanup() {
   [ -n "$shell_pid" ] && kill -9 "$shell_pid" 2>/dev/null
   kill -9 "$feed_pid" 2>/dev/null
+  kill -9 "$weston_pid" 2>/dev/null
+  rm -rf "$runtime_dir" 2>/dev/null
   ps -eo pid,args --no-headers | grep -F "release/dsh-desktop-tauri" | grep -v grep | awk '{print $1}' \
     | while read -r pid; do kill -9 "$pid" 2>/dev/null; done
   true
@@ -79,7 +98,7 @@ run_shell() {
     DSH_DESKTOP_UPDATE_FEED="http://127.0.0.1:$feed_port/manifest.json" \
     DSH_DESKTOP_UPDATE_PUBLIC_KEY="$public_key" \
     DSH_DESKTOP_VERSION="1.0.0" \
-    GDK_BACKEND=x11 \
+    XDG_RUNTIME_DIR="$runtime_dir" WAYLAND_DISPLAY="$display" \
     DSH_HOME="$run/home" \
     "$repo/apps/desktop-tauri/src-tauri/target/release/dsh-desktop-tauri" \
     > "$run/out" 2> "$run/err" &
