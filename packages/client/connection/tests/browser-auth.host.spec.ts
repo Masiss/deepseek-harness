@@ -28,7 +28,7 @@ function signedBodyCookie(store: RecordCredentials, name: string, body: string):
 
 interface ResponseState {
   status?: number
-  headers?: Readonly<Record<string, string>>
+  headers?: Readonly<Record<string, string | string[]>>
   body?: string
 }
 
@@ -85,7 +85,8 @@ function exchange(
   expect(auth.authorizeIndex(request(`${target.pathname}${target.search}`, authority), res.value, secure)).toBe(false)
   const setCookie = res.state.headers?.['set-cookie']
   if (setCookie === undefined) throw new Error('token exchange did not set a cookie')
-  return { cookie: setCookie.split(';', 1)[0]!, launchUrl, state: res.state }
+  const first = Array.isArray(setCookie) ? setCookie[0]! : setCookie
+  return { cookie: first.split(';', 1)[0]!, launchUrl, state: res.state }
 }
 
 afterEach(() => {
@@ -124,7 +125,9 @@ describe('API credentials', () => {
         return res.value.writeHead(status, headers)
       },
     }, false, publish)
-    const cookie = res.state.headers?.['set-cookie']?.split(';', 1)[0]
+    const setCookie = res.state.headers?.['set-cookie']
+    const first = Array.isArray(setCookie) ? setCookie[0] : setCookie
+    const cookie = first?.split(';', 1)[0]
     if (cookie === undefined) throw new Error('API connect did not set a cookie')
     const [name, value] = cookie.split('=') as [string, string]
     const payload = { version: 2, authority, id, issuedAt, expiresAt: issuedAt + 30 * 86_400_000 }
@@ -160,6 +163,27 @@ describe('API credentials', () => {
 })
 
 describe('BrowserAuth', () => {
+  it('expires the cookies of the Hosts this browser no longer uses', async () => {
+    const auth = await createAuth(new RecordCredentials())
+    const launchUrl = auth.authenticatedUrl('http://127.0.0.1:3080')
+    const target = new URL(launchUrl)
+    const res = response()
+
+    auth.authorizeIndex(
+      request(`${target.pathname}${target.search}`, '127.0.0.1:3080', {
+        cookie: 'dsh-auth-stale=old; dsh-auth-other=older',
+      }),
+      res.value,
+      false,
+    )
+
+    const cookies = res.state.headers?.['set-cookie']
+    const values = Array.isArray(cookies) ? cookies : [cookies ?? '']
+    expect(values.some(value => value.startsWith('dsh-auth-stale=; Max-Age=0'))).toBe(true)
+    expect(values.some(value => value.startsWith('dsh-auth-other=; Max-Age=0'))).toBe(true)
+    expect(values.some(value => value.includes('HttpOnly'))).toBe(true)
+  })
+
   it('mints one process token and a persistent authority-bound cookie', async () => {
     const store = new RecordCredentials()
     const processOwner = {}
@@ -175,7 +199,7 @@ describe('BrowserAuth', () => {
       },
     })
     expect(login.state.headers?.['set-cookie']).toMatch(/; Max-Age=2592000; Path=\/; Expires=.*; HttpOnly; SameSite=Strict$/u)
-    expect(login.state.headers?.['set-cookie']).not.toContain('Secure')
+    expect(String(login.state.headers?.['set-cookie'])).not.toContain('Secure')
     expect(first.isAuthenticated(request('/', '127.0.0.1:3080', { cookie: login.cookie }))).toBe(true)
     expect(first.isAuthenticated({
       headers: new Headers({ host: '127.0.0.1:3080', cookie: login.cookie }),
@@ -255,8 +279,9 @@ describe('BrowserAuth', () => {
     expect(auth.authorizeIndex(request(`/?token=${String(token)}`, 'gateway.example'), exchanged.value)).toBe(false)
     const setCookie = exchanged.state.headers?.['set-cookie']
     if (setCookie === undefined) throw new Error('mount exchange did not set a cookie')
+    const minted = Array.isArray(setCookie) ? setCookie[0]! : setCookie
     expect(auth.isAuthenticated(request(
-      '/', 'gateway.example', { cookie: setCookie.split(';', 1)[0]! },
+      '/', 'gateway.example', { cookie: minted.split(';', 1)[0]! },
     ))).toBe(true)
   })
 

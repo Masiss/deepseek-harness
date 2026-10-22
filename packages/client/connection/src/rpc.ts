@@ -111,7 +111,8 @@ export interface ConnectionIndexRequest extends ConnectionTrustRequest {
 
 /** Root/index response operations owned by the browser-token exchange. */
 export interface ConnectionIndexResponse {
-  writeHead(status: number, headers?: Readonly<Record<string, string>>): unknown
+  /** A response header may carry several values, as `set-cookie` does. */
+  writeHead(status: number, headers?: Readonly<Record<string, string | string[]>>): unknown
   end(body?: string): unknown
 }
 

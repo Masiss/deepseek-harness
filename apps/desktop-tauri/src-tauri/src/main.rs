@@ -14,7 +14,7 @@ mod locale;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -24,6 +24,29 @@ use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, Wind
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use host::HostClient;
+
+/// Keep WebKit's idle footprint down and surface console diagnostics.
+///
+/// GPU compositing keeps a large dmabuf surface alive for an application
+/// whose pages are mostly text; the same pages use materially less memory
+/// without it. Console messages reach stderr so a CSP refusal appears in the
+/// shell log instead of only in a developer inspector.
+#[cfg(target_os = "linux")]
+fn configure_webkit(window: &tauri::WebviewWindow) {
+    use webkit2gtk::{HardwareAccelerationPolicy, SettingsExt, WebViewExt};
+    if let Err(error) = window.with_webview(|webview| {
+        let Some(settings) = webview.inner().settings() else {
+            eprintln!("desktop shell: the webview has no settings");
+            return;
+        };
+        settings.set_hardware_acceleration_policy(HardwareAccelerationPolicy::Never);
+        settings.set_enable_page_cache(false);
+        settings.set_enable_webgl(false);
+        settings.set_enable_write_console_messages_to_stdout(true);
+    }) {
+        eprintln!("desktop shell: webview settings: {error}");
+    }
+}
 
 /// Product name used by shell-owned copy: window title, tray tooltip, dialogs.
 const PRODUCT: &str = "DeepSeek Harness";
@@ -128,7 +151,7 @@ fn host_command() -> Result<(String, Vec<String>), String> {
 ///
 /// @param app - handle used to look the window up by label.
 fn show_main(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = application_window(app) {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
@@ -139,9 +162,18 @@ fn show_main(app: &AppHandle) {
 ///
 /// @param app - handle that owns the window.
 fn hide_main(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = application_window(app) {
         let _ = window.hide();
     }
+}
+
+/// The window the user interacts with: the application, or the start page
+/// while the Host is still booting.
+///
+/// @param app - handle that owns the windows.
+/// @returns The application window, or the start page before it exists.
+fn application_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
+    app.get_webview_window("main")
 }
 
 /// Whether a StatusNotifier host can actually display a tray icon.
@@ -406,7 +438,7 @@ fn build_app_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 /// @param app - handle that owns the window.
 /// @param command - menu item id.
 fn run_menu_command(app: &AppHandle, command: &str) {
-    let Some(window) = app.get_webview_window("main") else { return };
+    let Some(window) = application_window(app) else { return };
     match command {
         // The page owns the session; reloading only re-fetches the shell the Host serves.
         "reload-page" => {
@@ -441,10 +473,25 @@ fn toggle_devtools(window: &tauri::WebviewWindow) {
     }
 }
 
+/// Keep the WebKit web process's idle memory down.
+///
+/// The GPU renderer keeps a dmabuf surface alive for pages that are mostly
+/// text, and the same pages use materially less memory without it. The
+/// variable is read when the web process starts, so it is set before the
+/// window exists.
+fn tune_webkit_process_environment() {
+    // SAFETY: the shell is single-threaded at this point, and no other thread
+    // reads the environment.
+    unsafe {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+}
+
 fn main() {
     // The startup milestones measure the shell's own run, so the reference
     // starts here rather than at the first report.
     LazyLock::force(&STARTED);
+    tune_webkit_process_environment();
     tauri::Builder::default()
         // Registered first so a second launch surfaces the first instance and exits.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
@@ -472,40 +519,75 @@ fn main() {
         .setup(|app| {
             let (binary, args) = host_command()?;
 
-            // The window shows the bundled start page first, so the application
-            // is on screen while the Host boots. The Host's URL arrives later
-            // and replaces the start page.
+            // The Host's URL, kept until the window has exchanged the token.
+            let token_url: Arc<Mutex<Option<tauri::Url>>> = Arc::new(Mutex::new(None));
+            // The window shows the bundled start page while the Host boots.
+            // The Host's URL arrives later and replaces it.
             let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App(PathBuf::from("index.html")))
-                .on_page_load(move |_, payload| {
-                    report_startup(match payload.event() {
-                        tauri::webview::PageLoadEvent::Started => "page-load-started",
-                        tauri::webview::PageLoadEvent::Finished => "page-load-finished",
-                    });
+                .on_page_load({
+                    let token_url = Arc::clone(&token_url);
+                    let retried = Arc::new(AtomicBool::new(false));
+                    move |window, payload| {
+                        report_startup(match payload.event() {
+                            tauri::webview::PageLoadEvent::Started => "page-load-started",
+                            tauri::webview::PageLoadEvent::Finished => "page-load-finished",
+                        });
+                        if payload.event() != tauri::webview::PageLoadEvent::Finished {
+                            return;
+                        }
+                        // The Host answers the token request with the
+                        // application, but the session cookie it mints belongs
+                        // to the Host's origin, and a browser only keeps it
+                        // for a document of that origin. The first request
+                        // therefore reaches the Host from the start page's
+                        // site and leaves the application unauthorized.
+                        // Repeating the request from the Host's own document
+                        // completes the exchange, and the marker keeps it to
+                        // one repetition.
+                        let loaded = payload.url().clone();
+                        let Ok(slot) = token_url.lock() else { return };
+                        let Some(target) = slot.clone() else { return };
+                        if loaded.host_str() != target.host_str() {
+                            return;
+                        }
+                        if loaded.query().is_some_and(|query| query.contains("token=")) {
+                            return;
+                        }
+                        if retried.swap(true, Ordering::SeqCst) {
+                            return;
+                        }
+                        let _ = window.navigate(target);
+                    }
                 })
                 .title(PRODUCT)
                 .inner_size(1280.0, 860.0)
                 .min_inner_size(520.0, 600.0)
                 .theme(None)
                 .build()?;
+            #[cfg(target_os = "linux")]
+            configure_webkit(&window);
             report_startup("window-created");
 
             let handle = app.handle().clone();
-            let splash = window.clone();
             let reported = Arc::new(AtomicBool::new(false));
             let failure_handle = handle.clone();
             let failure_reported = Arc::clone(&reported);
+            let ready_window = window.clone();
+            let token_url = Arc::clone(&token_url);
             let host = HostClient::spawn(
                 &binary,
                 &args,
                 move |url| {
                     report_startup("host-url");
-                    match tauri::Url::parse(&url) {
-                        Ok(target) => {
-                            if let Err(error) = splash.navigate(target) {
-                                eprintln!("desktop shell: navigation to the Host failed: {error}");
-                            }
-                        }
-                        Err(error) => eprintln!("desktop shell: the Host URL is not a URL: {error}"),
+                    let Ok(target) = tauri::Url::parse(&url) else {
+                        eprintln!("desktop shell: the Host URL is not a URL");
+                        return;
+                    };
+                    if let Ok(mut slot) = token_url.lock() {
+                        *slot = Some(target.clone());
+                    }
+                    if let Err(error) = ready_window.navigate(target) {
+                        eprintln!("desktop shell: navigation to the Host failed: {error}");
                     }
                 },
                 move |reason| {
@@ -531,7 +613,6 @@ fn main() {
             host.attach(handle.clone());
             app.manage(AppState { host });
 
-            let window = window.clone();
             let hide_target = window.clone();
             window.on_window_event(move |event| {
                 if let WindowEvent::CloseRequested { api, .. } = event {

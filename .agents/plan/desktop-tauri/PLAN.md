@@ -71,7 +71,20 @@ Không dùng L0 để thay L2/L3. Một mục chỉ được coi là "release-gr
 | Offline update/component | `fault-probe.sh` | L2 | **PASS** — `check-network`, `feed-network`, không cài dở |
 | Disk-full khi tải component | `disk-full-probe.sh` (dưới `isolated-run.sh`) | L2 | **PASS** — `phase=error`, `failure=download`, không còn `download-*`/`current.json` |
 | Session có nội dung + model thật | `live-transcript-probe.sh` | L3 (cần key) | **PASS** ở lần chạy trước; chưa lặp trong Goal 2 |
-| Welcome/onboarding, GUI thật | — | L3 | **Chưa có** (đã hoãn) |
+| GUI thật: cửa sổ thật + WebKit thật trên Hyprland | `grim` chụp màn hình, `hyprctl clients`, `ss` đếm phiên WebSocket | **L3** | **PASS** — app render đầy đủ (sidebar, composer, chọn model), 6 phiên WebSocket tới Host, cookie phiên dùng được |
+| Welcome/onboarding | — | L3 | **Chưa có** (đã hoãn) |
+
+### Phát hiện L3 (GUI thật, 2026-10-22)
+
+Chạy app thật trên Hyprland của máy (Hyprland 0.56.2, `grim`/`wtype` có sẵn) đã lộ ba lỗi mà probe headless không thấy, vì chúng chỉ xuất hiện khi webview thật nạp trang:
+
+| # | Lỗi | Nguyên nhân | Sửa |
+|---|---|---|---|
+| L3-1 | Start page trắng trơn trong bản release | Cargo thiếu feature `custom-protocol` ⇒ asset đóng gói không được phục vụ | thêm `custom-protocol` vào feature của `tauri` |
+| L3-2 | App hiện "dsh web authentication required" | cookie phiên `SameSite=Strict` bị WebKit từ chối khi tài liệu đầu đến từ site khác (start page của app) ⇒ Host trả 401 | shell lặp lại yêu cầu token từ chính tài liệu của Host (same-site) ⇒ cookie được lưu và dùng |
+| L3-3 | Sau ~80 lần mở app, mọi request trả `431 Request Header Fields Too Large` | cookie ghi theo authority (host:port), mà port đổi mỗi lần mở ⇒ cookie jar phình; header vượt 16 KiB của Node | Host **xoá** cookie của các authority cũ mỗi lần mình cookie mới, và web server nâng `maxHeaderSize` lên 64 KiB |
+
+Ngoài ra: bật `enable-write-console-messages-to-stdout` của WebKit ⇒ **mọi message console của webview (kể cả CSP) rơi vào log của shell** ⇒ đây là cơ chế lấy bằng chứng CSP ở mức L3.
 
 ### Fault matrix
 
@@ -117,10 +130,20 @@ Không dùng L0 để thay L2/L3. Một mục chỉ được coi là "release-gr
 | Host cold start (first run) | **4,83 s** | Page cache lạnh |
 | Shell: window → start page → Host URL | **0,55 s → 0,77 s → 4,54 s** | `cold-start-probe.sh` (weston headless) |
 | Host idle RSS | **179–182 MiB** | Chưa gồm WebKitGTK |
-| Desktop idle RSS (shell + Host + WebKit) | **605–607 MiB** | `resident-probe.sh`, 2 mẫu, 10 s settle |
-| Desktop idle PSS (cùng cây) | **430–432 MiB** | PSS chia đều trang shared; số công bằng hơn RSS |
+| Desktop idle RSS, app **chưa** chạy (trang rỗng) | **605–607 MiB** | `resident-probe.sh`; đo lúc webview chỉ có trang trắng |
+| Desktop idle RSS, app **đang chạy** | **730 MiB** | web 274, shell 191, Host 188, network 58 |
+| Desktop idle PSS, app **đang chạy** | **571 MiB** | PSS chia đều trang shared; số công bằng hơn RSS |
 
-Chưa tối ưu thêm nếu không có số đo chứng minh. Ứng viên chỉ được mở khi vượt ngân sách: WebKit (167 MiB web + 56 MiB network), shell GTK (192 MiB), Host (169 MiB), thời gian chờ Host, kích thước Python. Chưa có ngưỡng RSS cho desktop, nên chưa mở tối ưu.
+**Sàn bộ nhớ (vì sao < 350 MiB không khả thi):** shell GTK/WebKit riêng đã 191 MiB RSS, Host Node 188 MiB — cộng lại 379 MiB RSS **trước khi** webview được tính. Muốn xuống 350 MiB phải bỏ WebKitGTK hoặc bỏ Node khỏi tiến trình, tức là đổi kiến trúc. Những gì đã làm và đo được:
+
+| Thay đổi | Tác dụng | Số đo |
+|---|---|---|
+| `WEBKIT_DISABLE_DMABUF_RENDERER=1` | bỏ dmabuf của GPU renderer | web process 167 → 114 MiB RSS (trang trắng) |
+| Tắt page cache + WebGL, `hardware-acceleration-policy=Never` | bỏ cache tiền xử lý và WebGL | web process PSS 167 → 68 MiB |
+| `--optimize-for-size` cho Host (có sẵn) | giảm heap V8 | Host 217 → 174 MiB RSS |
+| `--jitless` cho Host (**chưa** dùng) | bỏ JIT code | Host 174 → 151 MiB RSS, đổi lại CPU rất nhiều |
+
+Ứng viên còn lại, chỉ mở khi có ngưỡng: cắt bundle client (web process 227 MiB PSS), giảm đồ thị module của Host (182 MiB PSS), `JSC` tắt JIT (không khuyến nghị). Chưa có ngưỡng RSS cho desktop, nên chưa mở tối ưu.
 
 ### Acceptance của Goal 2
 

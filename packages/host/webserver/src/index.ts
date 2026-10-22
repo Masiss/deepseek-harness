@@ -11,6 +11,17 @@ import { readFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse, Server } from 'node:http'
 import { createServer as createSecureServer } from 'node:https'
+
+/**
+ * Largest request header block the Host accepts, in bytes.
+ *
+ * A browser keeps cookies per domain, not per port, so a Host that listens on
+ * a new port each time leaves one cookie behind per port. The request headers
+ * that carry them must fit even when a browser has held many of them, or the
+ * Host answers the browser's own request with "request header fields too
+ * large" and the application never loads.
+ */
+const MAX_HEADER_BYTES = 64 * 1024
 import { isIP, type AddressInfo } from 'node:net'
 import { resolve } from 'node:path'
 import type { Duplex } from 'node:stream'
@@ -459,7 +470,7 @@ export class WebServer extends Service {
     // Disposal waits for in-flight acquisition and closes any listener it produces.
     await this.ctx.effect(async () => {
       if (tls === undefined) {
-        this.server = createServer(listener)
+        this.server = createServer({ maxHeaderSize: MAX_HEADER_BYTES }, listener)
       } else {
         const certFile = resolve(tls.certFile)
         const keyFile = resolve(tls.keyFile)
@@ -468,7 +479,7 @@ export class WebServer extends Service {
           readTlsFile('keyFile', keyFile),
         ])
         try {
-          this.server = createSecureServer({ cert, key }, listener)
+          this.server = createSecureServer({ cert, key, maxHeaderSize: MAX_HEADER_BYTES }, listener)
         } catch (error) {
           throw new Error(`webserver: tls.certFile ${certFile} and tls.keyFile ${keyFile} are not a usable certificate and key pair: ${error instanceof Error ? error.message : String(error)}`)
         }

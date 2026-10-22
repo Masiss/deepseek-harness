@@ -117,6 +117,36 @@ function cookieName(authority: string): string {
   return COOKIE_PREFIX + encodeBase64Url(createHash('sha256').update(authority).digest())
 }
 
+/**
+ * Cookie names a browser sent that this Host does not own.
+ *
+ * A browser keeps cookies per domain, not per port, and every Host listens on
+ * a port of its own, so each activation leaves a cookie behind that the next
+ * one no longer accepts. The jar would grow until the request headers exceed
+ * what the server accepts, so the names this Host does not own are expired
+ * whenever it mints its own cookie.
+ *
+ * @param request - request headers carrying the browser's cookies.
+ * @param keep - the name this Host owns.
+ * @returns the names to expire.
+ */
+function staleCookieNames(request: ConnectionIndexRequest, keep: string): string[] {
+  const raw = header(request.headers, 'cookie')
+  if (raw === undefined) return []
+  const names: string[] = []
+  for (const segment of raw.split(';')) {
+    const name = segment.split('=')[0]?.trim()
+    if (name === undefined || name === '' || !name.startsWith(COOKIE_PREFIX) || name === keep) continue
+    if (!names.includes(name)) names.push(name)
+  }
+  return names
+}
+
+/** Serialize the removal of a cookie this Host no longer owns. */
+function expiredCookie(name: string): string {
+  return `${name}=; Max-Age=0; Path=/`
+}
+
 /** Read the exact generated cookie without implementing general Cookie decoding. */
 function cookieValue(headerValue: string, name: string): string | undefined {
   for (const segment of headerValue.split(';')) {
@@ -276,13 +306,14 @@ export class BrowserAuth {
           issuedAt,
           expiresAt,
         }, this.secret)
+        const name = cookieName(authority)
+        const stale = staleCookieNames(req, name)
+        const own = sessionCookie(name, value, expiresAt, Math.floor(this.maxAgeMilliseconds / 1000), secure)
         res.writeHead(303, {
           'cache-control': 'no-store',
           'location': './',
           'referrer-policy': 'no-referrer',
-          'set-cookie': sessionCookie(
-            cookieName(authority), value, expiresAt, Math.floor(this.maxAgeMilliseconds / 1000), secure,
-          ),
+          'set-cookie': stale.length === 0 ? own : [own, ...stale.map(expiredCookie)],
         })
         res.end()
         return false
@@ -336,13 +367,14 @@ export class BrowserAuth {
     const expiresAt = issuedAt + this.maxAgeMilliseconds
     const id = publish(interactions)
     const value = encodeCookie({ version: 2, authority, id, issuedAt, expiresAt }, this.secret)
+    const name = cookieName(authority)
+    const stale = staleCookieNames(req, name)
+    const own = sessionCookie(name, value, expiresAt, Math.floor(this.maxAgeMilliseconds / 1000), secure)
     res.writeHead(302, {
       'cache-control': 'no-store',
       'location': './api/remote.mux',
       'referrer-policy': 'no-referrer',
-      'set-cookie': sessionCookie(
-        cookieName(authority), value, expiresAt, Math.floor(this.maxAgeMilliseconds / 1000), secure,
-      ),
+      'set-cookie': stale.length === 0 ? own : [own, ...stale.map(expiredCookie)],
     })
     res.end()
   }

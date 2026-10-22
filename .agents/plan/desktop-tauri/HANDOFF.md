@@ -43,6 +43,8 @@ Mục tiêu và acceptance đầy đủ ở `PLAN.md` § "Cấu trúc mục tiê
 
 **L1 đã có**: Desktop Linux lane xanh tại [run 39721974388](https://github.com/Masiss/deepseek-harness/actions/runs/39721974388), gồm bước mới `Desktop shell tests` (drift gate, runtime policy, CSP).
 
+**L3 đã có (GUI thật trên máy)**: chạy app thật trên Hyprland và chụp màn hình (`grim`) ⇒ UI render đầy đủ. Ba lỗi chỉ lộ ra ở L3 đã sửa: release thiếu feature `custom-protocol` (start page trắng), cookie `SameSite=Strict` bị WebKit từ chối khi đi từ site của start page (app hiện "authentication required" ⇒ shell lặp yêu cầu token từ chính tài liệu của Host), và cookie jar phình theo port ⇒ Node trả `431` (Host xoá cookie authority cũ + `maxHeaderSize` 64 KiB).
+
 Probe mới đã vào **release lane** (`packaged-journey`, `fault-probe`, `crash-download`, `crash-extract`); lane đó chưa chạy lại sau khi thêm, nên bằng chứng packaged mới là L2 local. Còn lại của Goal 2: chạy release lane để có L1 packaged; bằng chứng GUI thật (CSP/console); portability (Windows ACL/sandbox/Office path/MSI-DMG); ngưỡng RSS desktop.
 
 ## 3. Việc nên làm tiếp (theo thứ tự giá trị)
