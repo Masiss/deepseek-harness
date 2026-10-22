@@ -41,7 +41,7 @@ Goal 1 chứng minh **có thể thay Electron bằng Tauri mà không đổi lõ
 | G2-M1 | Chốt D40–D43 + regression | **Xong** | Commit `fbe6ea0fe7`; build + build:check xanh; typecheck/lint/test xanh |
 | G2-M2 | User journey trên packaged runtime | **Đang làm** | Plugin + Session + profile contention + update PASS; CSP mới có boot headless; còn GUI thật và session có nội dung |
 | G2-M3 | Fault injection | **Đang làm** | 6 kịch bản Host + disk-full PASS; còn update hỏng digest ở mức packaged, crash giữa download, mất điện |
-| G2-M4 | CI evidence theo cấp | **Đang làm** | Lane Linux **xanh** ([run 39721974388](https://github.com/Masiss/deepseek-harness/actions/runs/39721974388)) + bước `Desktop shell tests`; probe packaged nằm trong release lane nhưng chưa chạy lại; chưa có CI Windows/macOS |
+| G2-M4 | CI evidence theo cấp | **Đang làm** | Lane Linux **xanh** ([run 39731893444](https://github.com/Masiss/deepseek-harness/actions/runs/39731893444)) + bước `Desktop shell tests`; probe packaged nằm trong release lane nhưng chưa chạy lại; chưa có CI Windows/macOS |
 | G2-M5 | Portability matrix Windows/macOS | **Đang làm** | Ma trận dưới đây; chỉ sửa blocker nhỏ, không mở full port |
 | G2-M6 | Benchmark startup/idle/footprint | **Đang làm** | Số đo dưới đây; chưa chốt ngân sách và chưa đo WebView riêng |
 | G2-M7 | Tài liệu & bàn giao | **Đang làm** | PLAN/MEMORY/HANDOFF; sẽ cập nhật sau mỗi mốc |
