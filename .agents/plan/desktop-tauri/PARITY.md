@@ -10,7 +10,7 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 - ✓ Chat submit (`session/prompt`) + follow (`session/follow`) — composer with **file attachment** and **Cancel turn**; history and live events render through the transcript projection; a mock-model run proves prompt → approval → tool → question on the packaged runtime
 - ✓ Chat cancel API (`session/cancel`) — transport only; UI cancellation pending
 - ✓ Follow stream (`session/follow`) — shared authenticated mux with reconnect; snapshot records and live events feed one transcript
-- ◐ Transcript projection — durable user/assistant messages, tool calls and results, approvals, job start/settle, and the streaming assistant draft; provider reasoning and specialized tool cards (deliverables, feedback, todo/plan) are not rendered yet
+- ◐ Transcript projection — durable user/assistant messages, provider reasoning, tool calls and results, approvals, jobs, todo lists, deliverables, goals, plan mode, and the streaming assistant draft; feedback remarks are not rendered
 - ✓ Permission approval — `$events` mux + allow-once/reject/delegate; `scripts/approval-probe.sh [allow|reject|delegate]` drives a mock model's escalated bash call through every decision on the packaged runtime: allow runs the command (marker outside the workspace), reject and delegate log the audit outcome and never run it
 - ◐ Model selection (`session/modelCatalog`, `session/selectModel`) — composer picker groups providers/models, shows the catalog default, selects the model's default effort, and offers its reasoning efforts; `initializeDefaultModel` transport only
 - ◐ Session management (`search`, `create`, `rename`, `fork`) — native controls wired; no live Host probe
@@ -23,7 +23,7 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 ## Settings & plugins
 - ✓ Settings (`describe`, `update`, `replace`, `mutate`, `openSettingsDocument`) — M6
 - ✓ Plugin inventory — M6
-- ✓ Skills list — M6 (no native surface yet)
+- ✓ Skills list — `skills/list` in a native tab: name, description, when-to-use, model-invocability, and skill path for the selected session
 - ✓ Schedules (`list`, `catalog`, `history`, `delete`, `update`) — M6; per-Session list with delete in egui
 - ✓ Workspace files (`read`, `readBytes`, `stat`, `list`) — unary and multipart bytes transport
 - ◐ Settings UI — namespace/schema/redacted values; optimistic user-override patch editor wired, replace/mutate and live Host probe pending
@@ -41,10 +41,10 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 
 ## Open parity gaps
 - ◐ Document preview — text page (500 lines, literal selectable) and decoded image preview (PNG/JPEG/GIF/WebP/BMP/ICO up to 16 MiB and 8192 px per side); office preview and Host probe pending
-- ☐ Deliverables view
+- ✓ Deliverables view — `deliverables/presented` files collect into a panel whose links open the document preview
 - ✓ Human interaction — question cards answer `ask_user_question` through the `$events` waterfall (options, multi-select, free text, skip); `userQuestions/answer` transports continued questions; `scripts/approval-probe.sh allow` proves the live round trip. `userQuestions/attachWait` yields no frames because Desktop composes the blocking legacy tool, not the timed one
 - ✓ Jobs panel — session job list (`job/list`) with per-job output follow (`job/follow`); the approval probe starts a background job and reads its output through `job/follow` on a real Host
-- ☐ Goals, todo, plan panels
+- ◐ Goals, todo, plan — durable `goal/change`, `todo/write`, and `plan/mode` events render as transcript cards; no dedicated management panel
 - ✓ Remote Event `$events` waterfall transport and approval outcomes; projections/control stream UI pending
 - ✓ Multipart binary response decoder and prompt attachment upload (`session/uploadFileBinary`)
 - ✓ Native probe (`scripts/native-gui-probe.sh`) launches the packaged runtime, waits for Host readiness, authentication, `$events`, and the stream probe, and reports tree RSS/PSS

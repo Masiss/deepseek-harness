@@ -23,6 +23,7 @@ use dsh_client_core::{
     },
     plugins::{PluginInventorySnapshot, PluginsClient},
     schedules::{ScheduleDeleteRequest, ScheduleListRequest, SchedulesClient},
+    skills::{SkillListResponse, SkillsClient},
     remote_events::{RemoteEvent, RemoteEventError, RemoteEventOutcome, RemoteEvents},
     remote_stream::RemoteStreamMux,
     streams::{self, JobFollowFrame, JobView},
@@ -71,6 +72,13 @@ enum ApprovalCommand {
 }
 
 const TERMINAL_VISIBLE_BYTES: usize = 128 * 1024;
+
+/// One file the model declared as a final deliverable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DeliverableFile {
+    path: String,
+    description: Option<String>,
+}
 
 /// Keeps the newest UTF-8 output, including when a single frame exceeds the visible budget.
 fn append_bounded_output(output: &mut String, text: &str) {
@@ -862,6 +870,7 @@ struct DesktopApp {
     approval_commands: Option<mpsc::Sender<ApprovalCommand>>,
     pending_approvals: Vec<PendingApproval>,
     pending_questions: Vec<QuestionCard>,
+    deliverables: Vec<DeliverableFile>,
     settings_panel: SettingsPanel,
     settings_description: Option<SettingsDescribeValue>,
     settings_loading: bool,
@@ -879,6 +888,11 @@ struct DesktopApp {
     preview_receiver: Option<mpsc::Receiver<Result<PreviewDocument, String>>>,
     show_document: bool,
     show_plugins: bool,
+    show_skills: bool,
+    skills: Option<SkillListResponse>,
+    skills_receiver: Option<mpsc::Receiver<Result<SkillListResponse, Error>>>,
+    skills_loading: bool,
+    skills_error: Option<String>,
     model_catalog: Option<ModelCatalog>,
     model_selection: Option<ModelSelection>,
     model_error: Option<String>,
@@ -960,6 +974,7 @@ impl DesktopApp {
             approval_commands: None,
             pending_approvals: Vec::new(),
             pending_questions: Vec::new(),
+            deliverables: Vec::new(),
             settings_panel: SettingsPanel::default(),
             settings_description: None,
             settings_loading: false,
@@ -977,6 +992,11 @@ impl DesktopApp {
             preview_receiver: None,
             show_document: false,
             show_plugins: false,
+            show_skills: false,
+            skills: None,
+            skills_receiver: None,
+            skills_loading: false,
+            skills_error: None,
             model_catalog: None,
             model_selection: None,
             model_error: None,
@@ -1194,6 +1214,31 @@ impl DesktopApp {
         self.plugins_error = None;
     }
 
+    fn record_deliverables(&mut self, event: &dsh_client_core::follow::SessionWireEvent) {
+        record_deliverables(&mut self.deliverables, event);
+    }
+
+    fn refresh_skills(&mut self) {
+        if self.skills_loading {
+            return;
+        }
+        let Some(transport) = self.transport.clone() else {
+            self.skills_error = Some("Connect to load skills".to_owned());
+            return;
+        };
+        let Some(session) = self.selected_session.clone() else {
+            self.skills_error = Some("Select a session to list its skills".to_owned());
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(SkillsClient::new(&transport).list(session));
+        });
+        self.skills_receiver = Some(receiver);
+        self.skills_loading = true;
+        self.skills_error = None;
+    }
+
     fn refresh_settings(&mut self) {
         if self.settings_loading || self.settings_update_receiver.is_some() {
             return;
@@ -1310,6 +1355,7 @@ impl DesktopApp {
         self.transcript.reset();
         self.assistant_streaming = false;
         self.assistant_draft.clear();
+        self.deliverables.clear();
         self.preview_document = None;
         self.preview_error = None;
         self.show_document = false;
@@ -2003,16 +2049,44 @@ impl eframe::App for DesktopApp {
                 }
             }
         }
+        if let Some(receiver) = &self.skills_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(skills)) => {
+                    self.skills = Some(skills);
+                    self.skills_loading = false;
+                    self.skills_error = None;
+                    self.skills_receiver = None;
+                }
+                Ok(Err(error)) => {
+                    self.skills_loading = false;
+                    self.skills_error = Some(format!("Could not load skills: {error}"));
+                    self.skills_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.skills_loading = false;
+                    self.skills_error = Some("Skill list worker stopped unexpectedly".into());
+                    self.skills_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30));
+                }
+            }
+        }
         if let Some(receiver) = &self.chat_receiver {
             match receiver.try_recv() {
                 Ok(Ok(frame)) => match frame {
                     FollowFrame::Snapshot(snapshot) => {
                         self.transcript.apply_snapshot(&snapshot.records);
+                        self.deliverables.clear();
+                        for record in &snapshot.records {
+                            self.record_deliverables(&record.event);
+                        }
                     }
                     FollowFrame::Event(frame) => {
                         if frame.event.event_type == "assistant/message" {
                             self.assistant_draft.clear();
                         }
+                        self.record_deliverables(&frame.event);
                         self.transcript.apply(&frame.event);
                     }
                     FollowFrame::AssistantStream { frame } => {
@@ -2132,12 +2206,16 @@ impl eframe::App for DesktopApp {
         });
         egui::Panel::left("sessions").show(ui, |ui| {
             if ui
-                .selectable_label(!self.show_settings && !self.show_plugins, "Sessions")
+                .selectable_label(
+                    !self.show_settings && !self.show_plugins && !self.show_skills,
+                    "Sessions",
+                )
                 .clicked()
             {
                 self.show_settings = false;
                 self.show_document = false;
                 self.show_plugins = false;
+                self.show_skills = false;
             }
             if ui
                 .selectable_label(self.show_settings, "Settings")
@@ -2146,6 +2224,7 @@ impl eframe::App for DesktopApp {
                 self.open_settings();
                 self.show_document = false;
                 self.show_plugins = false;
+                self.show_skills = false;
             }
             if ui
                 .selectable_label(self.show_document, "Document")
@@ -2154,6 +2233,7 @@ impl eframe::App for DesktopApp {
                 self.show_document = true;
                 self.show_settings = false;
                 self.show_plugins = false;
+                self.show_skills = false;
             }
             if ui
                 .selectable_label(self.show_plugins, "Plugins")
@@ -2162,8 +2242,21 @@ impl eframe::App for DesktopApp {
                 self.show_plugins = true;
                 self.show_settings = false;
                 self.show_document = false;
+                self.show_skills = false;
                 if self.plugins_snapshot.is_none() {
                     self.refresh_plugins();
+                }
+            }
+            if ui
+                .selectable_label(self.show_skills, "Skills")
+                .clicked()
+            {
+                self.show_skills = true;
+                self.show_settings = false;
+                self.show_document = false;
+                self.show_plugins = false;
+                if self.skills.is_none() {
+                    self.refresh_skills();
                 }
             }
             ui.heading("Sessions");
@@ -2402,6 +2495,38 @@ impl eframe::App for DesktopApp {
                     });
             });
         }
+        if !self.deliverables.is_empty() {
+            egui::Panel::bottom("deliverables-panel").show(ui, |ui| {
+                egui::CollapsingHeader::new(format!("Deliverables ({})", self.deliverables.len()))
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        let mut preview = None;
+                        for file in &self.deliverables {
+                            let label = egui::RichText::new(&file.path).monospace();
+                            if ui
+                                .link(label)
+                                .on_hover_text(
+                                    file.description.as_deref().unwrap_or("Open this deliverable"),
+                                )
+                                .clicked()
+                            {
+                                preview = Some(file.path.clone());
+                            }
+                            if let Some(description) = &file.description {
+                                ui.small(description);
+                            }
+                        }
+                        if let Some(path) = preview {
+                            self.preview_path = path;
+                            self.show_document = true;
+                            self.show_settings = false;
+                            self.show_plugins = false;
+                            self.show_skills = false;
+                            self.read_document();
+                        }
+                    });
+            });
+        }
         if self.selected_session.is_some() {
             egui::Panel::bottom("terminal-panel").show(ui, |ui| {
                 egui::CollapsingHeader::new("Session terminals")
@@ -2478,6 +2603,66 @@ impl eframe::App for DesktopApp {
                 }
                 if let Some(error) = &self.page_error {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
+                }
+            } else if self.show_skills {
+                ui.horizontal(|ui| {
+                    ui.heading("Skills");
+                    if ui
+                        .add_enabled(!self.skills_loading, egui::Button::new("Refresh"))
+                        .clicked()
+                    {
+                        self.refresh_skills();
+                    }
+                    if self.skills_loading {
+                        ui.spinner();
+                    }
+                });
+                if self.selected_session.is_none() {
+                    ui.label("Select a session to list the skills its composer can invoke.");
+                }
+                if let Some(error) = &self.skills_error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                }
+                if let Some(skills) = &self.skills {
+                    egui::ScrollArea::vertical()
+                        .id_salt("skill-list")
+                        .max_height(420.0)
+                        .show(ui, |ui| {
+                            if skills.skills.is_empty() {
+                                ui.label("No skills are available to this session.");
+                            }
+                            for skill in &skills.skills {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&skill.name).strong(),
+                                    )
+                                    .wrap(),
+                                );
+                                ui.add(
+                                    egui::Label::new(&skill.description)
+                                        .wrap()
+                                        .selectable(true),
+                                );
+                                if let Some(when) = &skill.when_to_use {
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(format!("When: {when}"))
+                                                .color(ui.visuals().weak_text_color()),
+                                        )
+                                        .wrap(),
+                                    );
+                                }
+                                if !skill.model_invocable {
+                                    ui.small("Not model-invocable");
+                                }
+                                if let Some(path) = &skill.path {
+                                    ui.small(path);
+                                }
+                                ui.separator();
+                            }
+                        });
+                } else if !self.skills_loading {
+                    ui.label("Open this tab with a session selected to load skills.");
                 }
             } else if self.show_document {
                 ui.horizontal(|ui| {
@@ -2817,6 +3002,36 @@ fn relative_time(updated_at: i64, now: i64) -> String {
     }
 }
 
+/// Appends or refreshes the files a `deliverables/presented` event declared.
+fn record_deliverables(
+    deliverables: &mut Vec<DeliverableFile>,
+    event: &dsh_client_core::follow::SessionWireEvent,
+) {
+    if event.event_type != "deliverables/presented" {
+        return;
+    }
+    let Some(files) = event.data.get("files").and_then(serde_json::Value::as_array) else {
+        return;
+    };
+    for file in files {
+        let Some(path) = file.get("path").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let description = file
+            .get("description")
+            .and_then(serde_json::Value::as_str)
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned);
+        match deliverables.iter_mut().find(|entry| entry.path == path) {
+            Some(entry) => entry.description = description,
+            None => deliverables.push(DeliverableFile {
+                path: path.to_owned(),
+                description,
+            }),
+        }
+    }
+}
+
 /// Renders the projected transcript with bounded height.
 fn render_transcript(
     ui: &mut egui::Ui,
@@ -2854,6 +3069,11 @@ fn render_transcript(
                         }
                     }
                     RowKind::Approval => egui::Color32::YELLOW,
+                    RowKind::Reasoning => ui.visuals().weak_text_color(),
+                    RowKind::Todo => egui::Color32::LIGHT_GREEN,
+                    RowKind::Deliverable => egui::Color32::LIGHT_BLUE,
+                    RowKind::Goal => egui::Color32::YELLOW,
+                    RowKind::Notice => egui::Color32::LIGHT_GRAY,
                 };
                 ui.add(
                     egui::Label::new(egui::RichText::new(&row.title).strong().color(color))
@@ -2863,7 +3083,8 @@ fn render_transcript(
                 if !row.text.is_empty() {
                     let text = egui::RichText::new(&row.text);
                     let text = match row.kind {
-                        RowKind::ToolResult | RowKind::Job => text.monospace(),
+                        RowKind::ToolResult | RowKind::Job | RowKind::Todo => text.monospace(),
+                        RowKind::Reasoning => text.italics(),
                         _ => text,
                     };
                     ui.add(egui::Label::new(text).wrap().selectable(true));
@@ -3917,6 +4138,34 @@ mod transcript_render_tests {
         for expected in ["Waiting for assistant…", "Assistant (streaming)", "partial answer"] {
             assert!(texts.iter().any(|text| text == expected), "{texts:?}");
         }
+    }
+
+    #[test]
+    fn records_deliverables_once_and_refreshes_the_description() {
+        use crate::record_deliverables;
+        let mut files = Vec::new();
+        record_deliverables(
+            &mut files,
+            &event(
+                1,
+                "deliverables/presented",
+                json!({"files": [
+                    {"path": "out/report.pdf", "description": "First"},
+                    {"path": "out/data.csv"}
+                ]}),
+            ),
+        );
+        record_deliverables(
+            &mut files,
+            &event(
+                2,
+                "deliverables/presented",
+                json!({"files": [{"path": "out/report.pdf", "description": "Final"}]}),
+            ),
+        );
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].description.as_deref(), Some("Final"));
+        assert_eq!(files[1].description, None);
     }
 
     #[test]

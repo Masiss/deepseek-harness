@@ -19,9 +19,14 @@ pub const MAX_ROW_CHARS: usize = 8_000;
 pub enum RowKind {
     User,
     Assistant,
+    Reasoning,
     ToolResult,
     Approval,
     Job,
+    Todo,
+    Deliverable,
+    Goal,
+    Notice,
 }
 
 /// One rendered line group.
@@ -55,7 +60,7 @@ impl Transcript {
             return;
         }
         self.last_seq = event.seq;
-        if let Some(row) = project(event) {
+        for row in project(event) {
             self.bytes += row.text.len();
             self.rows.push(row);
             while self.rows.len() > MAX_ROWS || self.bytes > MAX_BYTES {
@@ -84,8 +89,21 @@ impl Transcript {
     }
 }
 
-fn project(event: &SessionWireEvent) -> Option<TranscriptRow> {
-    let row = match event.event_type.as_str() {
+fn project(event: &SessionWireEvent) -> Vec<TranscriptRow> {
+    let rows = match event.event_type.as_str() {
+        "todo/write" => vec![todo_row(event)],
+        "deliverables/presented" => vec![deliverables_row(event)],
+        "goal/change" => vec![goal_row(event)],
+        "plan/mode" => vec![TranscriptRow {
+            seq: event.seq,
+            kind: RowKind::Notice,
+            title: if event.data.get("active").and_then(Value::as_bool) == Some(true) {
+                "Plan mode on".to_owned()
+            } else {
+                "Plan mode off".to_owned()
+            },
+            text: String::new(),
+        }],
         "user/message" => {
             let source = event
                 .data
@@ -98,17 +116,18 @@ fn project(event: &SessionWireEvent) -> Option<TranscriptRow> {
             } else {
                 "You"
             };
-            TranscriptRow {
+            vec![TranscriptRow {
                 seq: event.seq,
                 kind: RowKind::User,
                 title: title.to_owned(),
                 text: content_text(event.data.get("content")),
-            }
+            }]
         }
         "assistant/message" => {
             let message = event.data.get("message").unwrap_or(&event.data);
             let mut text = Vec::new();
             let mut tools = Vec::new();
+            let mut reasoning = Vec::new();
             if let Some(blocks) = message.get("content").and_then(Value::as_array) {
                 for block in blocks {
                     match block.get("type").and_then(Value::as_str) {
@@ -116,6 +135,13 @@ fn project(event: &SessionWireEvent) -> Option<TranscriptRow> {
                             if let Some(value) = block.get("text").and_then(Value::as_str) {
                                 if !value.trim().is_empty() {
                                     text.push(value.to_owned());
+                                }
+                            }
+                        }
+                        Some("reasoning") => {
+                            if let Some(value) = block.get("text").and_then(Value::as_str) {
+                                if !value.trim().is_empty() {
+                                    reasoning.push(value.to_owned());
                                 }
                             }
                         }
@@ -128,28 +154,37 @@ fn project(event: &SessionWireEvent) -> Option<TranscriptRow> {
                                 .get("arguments")
                                 .and_then(Value::as_str)
                                 .unwrap_or("{}");
-                            tools.push(format!("{name}: {}", tool_summary(arguments)));
+                            tools.push(format!("{name}: {}", tool_summary(name, arguments)));
                         }
                         _ => {}
                     }
                 }
             }
-            if text.is_empty() && tools.is_empty() {
-                return None;
+            let mut rows = Vec::new();
+            if !reasoning.is_empty() {
+                rows.push(TranscriptRow {
+                    seq: event.seq,
+                    kind: RowKind::Reasoning,
+                    title: "Reasoning".to_owned(),
+                    text: reasoning.join("\n"),
+                });
             }
-            let mut body = text.join("\n");
-            if !tools.is_empty() {
-                if !body.is_empty() {
-                    body.push('\n');
+            if !text.is_empty() || !tools.is_empty() {
+                let mut body = text.join("\n");
+                if !tools.is_empty() {
+                    if !body.is_empty() {
+                        body.push('\n');
+                    }
+                    body.push_str(&tools.join("\n"));
                 }
-                body.push_str(&tools.join("\n"));
+                rows.push(TranscriptRow {
+                    seq: event.seq,
+                    kind: RowKind::Assistant,
+                    title: "Assistant".to_owned(),
+                    text: body,
+                });
             }
-            TranscriptRow {
-                seq: event.seq,
-                kind: RowKind::Assistant,
-                title: "Assistant".to_owned(),
-                text: body,
-            }
+            rows
         }
         "tool/result" => {
             let message = event.data.get("message").unwrap_or(&event.data);
@@ -157,7 +192,7 @@ fn project(event: &SessionWireEvent) -> Option<TranscriptRow> {
                 .get("isError")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            TranscriptRow {
+            vec![TranscriptRow {
                 seq: event.seq,
                 kind: RowKind::ToolResult,
                 title: if is_error {
@@ -166,7 +201,7 @@ fn project(event: &SessionWireEvent) -> Option<TranscriptRow> {
                     "Tool result".to_owned()
                 },
                 text: content_text(message.get("content")),
-            }
+            }]
         }
         "approval/asked" => {
             let tool = event
@@ -179,12 +214,12 @@ fn project(event: &SessionWireEvent) -> Option<TranscriptRow> {
                 .get("reason")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            TranscriptRow {
+            vec![TranscriptRow {
                 seq: event.seq,
                 kind: RowKind::Approval,
                 title: format!("Permission requested: {tool}"),
                 text: reason.to_owned(),
-            }
+            }]
         }
         "approval/decided" => {
             let outcome = event
@@ -192,12 +227,12 @@ fn project(event: &SessionWireEvent) -> Option<TranscriptRow> {
                 .get("outcome")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
-            TranscriptRow {
+            vec![TranscriptRow {
                 seq: event.seq,
                 kind: RowKind::Approval,
                 title: format!("Permission {outcome}"),
                 text: String::new(),
-            }
+            }]
         }
         "job/registered" => {
             let label = event
@@ -205,12 +240,12 @@ fn project(event: &SessionWireEvent) -> Option<TranscriptRow> {
                 .get("label")
                 .and_then(Value::as_str)
                 .unwrap_or("job");
-            TranscriptRow {
+            vec![TranscriptRow {
                 seq: event.seq,
                 kind: RowKind::Job,
                 title: "Job started".to_owned(),
                 text: label.to_owned(),
-            }
+            }]
         }
         "job/settled" => {
             let status = event
@@ -223,19 +258,105 @@ fn project(event: &SessionWireEvent) -> Option<TranscriptRow> {
                 .get("detail")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            TranscriptRow {
+            vec![TranscriptRow {
                 seq: event.seq,
                 kind: RowKind::Job,
                 title: format!("Job {status}"),
                 text: detail.to_owned(),
-            }
+            }]
         }
-        _ => return None,
+        _ => return Vec::new(),
     };
-    Some(TranscriptRow {
-        text: truncate(&sanitize(&row.text)),
-        ..row
-    })
+    rows.into_iter()
+        .map(|row| TranscriptRow {
+            text: truncate(&sanitize(&row.text)),
+            ..row
+        })
+        .collect()
+}
+
+fn todo_row(event: &SessionWireEvent) -> TranscriptRow {
+    let todos = event
+        .data
+        .get("todos")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let text = todos
+        .iter()
+        .map(|todo| {
+            let status = todo.get("status").and_then(Value::as_str).unwrap_or("pending");
+            let mark = match status {
+                "completed" => "[x]",
+                "in_progress" => "[~]",
+                _ => "[ ]",
+            };
+            let content = todo
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            format!("{mark} {content}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    TranscriptRow {
+        seq: event.seq,
+        kind: RowKind::Todo,
+        title: "Todo list".to_owned(),
+        text,
+    }
+}
+
+fn deliverables_row(event: &SessionWireEvent) -> TranscriptRow {
+    let files = event
+        .data
+        .get("files")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let text = files
+        .iter()
+        .map(|file| {
+            let path = file.get("path").and_then(Value::as_str).unwrap_or_default();
+            match file.get("description").and_then(Value::as_str) {
+                Some(description) if !description.is_empty() => format!("{path} — {description}"),
+                _ => path.to_owned(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    TranscriptRow {
+        seq: event.seq,
+        kind: RowKind::Deliverable,
+        title: "Deliverables".to_owned(),
+        text,
+    }
+}
+
+fn goal_row(event: &SessionWireEvent) -> TranscriptRow {
+    if event.data.get("operation").and_then(Value::as_str) == Some("clear") {
+        return TranscriptRow {
+            seq: event.seq,
+            kind: RowKind::Goal,
+            title: "Goal cleared".to_owned(),
+            text: String::new(),
+        };
+    }
+    let goal = event.data.get("goal");
+    let objective = goal
+        .and_then(|goal| goal.get("objective"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let phase = goal
+        .and_then(|goal| goal.get("phase"))
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    TranscriptRow {
+        seq: event.seq,
+        kind: RowKind::Goal,
+        title: format!("Goal · {phase}"),
+        text: objective.to_owned(),
+    }
 }
 
 /// Joins text blocks and names non-text blocks.
@@ -264,9 +385,19 @@ fn content_text(content: Option<&Value>) -> String {
 }
 
 /// One line naming a tool call's key argument.
-fn tool_summary(arguments: &str) -> String {
+fn tool_summary(name: &str, arguments: &str) -> String {
     match serde_json::from_str::<Value>(arguments) {
         Ok(value) => {
+            if name == "exit_plan_mode" {
+                if let Some(plan) = value.get("plan").and_then(Value::as_str) {
+                    let heading = plan
+                        .lines()
+                        .find_map(|line| line.trim_start().strip_prefix('#'))
+                        .map(|rest| rest.trim_start_matches('#').trim())
+                        .filter(|heading| !heading.is_empty());
+                    return heading.unwrap_or("plan").chars().take(160).collect();
+                }
+            }
             for key in ["description", "command", "path", "query"] {
                 if let Some(text) = value.get(key).and_then(Value::as_str) {
                     let line = text.lines().next().unwrap_or_default().trim();
@@ -382,6 +513,64 @@ mod tests {
             ]
         );
         assert_eq!(transcript.rows()[0].text, "exit 1");
+    }
+
+    #[test]
+    fn projects_reasoning_todos_deliverables_goals_and_plan_mode() {
+        let mut transcript = Transcript::default();
+        transcript.apply(&event(
+            1,
+            "assistant/message",
+            serde_json::json!({"message": {"content": [
+                {"type": "reasoning", "text": "weigh options"},
+                {"type": "text", "text": "Here."},
+                {"type": "tool-call", "name": "exit_plan_mode", "arguments": "{\"plan\":\"# Ship it\\n\\nStep one\"}"}
+            ]}}),
+        ));
+        transcript.apply(&event(
+            2,
+            "todo/write",
+            serde_json::json!({"todos": [
+                {"content": "read", "status": "completed"},
+                {"content": "edit", "status": "in_progress"},
+                {"content": "test", "status": "pending"}
+            ]}),
+        ));
+        transcript.apply(&event(
+            3,
+            "deliverables/presented",
+            serde_json::json!({"files": [
+                {"path": "out/report.pdf", "description": "Final report"},
+                {"path": "out/data.csv"}
+            ]}),
+        ));
+        transcript.apply(&event(
+            4,
+            "goal/change",
+            serde_json::json!({"operation": "create", "goal": {"objective": "Ship the lane", "phase": "active"}}),
+        ));
+        transcript.apply(&event(
+            5,
+            "plan/mode",
+            serde_json::json!({"active": true}),
+        ));
+        transcript.apply(&event(
+            6,
+            "goal/change",
+            serde_json::json!({"operation": "clear"}),
+        ));
+        let rows = transcript.rows();
+        assert_eq!(rows[0].kind, RowKind::Reasoning);
+        assert_eq!(rows[0].text, "weigh options");
+        assert_eq!(rows[1].text, "Here.\nexit_plan_mode: Ship it");
+        assert_eq!(rows[2].title, "Todo list");
+        assert_eq!(rows[2].text, "[x] read\n[~] edit\n[ ] test");
+        assert_eq!(rows[3].title, "Deliverables");
+        assert_eq!(rows[3].text, "out/report.pdf — Final report\nout/data.csv");
+        assert_eq!(rows[4].title, "Goal · active");
+        assert_eq!(rows[4].text, "Ship the lane");
+        assert_eq!(rows[5].title, "Plan mode on");
+        assert_eq!(rows[6].title, "Goal cleared");
     }
 
     #[test]
