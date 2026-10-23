@@ -20,7 +20,10 @@ use dsh_client_core::{
     remote_events::{RemoteEvent, RemoteEventError, RemoteEvents},
     remote_stream::RemoteStreamMux,
     streams::{self, JobFollowFrame, JobView},
-    session::{SessionAddress, SessionAddressKind, SessionPage, SessionViewer, ToolCallStatus},
+    session::{
+        SessionAddress, SessionAddressKind, SessionPage, SessionSummary, SessionViewer,
+        ToolCallStatus,
+    },
     stream::FrameStream,
     sessions::{
         CreateSessionRequest, ForkSessionRequest, RenameSessionRequest, SessionSearchResponse,
@@ -807,7 +810,7 @@ enum SessionOperation {
 }
 
 enum SessionUpdate {
-    List(Vec<String>),
+    List(Vec<SessionSummary>),
     Search(SessionSearchResponse),
     Created(String),
     Renamed(String),
@@ -829,7 +832,7 @@ struct DesktopApp {
     host_url: Option<String>,
     transport: Option<HttpTransport>,
     streams: Option<RemoteStreamMux>,
-    sessions: Vec<String>,
+    sessions: Vec<SessionSummary>,
     selected_session: Option<String>,
     session_page: Option<SessionPage>,
     page_loading: bool,
@@ -1090,7 +1093,7 @@ impl DesktopApp {
             let client = SessionsClient::new(&transport);
             let result = match operation {
                 SessionOperation::List => SessionViewer::new(&transport).list(None).map(|items| {
-                    SessionUpdate::List(items.into_iter().map(|item| item.session_id).collect())
+                    SessionUpdate::List(items)
                 }),
                 SessionOperation::Search(query) => client.search(query).map(SessionUpdate::Search),
                 SessionOperation::Create => client
@@ -2183,15 +2186,24 @@ impl eframe::App for DesktopApp {
                                 ui.small("More matches exist; refine your search.");
                             }
                         } else {
-                            for session_id in &self.sessions {
+                            let now = now_millis();
+                            for summary in &self.sessions {
+                                let label = session_label(summary);
+                                let running = if summary.running { " · running" } else { "" };
+                                let blank = if summary.blank { " (blank)" } else { "" };
                                 if ui
                                     .selectable_label(
-                                        self.selected_session.as_ref() == Some(session_id),
-                                        session_id,
+                                        self.selected_session.as_ref()
+                                            == Some(&summary.session_id),
+                                        format!(
+                                            "{label}{running}{blank} · {}",
+                                            relative_time(summary.updated_at, now)
+                                        ),
                                     )
+                                    .on_hover_text(&summary.session_id)
                                     .clicked()
                                 {
-                                    selected = Some(session_id.clone());
+                                    selected = Some(summary.session_id.clone());
                                 }
                             }
                         }
@@ -2632,6 +2644,41 @@ impl eframe::App for DesktopApp {
     }
 }
 
+/// Current Unix time in milliseconds.
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))
+}
+
+/// Display label for a session: its projected title, else the identity.
+fn session_label(summary: &SessionSummary) -> String {
+    summary
+        .projections
+        .as_ref()
+        .and_then(|projections| projections.get("title"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|title| !title.is_empty())
+        .map_or_else(|| summary.session_id.clone(), str::to_owned)
+}
+
+/// Relative age of a session update, tolerant of second- or millisecond-scale times.
+fn relative_time(updated_at: i64, now: i64) -> String {
+    let updated_at = if updated_at < 1_000_000_000_000 {
+        updated_at.saturating_mul(1000)
+    } else {
+        updated_at
+    };
+    let seconds = now.saturating_sub(updated_at) / 1000;
+    match seconds {
+        ..=59 => "just now".to_owned(),
+        60..=3599 => format!("{}m ago", seconds / 60),
+        3600..=86_399 => format!("{}h ago", seconds / 3600),
+        86_400..=2_591_999 => format!("{}d ago", seconds / 86_400),
+        _ => format!("{}mo ago", seconds / 2_592_000),
+    }
+}
+
 /// Largest image preview read; larger files are rejected instead of fetched.
 const PREVIEW_IMAGE_LIMIT: usize = 16 * 1024 * 1024;
 /// Largest decoded image side accepted by the preview.
@@ -2968,5 +3015,61 @@ mod preview_path_tests {
         let error = decode_preview_image("notes.txt".into(), "/host/notes.txt".into(), b"text")
             .unwrap_err();
         assert!(error.starts_with("image decoding failed: "), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod session_label_tests {
+    use super::{relative_time, session_label};
+    use dsh_client_core::session::SessionSummary;
+
+    fn summary(projections: Option<serde_json::Value>) -> SessionSummary {
+        SessionSummary {
+            agent_available: true,
+            format_status: None,
+            session_id: "session-1".into(),
+            updated_at: 1_760_000_000_000,
+            running: false,
+            blank: false,
+            parent_session_id: None,
+            origin: None,
+            cwd: None,
+            projections,
+        }
+    }
+
+    #[test]
+    fn prefers_the_projected_title_and_falls_back_to_the_id() {
+        assert_eq!(
+            session_label(&summary(Some(serde_json::json!({"title": "Roadmap"})))),
+            "Roadmap"
+        );
+        for projections in [
+            Some(serde_json::json!({"title": null})),
+            Some(serde_json::json!({"title": ""})),
+            Some(serde_json::json!({})),
+            None,
+        ] {
+            assert_eq!(session_label(&summary(projections)), "session-1");
+        }
+    }
+
+    #[test]
+    fn formats_relative_age_in_seconds_and_milliseconds() {
+        let now = 1_760_000_000_000;
+        for (updated, expected) in [
+            (now, "just now"),
+            (now - 30_000, "just now"),
+            (now - 90_000, "1m ago"),
+            (now - 7_200_000, "2h ago"),
+            (now - 172_800_000, "2d ago"),
+            (now - 5_184_000_000, "2mo ago"),
+        ] {
+            assert_eq!(relative_time(updated, now), expected);
+        }
+        // Second-scale timestamps convert before differencing.
+        assert_eq!(relative_time(1_760_000_000 - 120, now), "2m ago");
+        // Clock skew stays "just now" instead of underflowing.
+        assert_eq!(relative_time(now + 60_000, now), "just now");
     }
 }

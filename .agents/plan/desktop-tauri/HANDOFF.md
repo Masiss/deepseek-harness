@@ -123,7 +123,7 @@ Sau grill với chủ dự án, lane **chuyển hẳn** sang ứng dụng native
 - **Đính kèm tệp**: `POST /api/session/uploadFileBinary` + `PromptContentPart::File{receiptId}`; nút Attach file… trong panel chat.
 - **Panel Jobs**: `job/list` + `job/follow`, output 128 KiB.
 - **Probe mở rộng**: chờ `$events=ready`, in từng stream, và `pluginInventory/list`; số đo mới **265 MiB RSS / 243–245 MiB PSS**.
-- **Preview ảnh** (PNG/JPEG/GIF/WebP/BMP/ICO, trần 16 MiB/8192 px), **tab Plugins** read-only, **model picker** (catalog + selectModel), **panel Schedules** (list/delete), và nút **Cancel turn**.
+- **Preview ảnh** (PNG/JPEG/GIF/WebP/BMP/ICO, trần 16 MiB/8192 px), **tab Plugins** read-only, **model picker** (catalog + selectModel), **panel Schedules** (list/delete), nút **Cancel turn**, và **session list theo title/tuổi/running**.
 - Test: `client-core` **79 unit + 8 multipart**, `native-app` **25 unit**.
 
 **Còn lại (2026-10-23):** lượt quyết định approval thật (cần tool call sống); `job/follow`/`attachWait` với id sống; marketplace/deliverables/feedback/goals/todo/plan UI và skills/schedules UI; office preview; plugin management mutations; updater ký số; nối AppDir/AppImage vào release lane + ký; parity đủ màn hình.

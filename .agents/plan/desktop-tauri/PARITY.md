@@ -4,7 +4,7 @@ A screen is done only when it runs on the native app and its probe passes.
 Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 
 ## Core
-- ◐ Session list (`session/list`) — M2; shown in egui, no native probe yet
+- ◐ Session list (`session/list`) — projected title, running/blank marker, relative update age, identity on hover; no list-specific native probe yet
 - ◐ Session viewer / log (`session/page`) — async read-only page shown in egui; pagination/probe pending
 - ✓ Tool-call status derivation — M2
 - ◐ Chat submit (`session/prompt`) + follow (`session/follow`) — egui composer with **file attachment** (upload → receipt → prompt file part) and follow display; no real model probe, cancel UI or transcript projection
