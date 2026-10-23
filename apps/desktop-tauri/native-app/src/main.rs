@@ -2824,12 +2824,17 @@ impl eframe::App for DesktopApp {
                     .show(ui, |ui| {
                         if let Some(results) = &self.session_search {
                             for item in &results.items {
+                                let display = if item.session_id.chars().count() > 26 {
+                                    format!("{}…", item.session_id.chars().take(25).collect::<String>())
+                                } else {
+                                    item.session_id.clone()
+                                };
                                 if ui
                                     .selectable_label(
                                         self.selected_session.as_ref() == Some(&item.session_id),
-                                        &item.session_id,
+                                        display,
                                     )
-                                    .on_hover_text(&item.snippet)
+                                    .on_hover_text(format!("{}\n{}", item.session_id, item.snippet))
                                     .clicked()
                                 {
                                     selected = Some(item.session_id.clone());
@@ -2842,18 +2847,25 @@ impl eframe::App for DesktopApp {
                             let now = now_millis();
                             for summary in &self.sessions {
                                 let label = session_label(summary);
-                                let running = if summary.running { " · running" } else { "" };
+                                let running = if summary.running { "● " } else { "" };
                                 let blank = if summary.blank { " (blank)" } else { "" };
+                                let age = relative_time(summary.updated_at, now);
+                                let display = format!("{running}{label}{blank}");
+                                let display = if display.chars().count() > 26 {
+                                    format!("{}…", display.chars().take(25).collect::<String>())
+                                } else {
+                                    display
+                                };
                                 if ui
                                     .selectable_label(
                                         self.selected_session.as_ref()
                                             == Some(&summary.session_id),
-                                        format!(
-                                            "{label}{running}{blank} · {}",
-                                            relative_time(summary.updated_at, now)
-                                        ),
+                                        format!("{display}  ·  {age}"),
                                     )
-                                    .on_hover_text(&summary.session_id)
+                                    .on_hover_text(format!(
+                                        "{}\n{}",
+                                        summary.session_id, label
+                                    ))
                                     .clicked()
                                 {
                                     selected = Some(summary.session_id.clone());
@@ -3040,6 +3052,24 @@ impl eframe::App for DesktopApp {
             );
         }
         egui::CentralPanel::default().show(ui, |ui| {
+            if !self.show_settings && !self.show_plugins && !self.show_skills && !self.show_market && !self.show_document
+                && self.selected_session.is_none()
+            {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(80.0);
+                    ui.heading("No session selected");
+                    ui.label("Open an existing session from the sidebar, or start a new one.");
+                    ui.add_space(12.0);
+                    if ui.button("New Session").clicked() {
+                        self.request_sessions(SessionOperation::Create);
+                    }
+                    if ui.button("Refresh sessions").clicked() {
+                        self.session_query.clear();
+                        self.refresh_sessions();
+                    }
+                });
+                return;
+            }
             if self.show_settings {
                 let action = self.settings_panel.ui(
                     ui,
