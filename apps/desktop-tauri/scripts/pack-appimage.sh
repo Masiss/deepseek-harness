@@ -7,7 +7,15 @@
 # packaged-tree probes use, so all three launch paths share one Host entry.
 #
 #   usage: pack-appimage.sh [linux-x64|linux-arm64]
+#   DSH_DESKTOP_SHELL=native packs the egui shell instead of the Tauri shell.
 set -eu
+
+shell=${DSH_DESKTOP_SHELL:-tauri}
+case "$shell" in
+  tauri) shell_bin=dsh-desktop-tauri ;;
+  native) shell_bin=dsh-desktop-native-app ;;
+  *) echo "pack-appimage: unsupported shell $shell" >&2; exit 2 ;;
+esac
 
 target=${1:-linux-$(uname -m | sed 's/x86_64/x64/; s/aarch64/arm64/')}
 case "$target" in
@@ -21,20 +29,30 @@ tree="$repo/apps/desktop/.desktop-build/targets/$target"
 work="$tree/appimage"
 appdir="$work/DeepSeek-Harness.AppDir"
 version=$(node -p "require('$repo/package.json').version")
-out="$work/DeepSeek-Harness-$version-$appimage_arch.AppImage"
+suffix=""
+[ "$shell" = native ] && suffix=-native
+out="$work/DeepSeek-Harness$suffix-$version-$appimage_arch.AppImage"
 
 for required in "$tree/bin/desktop-host" "$tree/dsh/node_modules/@deepseek-ai/dsh-desktop-host/package.json" \
   "$tree/runtime/bin/node" "$tree/runtime/primary-runtime/dependencies/node/bin/node" "$tree/project/package.json"; do
   [ -e "$required" ] || { echo "pack-appimage: missing $required; run prepare-linux-runtime first" >&2; exit 1; }
 done
 
-echo "pack-appimage: building the shell"
-cargo build --release --manifest-path "$repo/apps/desktop-tauri/src-tauri/Cargo.toml"
+echo "pack-appimage: building the $shell shell"
+if [ "$shell" = native ]; then
+  cargo build --release --manifest-path "$repo/apps/desktop-tauri/native-app/Cargo.toml"
+else
+  cargo build --release --manifest-path "$repo/apps/desktop-tauri/src-tauri/Cargo.toml"
+fi
 
 rm -rf "$appdir"
 mkdir -p "$appdir/usr/bin" "$appdir/usr/share/dsh" "$appdir/usr/share/applications"
 
-cp "$repo/apps/desktop-tauri/src-tauri/target/release/dsh-desktop-tauri" "$appdir/usr/bin/"
+if [ "$shell" = native ]; then
+  cp "$repo/apps/desktop-tauri/native-app/target/release/dsh-desktop-native-app" "$appdir/usr/bin/"
+else
+  cp "$repo/apps/desktop-tauri/src-tauri/target/release/dsh-desktop-tauri" "$appdir/usr/bin/"
+fi
 for part in bin dsh runtime project; do
   cp -a "$tree/$part" "$appdir/usr/share/dsh/$part"
 done
@@ -47,12 +65,13 @@ cat > "$appdir/deepseek-harness.desktop" <<'EOF'
 Type=Application
 Name=DeepSeek Harness
 Comment=Agent harness desktop application
-Exec=dsh-desktop-tauri %U
+Exec=__SHELL_BIN__ %U
 Icon=deepseek-harness
 Categories=Development;
 Terminal=false
 MimeType=x-scheme-handler/dsh;
 EOF
+sed -i "s/__SHELL_BIN__/$shell_bin/" "$appdir/deepseek-harness.desktop"
 cp "$appdir/deepseek-harness.desktop" "$appdir/usr/share/applications/"
 
 cat > "$appdir/AppRun" <<EOF
@@ -94,9 +113,9 @@ fi
 if [ -n "\${DSH_COMPONENT_FEED:-}" ]; then
   export DSH_DESKTOP_COMPONENT_FEED="\$DSH_COMPONENT_FEED"
 fi
-exec "\$here/usr/bin/dsh-desktop-tauri" "\$@"
+exec "\$here/usr/bin/$shell_bin" "\$@"
 EOF
-chmod +x "$appdir/AppRun" "$appdir/usr/bin/dsh-desktop-tauri"
+chmod +x "$appdir/AppRun" "$appdir/usr/bin/$shell_bin"
 
 # Pinned release: the `continuous` build's desktop-file check waits on a child
 # with WUNTRACED and reports a valid file as broken, so it never packs here.

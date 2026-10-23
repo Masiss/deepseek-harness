@@ -126,6 +126,7 @@ Sau grill với chủ dự án, lane **chuyển hẳn** sang ứng dụng native
 - **Preview ảnh** (PNG/JPEG/GIF/WebP/BMP/ICO, trần 16 MiB/8192 px), **tab Plugins** read-only, **model picker** (catalog + selectModel), **panel Schedules** (list/delete), nút **Cancel turn**, và **session list theo title/tuổi/running**.
 - **Transcript**: snapshot + event sống → message/tool/approval/job + draft streaming, trần 2000 row/256 KiB.
 - **Settings ghi bằng mutate** (xoá field, bảo vệ secret slot) và **bật/tắt plugin/bundle** trong tab Plugins.
+- **Native AppImage**: `DSH_DESKTOP_SHELL=native bash apps/desktop-tauri/scripts/pack-appimage.sh linux-x64` (87,6 MB), `appimage-probe.sh` PASS (AppRun contract + Host boot, headless); release lane vẫn đóng gói Tauri và chưa ký native.
 - **Skills tab** (list theo session), **Deliverables panel** (link mở preview), **transcript card** cho todo/goal/plan + reasoning.
 - **Question card**: `ask_user_question` hiện card chọn đáp án (một/nhiều + free text), gửi qua waterfall `$events`; trước đó app delegate mọi event lạ nên câu hỏi thật bị `NO_PROVIDER`.
 - **Approval + job + câu hỏi thật**: `scripts/approval-probe.sh [allow|reject|delegate]` + `scripts/mock-model-server.mjs` chứng minh ask → allow (tool chạy, marker ngoài workspace) / reject / delegate (audit đúng, không chạy), `job/follow` đọc output job nền, và `ask_user_question` được trả lời qua waterfall `$events`.

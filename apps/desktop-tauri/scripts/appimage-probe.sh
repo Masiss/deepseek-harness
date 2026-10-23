@@ -32,8 +32,11 @@ echo "RESULT appimage=$(basename "$appimage") bytes=$(stat -c %s "$appimage")"
 
 # --- A. AppRun contract, with a stub shell binary -------------------------
 cp -a "$extract" "$work/apprun"
-cat > "$work/apprun/usr/bin/dsh-desktop-tauri" <<'STUB'
+shell_bin=$(basename "$(find "$work/apprun/usr/bin" -maxdepth 1 -name 'dsh-desktop-*' | head -1)")
+[ -n "$shell_bin" ] || { echo "RESULT shell=missing"; exit 1; }
+cat > "$work/apprun/usr/bin/$shell_bin" <<'STUB'
 #!/bin/sh
+echo "shell=$0"
 echo "appimage=${APPIMAGE:-unset}"
 echo "host_bin=$DSH_DESKTOP_HOST_BIN"
 echo "runtime_dir=$DSH_DESKTOP_RUNTIME_DIR"
@@ -43,7 +46,7 @@ echo "client_version=$DSH_CLIENT_VERSION"
 echo "project_seeded=$([ -f "$DSH_DESKTOP_PROJECT_DIR/package.json" ] && echo yes || echo no)"
 echo "node_exec=$([ -x "$DSH_DESKTOP_RUNTIME_DIR/../runtime/bin/node" ] && echo yes || echo no)"
 STUB
-chmod +x "$work/apprun/usr/bin/dsh-desktop-tauri"
+chmod +x "$work/apprun/usr/bin/$shell_bin"
 env -i PATH=/usr/bin:/bin HOME="$work/home" TMPDIR="$work/tmp" \
   XDG_CACHE_HOME="$work/cache" XDG_CONFIG_HOME="$work/config" \
   DSH_HOME="$work/home/.dsh" APPIMAGE="$appimage" APPDIR="$work/apprun" \
