@@ -12,10 +12,11 @@ use document_preview::{
 };
 use dsh_client_core::{
     approvals::{ApprovalDecision, PendingApproval},
-    chat::{ChatClient, PromptContentPart, PromptMode, PromptRequest},
+    chat::{AcceptedResponse, ChatClient, PromptContentPart, PromptMode, PromptRequest},
     follow::{self, FollowFrame, FollowRequest},
     models::{ModelCatalog, ModelClient, ModelSelection, SelectModelRequest, SelectModelResponse},
     plugins::{PluginInventorySnapshot, PluginsClient},
+    schedules::{ScheduleDeleteRequest, ScheduleListRequest, SchedulesClient},
     remote_events::{RemoteEvent, RemoteEventError, RemoteEvents},
     remote_stream::RemoteStreamMux,
     streams::{self, JobFollowFrame, JobView},
@@ -835,6 +836,7 @@ struct DesktopApp {
     page_error: Option<String>,
     page_receiver: Option<mpsc::Receiver<Result<SessionPage, Error>>>,
     chat_text: String,
+    cancel_receiver: Option<mpsc::Receiver<Result<AcceptedResponse, Error>>>,
     attachment: Option<FileUploadValue>,
     attachment_name: String,
     attachment_receiver: Option<mpsc::Receiver<Result<FileUploadValue, String>>>,
@@ -872,6 +874,11 @@ struct DesktopApp {
     plugins_error: Option<String>,
     plugins_receiver: Option<mpsc::Receiver<Result<PluginInventorySnapshot, Error>>>,
     terminal: TerminalPanel,
+    schedules: Vec<serde_json::Value>,
+    schedules_session: Option<String>,
+    schedules_receiver: Option<mpsc::Receiver<Result<Vec<serde_json::Value>, String>>>,
+    schedules_error: Option<String>,
+    schedule_delete_receiver: Option<mpsc::Receiver<Result<(), String>>>,
     jobs: Vec<JobView>,
     jobs_session: Option<String>,
     jobs_receiver: Option<mpsc::Receiver<Result<Vec<JobView>, String>>>,
@@ -924,6 +931,7 @@ impl DesktopApp {
             page_error: None,
             page_receiver: None,
             chat_text: String::new(),
+            cancel_receiver: None,
             attachment: None,
             attachment_name: String::new(),
             attachment_receiver: None,
@@ -961,6 +969,11 @@ impl DesktopApp {
             plugins_error: None,
             plugins_receiver: None,
             terminal: TerminalPanel::default(),
+            schedules: Vec::new(),
+            schedules_session: None,
+            schedules_receiver: None,
+            schedules_error: None,
+            schedule_delete_receiver: None,
             jobs: Vec::new(),
             jobs_session: None,
             jobs_receiver: None,
@@ -1262,7 +1275,12 @@ impl DesktopApp {
         self.job_output.clear();
         self.job_status.clear();
         self.job_receiver = None;
+        self.schedules.clear();
+        self.schedules_session = None;
+        self.schedules_error = None;
+        self.schedule_delete_receiver = None;
         self.start_job_list();
+        self.start_schedules();
         self.session_page = None;
         self.page_error = None;
         self.chat_receiver = None;
@@ -1335,6 +1353,91 @@ impl DesktopApp {
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.attachment_receiver = None;
                 self.attachment_error = Some("Upload worker stopped unexpectedly".to_owned());
+            }
+        }
+    }
+
+    fn start_schedules(&mut self) {
+        let (Some(session), Some(transport)) = (self.selected_session.clone(), self.transport.clone())
+        else {
+            return;
+        };
+        if self.schedules_session.as_deref() == Some(session.as_str()) {
+            return;
+        }
+        self.schedules_session = Some(session.clone());
+        let (sender, receiver) = mpsc::channel();
+        self.schedules_receiver = Some(receiver);
+        self.schedules_error = None;
+        std::thread::spawn(move || {
+            let request = ScheduleListRequest {
+                session_id: session,
+            };
+            let result = SchedulesClient::new(&transport)
+                .list(request)
+                .map_err(|error| error.to_string());
+            let _ = sender.send(result);
+        });
+    }
+
+    fn delete_schedule(&mut self, id: String) {
+        let (Some(session), Some(transport)) = (self.selected_session.clone(), self.transport.clone())
+        else {
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let request = ScheduleDeleteRequest {
+                session_id: session,
+                id,
+            };
+            let result = SchedulesClient::new(&transport)
+                .delete(request)
+                .map(|_| ())
+                .map_err(|error| error.to_string());
+            let _ = sender.send(result);
+        });
+        self.schedule_delete_receiver = Some(receiver);
+    }
+
+    fn poll_schedules(&mut self) {
+        loop {
+            let update = self
+                .schedules_receiver
+                .as_ref()
+                .map(|receiver| receiver.try_recv());
+            match update {
+                Some(Ok(Ok(records))) => self.schedules = records,
+                Some(Ok(Err(error))) => {
+                    self.schedules_error = Some(format!("Schedule list failed: {error}"));
+                    self.schedules_receiver = None;
+                }
+                Some(Err(mpsc::TryRecvError::Disconnected)) => {
+                    self.schedules_receiver = None;
+                }
+                Some(Err(mpsc::TryRecvError::Empty)) | None => break,
+            }
+        }
+        loop {
+            let update = self
+                .schedule_delete_receiver
+                .as_ref()
+                .map(|receiver| receiver.try_recv());
+            match update {
+                Some(Ok(Ok(()))) => {
+                    self.schedule_delete_receiver = None;
+                    self.schedules_session = None;
+                    self.start_schedules();
+                    self.status = "Schedule deleted".to_owned();
+                }
+                Some(Ok(Err(error))) => {
+                    self.schedules_error = Some(format!("Delete failed: {error}"));
+                    self.schedule_delete_receiver = None;
+                }
+                Some(Err(mpsc::TryRecvError::Disconnected)) => {
+                    self.schedule_delete_receiver = None;
+                }
+                Some(Err(mpsc::TryRecvError::Empty)) | None => break,
             }
         }
     }
@@ -1446,6 +1549,23 @@ impl DesktopApp {
         }
     }
 
+    fn cancel_turn(&mut self) {
+        if self.cancel_receiver.is_some() {
+            return;
+        }
+        let (Some(session), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.page_error = Some("Select a connected Session before cancelling".to_owned());
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(ChatClient::new(&transport).cancel(session));
+        });
+        self.cancel_receiver = Some(receiver);
+    }
+
     fn send_prompt(&mut self) {
         let Some(session_id) = self.selected_session.clone() else {
             return;
@@ -1521,7 +1641,12 @@ impl eframe::App for DesktopApp {
         }
         self.poll_attachment();
         self.poll_jobs();
-        if self.jobs_receiver.is_some() || self.job_receiver.is_some() {
+        self.poll_schedules();
+        if self.jobs_receiver.is_some()
+            || self.job_receiver.is_some()
+            || self.schedules_receiver.is_some()
+            || self.schedule_delete_receiver.is_some()
+        {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         if self.quitting.load(Ordering::Acquire) {
@@ -1752,6 +1877,25 @@ impl eframe::App for DesktopApp {
                     self.preview_loading = false;
                     self.preview_error = Some("Document read worker stopped unexpectedly".into());
                     self.preview_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30));
+                }
+            }
+        }
+        if let Some(receiver) = &self.cancel_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(_)) => {
+                    self.status = "Turn cancellation requested".to_owned();
+                    self.cancel_receiver = None;
+                }
+                Ok(Err(error)) => {
+                    self.page_error = Some(format!("Cancel failed: {error}"));
+                    self.cancel_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.page_error = Some("Cancel worker stopped unexpectedly".into());
+                    self.cancel_receiver = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     ctx.request_repaint_after(std::time::Duration::from_millis(30));
@@ -2067,6 +2211,60 @@ impl eframe::App for DesktopApp {
             ui.label(&self.status);
         });
         if self.selected_session.is_some() {
+            egui::Panel::bottom("schedules-panel").show(ui, |ui| {
+                egui::CollapsingHeader::new(format!("Schedules ({})", self.schedules.len()))
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        if let Some(error) = &self.schedules_error {
+                            ui.colored_label(egui::Color32::LIGHT_RED, error);
+                        }
+                        let mut deleted = None;
+                        egui::ScrollArea::vertical()
+                            .id_salt("schedule-list")
+                            .max_height(120.0)
+                            .show(ui, |ui| {
+                                for record in &self.schedules {
+                                    let id = record
+                                        .get("id")
+                                        .and_then(serde_json::Value::as_str)
+                                        .unwrap_or_default()
+                                        .to_owned();
+                                    let title = record
+                                        .get("title")
+                                        .and_then(serde_json::Value::as_str)
+                                        .unwrap_or(&id);
+                                    let kind = record
+                                        .get("kind")
+                                        .and_then(serde_json::Value::as_str)
+                                        .unwrap_or("schedule");
+                                    let next = record
+                                        .get("scheduledAt")
+                                        .and_then(serde_json::Value::as_str)
+                                        .unwrap_or("");
+                                    ui.horizontal_wrapped(|ui| {
+                                        ui.label(format!("{title} · {kind} · {next}"));
+                                        if ui
+                                            .add_enabled(
+                                                self.schedule_delete_receiver.is_none(),
+                                                egui::Button::new("Delete"),
+                                            )
+                                            .clicked()
+                                        {
+                                            deleted = Some(id.clone());
+                                        }
+                                    });
+                                }
+                                if self.schedules.is_empty() && self.schedules_receiver.is_none() {
+                                    ui.label("No schedules for this Session.");
+                                }
+                            });
+                        if let Some(id) = deleted {
+                            self.delete_schedule(id);
+                        }
+                    });
+            });
+        }
+        if self.selected_session.is_some() {
             egui::Panel::bottom("jobs-panel").show(ui, |ui| {
                 egui::CollapsingHeader::new(format!("Jobs ({})", self.jobs.len()))
                     .default_open(false)
@@ -2367,17 +2565,28 @@ impl eframe::App for DesktopApp {
                 if let Some(error) = &self.attachment_error {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
                 }
-                if ui
-                    .add_enabled(
-                        !self.chat_loading
-                            && !self.chat_text.trim().is_empty()
-                            && self.attachment_receiver.is_none(),
-                        egui::Button::new("Send"),
-                    )
-                    .clicked()
-                {
-                    self.send_prompt();
-                }
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            !self.chat_loading
+                                && !self.chat_text.trim().is_empty()
+                                && self.attachment_receiver.is_none(),
+                            egui::Button::new("Send"),
+                        )
+                        .clicked()
+                    {
+                        self.send_prompt();
+                    }
+                    if ui
+                        .add_enabled(
+                            self.chat_loading && self.cancel_receiver.is_none(),
+                            egui::Button::new("Cancel turn"),
+                        )
+                        .clicked()
+                    {
+                        self.cancel_turn();
+                    }
+                });
                 if self.chat_loading {
                     ui.label("Waiting for assistant…");
                 }
@@ -2567,6 +2776,13 @@ fn probe_streams(transport: HttpTransport, mux: RemoteStreamMux) {
                 streams::workspace_file_changes(&mux, &scope, "cordis.yml"),
                 timeout,
             );
+            let request = ScheduleListRequest {
+                session_id: id.clone(),
+            };
+            match SchedulesClient::new(&transport).list(request) {
+                Ok(records) => eprintln!("dsh: native schedules={}", records.len()),
+                Err(error) => eprintln!("dsh: native schedules=failed: {error}"),
+            }
         }
         None => {
             eprintln!("dsh: native stream job/list=skipped: no sessions");

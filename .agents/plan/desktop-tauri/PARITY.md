@@ -22,8 +22,8 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 ## Settings & plugins
 - ✓ Settings (`describe`, `update`, `replace`, `mutate`, `openSettingsDocument`) — M6
 - ✓ Plugin inventory — M6
-- ✓ Skills list — M6
-- ✓ Schedules (`list`, `catalog`, `history`, `delete`, `update`) — M6
+- ✓ Skills list — M6 (no native surface yet)
+- ✓ Schedules (`list`, `catalog`, `history`, `delete`, `update`) — M6; per-Session list with delete in egui
 - ✓ Workspace files (`read`, `readBytes`, `stat`, `list`) — unary and multipart bytes transport
 - ◐ Settings UI — namespace/schema/redacted values; optimistic user-override patch editor wired, replace/mutate and live Host probe pending
 - ◐ Plugin inventory view — module name, enablement, fiber phase, and agent presets; read-only (management mutations and marketplace pending)
@@ -47,7 +47,7 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 - ✓ Remote Event `$events` waterfall transport and approval outcomes; projections/control stream UI pending
 - ✓ Multipart binary response decoder and prompt attachment upload (`session/uploadFileBinary`)
 - ✓ Native probe (`scripts/native-gui-probe.sh`) launches the packaged runtime, waits for Host readiness, authentication, `$events`, and the stream probe, and reports tree RSS/PSS
-- ✓ RSS measurement on a real Hyprland session: 263–265 MiB RSS / 240–245 MiB PSS idle after authentication
+- ✓ RSS measurement on a real Hyprland session: 263–266 MiB RSS / 240–245 MiB PSS idle after authentication (one run measured 205/182)
 
 ## Memory gate
 - ✓ RSS < 300 MiB measured on a real machine (263–265 MiB RSS / 240–245 MiB PSS idle)
