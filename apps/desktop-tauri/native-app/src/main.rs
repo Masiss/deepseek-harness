@@ -843,6 +843,16 @@ enum SessionUpdate {
 }
 
 /// Application state owns the transport and the last session-list result so UI rendering stays local.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ActiveView {
+    Sessions,
+    Settings,
+    Document,
+    Plugins,
+    Skills,
+    Marketplace,
+}
+
 struct DesktopApp {
     host: Option<Host>,
     host_receiver: Option<mpsc::Receiver<Host>>,
@@ -909,6 +919,7 @@ struct DesktopApp {
     show_plugins: bool,
     show_skills: bool,
     show_market: bool,
+    active_view: ActiveView,
     skills: Option<SkillListResponse>,
     skills_receiver: Option<mpsc::Receiver<Result<SkillListResponse, Error>>>,
     skills_loading: bool,
@@ -1031,6 +1042,7 @@ impl DesktopApp {
             show_plugins: false,
             show_skills: false,
             show_market: false,
+            active_view: ActiveView::Sessions,
             skills: None,
             skills_receiver: None,
             skills_loading: false,
@@ -2570,10 +2582,103 @@ impl eframe::App for DesktopApp {
                 .store(true, std::sync::atomic::Ordering::Release);
             self.hidden.store(true, Ordering::Release);
         }
-        egui::Panel::top("title_bar").show(ui, |ui| {
-            ui.heading("DeepSeek Harness");
-        });
-        egui::Panel::left("sessions").show(ui, |ui| {
+        // Navigation rail: compact, icon-first, grouped.
+        egui::Panel::left("nav_rail")
+            .resizable(false)
+            .exact_size(56.0)
+            .show(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("DSH").strong().size(11.0));
+                    ui.add_space(8.0);
+                    let items = [
+                        ("S", "Sessions", ActiveView::Sessions),
+                        ("D", "Document", ActiveView::Document),
+                        ("P", "Plugins", ActiveView::Plugins),
+                        ("K", "Skills", ActiveView::Skills),
+                        ("M", "Market", ActiveView::Marketplace),
+                        ("T", "Settings", ActiveView::Settings),
+                    ];
+                    for (icon, tooltip, view) in items {
+                        let selected = self.active_view == view;
+                        let btn = ui.add(
+                            egui::Button::new(egui::RichText::new(icon).size(16.0).strong())
+                                .min_size(egui::vec2(40.0, 40.0)),
+                        );
+                        let rect = btn.rect;
+                        let clicked = btn.clicked();
+                        btn.on_hover_text(tooltip);
+                        if selected {
+                            ui.painter().rect_filled(
+                                rect,
+                                8.0,
+                                ui.visuals().selection.bg_fill,
+                            );
+                        }
+                        if clicked {
+                            self.active_view = view;
+                            match view {
+                                ActiveView::Sessions => {
+                                    self.show_settings = false;
+                                    self.show_document = false;
+                                    self.show_plugins = false;
+                                    self.show_skills = false;
+                                    self.show_market = false;
+                                }
+                                ActiveView::Settings => {
+                                    self.open_settings();
+                                    self.show_document = false;
+                                    self.show_plugins = false;
+                                    self.show_skills = false;
+                                    self.show_market = false;
+                                }
+                                ActiveView::Document => {
+                                    self.show_document = true;
+                                    self.show_settings = false;
+                                    self.show_plugins = false;
+                                    self.show_skills = false;
+                                    self.show_market = false;
+                                }
+                                ActiveView::Plugins => {
+                                    self.show_plugins = true;
+                                    self.show_settings = false;
+                                    self.show_document = false;
+                                    self.show_skills = false;
+                                    self.show_market = false;
+                                    if self.plugins_snapshot.is_none() {
+                                        self.refresh_plugins();
+                                    }
+                                }
+                                ActiveView::Skills => {
+                                    self.show_skills = true;
+                                    self.show_settings = false;
+                                    self.show_document = false;
+                                    self.show_plugins = false;
+                                    self.show_market = false;
+                                    if self.skills.is_none() {
+                                        self.refresh_skills();
+                                    }
+                                }
+                                ActiveView::Marketplace => {
+                                    self.show_market = true;
+                                    self.show_settings = false;
+                                    self.show_document = false;
+                                    self.show_plugins = false;
+                                    self.show_skills = false;
+                                    if self.market_indexes.is_empty() {
+                                        self.refresh_market_indexes();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            });
+        egui::Panel::left("sessions")
+            .resizable(true)
+            .default_size(280.0)
+            .min_size(220.0)
+            .show(ui, |ui| {
             if ui
                 .selectable_label(
                     !self.show_settings && !self.show_plugins && !self.show_skills,
@@ -2923,6 +3028,16 @@ impl eframe::App for DesktopApp {
             .ui(ui, self.transport.clone(), self.streams.clone());
                     });
             });
+        }
+        if std::env::var("DSH_DESKTOP_DEBUG_LAYOUT").as_deref() == Ok("1") {
+            let vp = ui.ctx().input(|i| i.viewport().inner_rect).unwrap_or(egui::Rect::ZERO);
+            eprintln!(
+                "dsh: layout viewport={}x{} nav_rail=56 sessions=280 central={}x{}",
+                vp.width() as i32,
+                vp.height() as i32,
+                (vp.width() - 56.0 - 280.0) as i32,
+                (vp.height() - 36.0 - 24.0) as i32
+            );
         }
         egui::CentralPanel::default().show(ui, |ui| {
             if self.show_settings {
