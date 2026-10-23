@@ -3054,6 +3054,18 @@ impl eframe::App for DesktopApp {
             );
         }
         egui::CentralPanel::default().show(ui, |ui| {
+            if self.transport.is_none() {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(40.0);
+                    ui.heading("Not connected");
+                    ui.label("The Host sidecar is not running or authentication failed.");
+                    ui.label("Check DSH_DESKTOP_HOST_BIN and the runtime tree.");
+                    if ui.button("Retry connection").clicked() {
+                        self.connect();
+                    }
+                });
+                return;
+            }
             if !self.show_settings && !self.show_plugins && !self.show_skills && !self.show_market && !self.show_document
                 && self.selected_session.is_none()
             {
