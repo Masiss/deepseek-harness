@@ -26,7 +26,7 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 - ✓ Schedules (`list`, `catalog`, `history`, `delete`, `update`) — M6
 - ✓ Workspace files (`read`, `readBytes`, `stat`, `list`) — unary and multipart bytes transport
 - ◐ Settings UI — namespace/schema/redacted values; optimistic user-override patch editor wired, replace/mutate and live Host probe pending
-- ☐ Plugin manager / marketplace UI
+- ◐ Plugin inventory view — module name, enablement, fiber phase, and agent presets; read-only (management mutations and marketplace pending)
 - ✓ Workspace, session-control, job, account, remote-access, file-watch, and user-question streams — typed clients over the shared mux; probe verifies workspace/follow, session/control, account/watch, remoteAccess/follow, account/watchExpiry, job/list, and workspaceFiles/changes on a real Host (job/follow and attachWait need a live job or question)
 
 ## App shell
@@ -39,7 +39,7 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 - ◐ AppImage AppDir script copies the packaged Host/runtime and supplies AppRun; a self-contained AppDir launch reached `host=ready` and `auth=ok`; not wired into the release lane and not signed
 
 ## Open parity gaps
-- ◐ Text document preview — user-supplied Host path, 500-line page, literal selectable text; images/office preview and Host probe pending
+- ◐ Document preview — text page (500 lines, literal selectable) and decoded image preview (PNG/JPEG/GIF/WebP/BMP/ICO up to 16 MiB and 8192 px per side); office preview and Host probe pending
 - ☐ Deliverables view
 - ☐ Feedback / human interaction
 - ◐ Jobs panel — session job list (`job/list`) with per-job output follow (`job/follow`); visible in egui, live-id probe pending

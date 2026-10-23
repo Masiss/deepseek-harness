@@ -19,7 +19,7 @@ rfd = "0.16"
 # dirs provides the user home directory for the lock file path.
 dirs = "6"
 # image decodes and scales the existing product icon for the system tray.
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
 # reqwest blocking performs the optional startup updater metadata request.
 reqwest = { version = "0.12", default-features = true, features = ["blocking", "json"] }
 serde = { version = "1", features = ["derive"] }

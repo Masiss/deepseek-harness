@@ -7,11 +7,14 @@ mod settings_panel;
 mod terminal_ansi;
 mod updater;
 
-use document_preview::{DocumentPreview, TextDocument};
+use document_preview::{
+    DocumentPreview, ImageDocument, ImagePreview, PreviewDocument, TextDocument,
+};
 use dsh_client_core::{
     approvals::{ApprovalDecision, PendingApproval},
     chat::{ChatClient, PromptContentPart, PromptMode, PromptRequest},
     follow::{self, FollowFrame, FollowRequest},
+    plugins::{PluginInventorySnapshot, PluginsClient},
     remote_events::{RemoteEvent, RemoteEventError, RemoteEvents},
     remote_stream::RemoteStreamMux,
     streams::{self, JobFollowFrame, JobView},
@@ -24,6 +27,7 @@ use dsh_client_core::{
     settings::{
         SettingsClient, SettingsDescribeValue, SettingsNamespaceView, SettingsUpdateRequest,
     },
+    workspace_files::WorkspaceByteReadOptions,
     terminal::{
         self, TerminalClient, TerminalCloseRequest, TerminalCreateRequest,
         TerminalEnvironment, TerminalFrame, TerminalInput, TerminalInputLimits,
@@ -31,7 +35,9 @@ use dsh_client_core::{
     },
     transport::HttpTransport,
     upload::{FileUploadClient, FileUploadValue},
-    workspace_files::{WorkspaceFileRange, WorkspaceFileScope, WorkspaceFilesClient},
+    workspace_files::{
+        WorkspaceByteRange, WorkspaceFileRange, WorkspaceFileScope, WorkspaceFilesClient,
+    },
     Error,
 };
 use eframe::egui;
@@ -846,12 +852,19 @@ struct DesktopApp {
     settings_update_receiver: Option<mpsc::Receiver<Result<SettingsNamespaceView, Error>>>,
     show_settings: bool,
     document_preview: DocumentPreview,
+    image_preview: ImagePreview,
     preview_document: Option<TextDocument>,
+    preview_image: Option<ImageDocument>,
     preview_path: String,
     preview_loading: bool,
     preview_error: Option<String>,
-    preview_receiver: Option<mpsc::Receiver<Result<TextDocument, Error>>>,
+    preview_receiver: Option<mpsc::Receiver<Result<PreviewDocument, String>>>,
     show_document: bool,
+    show_plugins: bool,
+    plugins_snapshot: Option<PluginInventorySnapshot>,
+    plugins_loading: bool,
+    plugins_error: Option<String>,
+    plugins_receiver: Option<mpsc::Receiver<Result<PluginInventorySnapshot, Error>>>,
     terminal: TerminalPanel,
     jobs: Vec<JobView>,
     jobs_session: Option<String>,
@@ -923,12 +936,19 @@ impl DesktopApp {
             settings_update_receiver: None,
             show_settings: false,
             document_preview: DocumentPreview,
+            image_preview: ImagePreview::default(),
             preview_document: None,
+            preview_image: None,
             preview_path: String::new(),
             preview_loading: false,
             preview_error: None,
             preview_receiver: None,
             show_document: false,
+            show_plugins: false,
+            plugins_snapshot: None,
+            plugins_loading: false,
+            plugins_error: None,
+            plugins_receiver: None,
             terminal: TerminalPanel::default(),
             jobs: Vec::new(),
             jobs_session: None,
@@ -1077,6 +1097,23 @@ impl DesktopApp {
         self.refresh_settings();
     }
 
+    fn refresh_plugins(&mut self) {
+        if self.plugins_loading {
+            return;
+        }
+        let Some(transport) = self.transport.clone() else {
+            self.plugins_error = Some("Connect to load plugins".to_owned());
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(PluginsClient::new(&transport).list());
+        });
+        self.plugins_receiver = Some(receiver);
+        self.plugins_loading = true;
+        self.plugins_error = None;
+    }
+
     fn refresh_settings(&mut self) {
         if self.settings_loading || self.settings_update_receiver.is_some() {
             return;
@@ -1124,30 +1161,38 @@ impl DesktopApp {
             return;
         }
         let (sender, receiver) = mpsc::channel();
+        let image_path = is_image_path(&path);
         std::thread::spawn(move || {
-            let result = WorkspaceFilesClient::new(&transport)
-                .read(
-                    WorkspaceFileScope { session_id },
-                    path.clone(),
-                    WorkspaceFileRange {
-                        offset: None,
-                        limit: Some(500),
-                    },
-                )
-                .map(|page| {
-                    let name = page
-                        .stat
-                        .absolute_path
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(&path)
-                        .to_owned();
-                    TextDocument {
-                        name,
-                        host_path: page.stat.absolute_path,
-                        text: page.text,
-                    }
-                });
+            let client = WorkspaceFilesClient::new(&transport);
+            let scope = WorkspaceFileScope { session_id };
+            let result = if image_path {
+                read_image(&client, scope, &path)
+            } else {
+                client
+                    .read(
+                        scope,
+                        path.clone(),
+                        WorkspaceFileRange {
+                            offset: None,
+                            limit: Some(500),
+                        },
+                    )
+                    .map(|page| {
+                        let name = page
+                            .stat
+                            .absolute_path
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or(&path)
+                            .to_owned();
+                        PreviewDocument::Text(TextDocument {
+                            name,
+                            host_path: page.stat.absolute_path,
+                            text: page.text,
+                        })
+                    })
+                    .map_err(|error| error.to_string())
+            };
             let _ = sender.send(result);
         });
         self.preview_receiver = Some(receiver);
@@ -1158,6 +1203,7 @@ impl DesktopApp {
     fn load_session(&mut self, session_id: String) {
         self.session_title.clear();
         self.show_settings = false;
+        self.show_plugins = false;
         self.selected_session = Some(session_id.clone());
         self.terminal.select_session(
             Some(session_id.clone()),
@@ -1637,7 +1683,16 @@ impl eframe::App for DesktopApp {
         if let Some(receiver) = &self.preview_receiver {
             match receiver.try_recv() {
                 Ok(Ok(document)) => {
-                    self.preview_document = Some(document);
+                    match document {
+                        PreviewDocument::Text(document) => {
+                            self.preview_document = Some(document);
+                            self.preview_image = None;
+                        }
+                        PreviewDocument::Image(image) => {
+                            self.preview_image = Some(image);
+                            self.preview_document = None;
+                        }
+                    }
                     self.preview_loading = false;
                     self.preview_error = None;
                     self.preview_receiver = None;
@@ -1651,6 +1706,29 @@ impl eframe::App for DesktopApp {
                     self.preview_loading = false;
                     self.preview_error = Some("Document read worker stopped unexpectedly".into());
                     self.preview_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30));
+                }
+            }
+        }
+        if let Some(receiver) = &self.plugins_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(snapshot)) => {
+                    self.plugins_snapshot = Some(snapshot);
+                    self.plugins_loading = false;
+                    self.plugins_error = None;
+                    self.plugins_receiver = None;
+                }
+                Ok(Err(error)) => {
+                    self.plugins_loading = false;
+                    self.plugins_error = Some(format!("Could not load plugins: {error}"));
+                    self.plugins_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.plugins_loading = false;
+                    self.plugins_error = Some("Plugin inventory worker stopped unexpectedly".into());
+                    self.plugins_receiver = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     ctx.request_repaint_after(std::time::Duration::from_millis(30));
@@ -1746,11 +1824,12 @@ impl eframe::App for DesktopApp {
         });
         egui::Panel::left("sessions").show(ui, |ui| {
             if ui
-                .selectable_label(!self.show_settings, "Sessions")
+                .selectable_label(!self.show_settings && !self.show_plugins, "Sessions")
                 .clicked()
             {
                 self.show_settings = false;
                 self.show_document = false;
+                self.show_plugins = false;
             }
             if ui
                 .selectable_label(self.show_settings, "Settings")
@@ -1758,6 +1837,7 @@ impl eframe::App for DesktopApp {
             {
                 self.open_settings();
                 self.show_document = false;
+                self.show_plugins = false;
             }
             if ui
                 .selectable_label(self.show_document, "Document")
@@ -1765,6 +1845,18 @@ impl eframe::App for DesktopApp {
             {
                 self.show_document = true;
                 self.show_settings = false;
+                self.show_plugins = false;
+            }
+            if ui
+                .selectable_label(self.show_plugins, "Plugins")
+                .clicked()
+            {
+                self.show_plugins = true;
+                self.show_settings = false;
+                self.show_document = false;
+                if self.plugins_snapshot.is_none() {
+                    self.refresh_plugins();
+                }
             }
             ui.heading("Sessions");
             let connected = self.transport.is_some();
@@ -1963,6 +2055,59 @@ impl eframe::App for DesktopApp {
                     Some(SettingsAction::Update(request)) => self.update_settings(request),
                     None => {}
                 }
+            } else if self.show_plugins {
+                ui.horizontal(|ui| {
+                    ui.heading("Plugins");
+                    if ui
+                        .add_enabled(!self.plugins_loading, egui::Button::new("Refresh"))
+                        .clicked()
+                    {
+                        self.refresh_plugins();
+                    }
+                    if self.plugins_loading {
+                        ui.spinner();
+                    }
+                });
+                if let Some(error) = &self.plugins_error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                }
+                if let Some(snapshot) = &self.plugins_snapshot {
+                    if snapshot.management_available == Some(false) {
+                        ui.label("Plugin management is unavailable for this Host.");
+                    }
+                    egui::ScrollArea::vertical()
+                        .id_salt("plugin-inventory")
+                        .max_height(360.0)
+                        .show(ui, |ui| {
+                            if snapshot.entries.is_empty() {
+                                ui.label("No configured plugins.");
+                            }
+                            for entry in &snapshot.entries {
+                                let phase = entry.fiber_phase.map_or_else(
+                                    || "unknown".to_owned(),
+                                    |phase| format!("{phase:?}").to_lowercase(),
+                                );
+                                let state = if entry.enabled { "enabled" } else { "disabled" };
+                                ui.label(format!(
+                                    "{} · {state} · {phase}",
+                                    entry.module_name
+                                ));
+                            }
+                            if let Some(presets) = &snapshot.agent_presets {
+                                ui.separator();
+                                ui.heading("Agent presets");
+                                for preset in presets {
+                                    let name = preset.name.as_deref().unwrap_or(&preset.id);
+                                    ui.label(format!("{name} · {} row(s)", preset.rows.len()));
+                                }
+                            }
+                        });
+                } else if !self.plugins_loading {
+                    ui.label("Open this tab to load the plugin inventory.");
+                }
+                if let Some(error) = &self.page_error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                }
             } else if self.show_document {
                 ui.horizontal(|ui| {
                     ui.add(
@@ -1971,18 +2116,27 @@ impl eframe::App for DesktopApp {
                             .desired_width(360.0),
                     );
                     if ui
-                        .add_enabled(!self.preview_loading, egui::Button::new("Preview text"))
+                        .add_enabled(!self.preview_loading, egui::Button::new("Preview"))
                         .clicked()
                     {
                         self.read_document();
                     }
                 });
-                self.document_preview.ui(
-                    ui,
-                    self.preview_document.as_ref(),
-                    self.preview_loading,
-                    self.preview_error.as_deref(),
-                );
+                if self.preview_image.is_some() {
+                    self.image_preview.ui(
+                        ui,
+                        self.preview_image.as_ref(),
+                        self.preview_loading,
+                        self.preview_error.as_deref(),
+                    );
+                } else {
+                    self.document_preview.ui(
+                        ui,
+                        self.preview_document.as_ref(),
+                        self.preview_loading,
+                        self.preview_error.as_deref(),
+                    );
+                }
             } else if self.selected_session.is_none() {
                 ui.heading("Welcome");
                 if let Some(url) = &self.host_url {
@@ -2129,6 +2283,82 @@ impl eframe::App for DesktopApp {
     }
 }
 
+/// Largest image preview read; larger files are rejected instead of fetched.
+const PREVIEW_IMAGE_LIMIT: usize = 16 * 1024 * 1024;
+/// Largest decoded image side accepted by the preview.
+const PREVIEW_IMAGE_MAX_DIMENSION: u32 = 8192;
+
+/// True for extensions the preview decodes as an image.
+fn is_image_path(path: &str) -> bool {
+    let Some((_, extension)) = path.rsplit_once('.') else {
+        return false;
+    };
+    let extension = extension.to_ascii_lowercase();
+    matches!(
+        extension.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico"
+    )
+}
+
+/// Reads and decodes one workspace image for display.
+fn read_image(
+    client: &WorkspaceFilesClient<'_>,
+    scope: WorkspaceFileScope,
+    path: &str,
+) -> Result<PreviewDocument, String> {
+    let bytes = client
+        .read_bytes(
+            scope,
+            path,
+            WorkspaceByteReadOptions {
+                range: Some(WorkspaceByteRange {
+                    offset: None,
+                    length: Some(PREVIEW_IMAGE_LIMIT as u64),
+                }),
+                base_file: None,
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    if !bytes.eof {
+        return Err(format!(
+            "image is larger than {} MiB",
+            PREVIEW_IMAGE_LIMIT / (1024 * 1024)
+        ));
+    }
+    let name = bytes
+        .stat
+        .absolute_path
+        .rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .to_owned();
+    decode_preview_image(name, bytes.stat.absolute_path, &bytes.data)
+}
+
+/// Decodes exact image bytes into a preview document.
+fn decode_preview_image(
+    name: String,
+    host_path: String,
+    data: &[u8],
+) -> Result<PreviewDocument, String> {
+    let decoded =
+        image::load_from_memory(data).map_err(|error| format!("image decoding failed: {error}"))?;
+    if decoded.width() > PREVIEW_IMAGE_MAX_DIMENSION
+        || decoded.height() > PREVIEW_IMAGE_MAX_DIMENSION
+    {
+        return Err(format!(
+            "image exceeds {PREVIEW_IMAGE_MAX_DIMENSION} pixels on a side"
+        ));
+    }
+    let rgba = decoded.to_rgba8();
+    Ok(PreviewDocument::Image(ImageDocument {
+        name,
+        host_path,
+        size: [rgba.width() as usize, rgba.height() as usize],
+        rgba: rgba.into_raw(),
+    }))
+}
+
 /// Reports one probed stream: its opening frame, its failure, or a timeout.
 fn probe_first<T: serde::de::DeserializeOwned>(
     endpoint: &str,
@@ -2205,6 +2435,10 @@ fn probe_streams(transport: HttpTransport, mux: RemoteStreamMux) {
     }
     for endpoint in ["job/follow", "userQuestions/attachWait"] {
         eprintln!("dsh: native stream {endpoint}=skipped: needs a live id");
+    }
+    match PluginsClient::new(&transport).list() {
+        Ok(snapshot) => eprintln!("dsh: native plugins={}", snapshot.entries.len()),
+        Err(error) => eprintln!("dsh: native plugins=failed: {error}"),
     }
 }
 
@@ -2317,4 +2551,58 @@ fn main() -> eframe::Result {
             )))
         }),
     )
+}
+
+#[cfg(test)]
+mod preview_path_tests {
+    use super::{decode_preview_image, is_image_path};
+    use crate::document_preview::PreviewDocument;
+    use std::io::Cursor;
+
+    #[test]
+    fn recognizes_image_extensions_case_insensitively() {
+        for path in [
+            "shot.png",
+            "photo.JPG",
+            "scan.jpeg",
+            "anim.GIF",
+            "wide.webp",
+            "old.bmp",
+            "icon.ico",
+        ] {
+            assert!(is_image_path(path), "{path}");
+        }
+        for path in ["notes.md", "render.png.txt", "png", "a.pngx", ""] {
+            assert!(!is_image_path(path), "{path}");
+        }
+    }
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let pixels = image::RgbaImage::from_pixel(width, height, image::Rgba([1, 2, 3, 255]));
+        let mut out = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(pixels)
+            .write_to(&mut out, image::ImageFormat::Png)
+            .unwrap();
+        out.into_inner()
+    }
+
+    #[test]
+    fn decodes_png_bytes_into_rgba_pixels() {
+        let PreviewDocument::Image(document) =
+            decode_preview_image("shot.png".into(), "/host/shot.png".into(), &png(3, 2)).unwrap()
+        else {
+            panic!("expected image preview")
+        };
+        assert_eq!(document.size, [3, 2]);
+        assert_eq!(document.rgba.len(), 3 * 2 * 4);
+        assert_eq!(&document.rgba[..4], &[1, 2, 3, 255]);
+        assert_eq!(document.host_path, "/host/shot.png");
+    }
+
+    #[test]
+    fn rejects_bytes_that_are_not_images() {
+        let error = decode_preview_image("notes.txt".into(), "/host/notes.txt".into(), b"text")
+            .unwrap_err();
+        assert!(error.starts_with("image decoding failed: "), "{error}");
+    }
 }

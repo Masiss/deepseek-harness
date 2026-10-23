@@ -135,6 +135,14 @@ if grep -F 'dsh: native stream ' "$err" | grep -q 'failed'; then
 else
   echo "RESULT native-streams=OK"
 fi
+wait_for 'dsh: native plugins=' 40 || true
+if grep -F 'dsh: native plugins=' "$err" | grep -q 'failed'; then
+  echo "RESULT native-plugins=FAIL"
+elif grep -F 'dsh: native plugins=' "$err" >/dev/null; then
+  echo "RESULT native-plugins=OK"
+else
+  echo "RESULT native-plugins=FAIL"
+fi
 
 # Let the session list settle before measuring steady-state memory.
 sleep 3
