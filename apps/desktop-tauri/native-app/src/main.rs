@@ -4679,7 +4679,7 @@ mod transcript_render_tests {
         }
     }
 
-    fn render(transcript: &Transcript) -> Vec<String> {
+    fn render(transcript: &Transcript) -> (Vec<String>, egui::Rect) {
         let ctx = egui::Context::default();
         ctx.begin_pass(egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -4698,13 +4698,14 @@ mod transcript_render_tests {
         );
         render_transcript(&mut ui, transcript, "", &std::collections::BTreeMap::new(), false, false, &mut Vec::new());
         assert!(ui.min_rect().is_finite());
+        let rect = ui.min_rect();
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         let mut texts = Vec::new();
         for clipped in output.shapes {
             collect_text(&clipped.shape, &mut texts);
         }
-        texts
+        (texts, rect)
     }
 
     fn collect_text(shape: &egui::Shape, texts: &mut Vec<String>) {
@@ -4790,14 +4791,29 @@ mod transcript_render_tests {
             "tool/result",
             json!({"message": {"isError": true, "content": [{"type": "text", "text": "exit 1"}]}}),
         ));
-        let texts = render(&transcript);
+        let (texts, _) = render(&transcript);
         for expected in ["You", "hello transcript", "Tool error", "exit 1"] {
             assert!(texts.iter().any(|text| text == expected), "{texts:?}");
         }
 
-        let empty = render(&Transcript::default());
+        let (empty, _) = render(&Transcript::default());
         assert!(empty
             .iter()
             .any(|text| text == "No messages in this window yet."));
+    }
+
+    #[test]
+    fn long_transcripts_stay_inside_the_viewport_scroll_region() {
+        let mut transcript = Transcript::default();
+        for seq in 1..=1000 {
+            transcript.apply(&event(
+                seq,
+                "user/message",
+                json!({"content": format!("Message {seq}: {}", "text ".repeat(20))}),
+            ));
+        }
+        let (_, rect) = render(&transcript);
+        assert!(rect.height() <= 480.0, "transcript UI overflowed: {rect:?}");
+        assert_eq!(transcript.rows().len(), 1000);
     }
 }

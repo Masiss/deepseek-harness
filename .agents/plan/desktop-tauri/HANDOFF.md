@@ -4,7 +4,7 @@ Cập nhật 2026-10-23. Mục đích: session mới đọc file này là biết
 
 ## Cập nhật native UI — 2026-10-23
 
-`native-app` tiếp tục có navigation rail/sidebar, session-list renderer riêng, composer multiline với Ctrl+Enter, trạng thái loading/disconnected/retry, và transcript renderer riêng trong `src/transcript_view.rs`. Eguis headless test dựng rail/sidebar/central panels ở bốn viewport; debug layout đo kích thước panel thật mỗi frame. `cargo test --manifest-path apps/desktop-tauri/native-app/Cargo.toml` (53 tests) và `cargo build --manifest-path apps/desktop-tauri/native-app/Cargo.toml --release` xanh.
+`native-app` tiếp tục có navigation rail/sidebar, session-list renderer riêng, composer multiline với Ctrl+Enter, trạng thái loading/disconnected/retry, và transcript renderer riêng trong `src/transcript_view.rs`. Eguis headless test dựng rail/sidebar/central panels ở bốn viewport, và transcript 1.000 dòng vẫn nằm trong vùng cuộn; debug layout đo kích thước panel thật mỗi frame. `cargo test --manifest-path apps/desktop-tauri/native-app/Cargo.toml` (54 tests) và `cargo build --manifest-path apps/desktop-tauri/native-app/Cargo.toml --release` xanh.
 
 `bun run build` xanh (9/9); `bun run test:docs` đạt 20/21, lỗi `python/sdk/uv.lock:113`; `bun run doc-sync` đạt 39/43, còn ba generated catalogs stale (`api-catalog.ts`, config catalog, event graphs) và cùng repository-reference error. Không sửa các generated artifact ngoài phạm vi.
 
