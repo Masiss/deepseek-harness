@@ -130,8 +130,16 @@ function signDocument(bytes: Buffer): string {
 }
 
 /** The artifacts this target contributes to the shared release. */
+function nativeAppImagePath(version: string): string | undefined {
+  const arch = target.endsWith('-arm64') ? 'aarch64' : 'x86_64'
+  const path = join(tree, 'appimage', `DeepSeek-Harness-native-${version}-${arch}.AppImage`)
+  return existsSync(path) ? path : undefined
+}
+
 function releaseArtifacts(version: string): string[] {
   const artifacts = [appImagePath(version)]
+  const native = nativeAppImagePath(version)
+  if (native !== undefined) artifacts.push(native)
   for (const part of ['deb', 'rpm']) {
     const directory = join(tree, part)
     if (!existsSync(directory)) continue

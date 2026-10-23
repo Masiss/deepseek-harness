@@ -1002,6 +1002,7 @@ dependencies = [
 name = "dsh-desktop-native-app"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "dirs",
  "dsh-client-core",
  "eframe",
@@ -1009,6 +1010,7 @@ dependencies = [
  "image",
  "reqwest",
  "rfd",
+ "ring",
  "semver",
  "serde",
  "serde_json",

@@ -154,6 +154,15 @@ jobs:
           DSH_COMPONENT_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.FEED_TAG }}
         run: bash apps/desktop-tauri/scripts/pack-appimage.sh "$DSH_DESKTOP_TARGET"
 
+      - name: Pack the native AppImage
+        env:
+          DSH_APPIMAGE_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.FEED_TAG }}/manifest.json
+          DSH_COMPONENT_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.FEED_TAG }}
+        run: DSH_DESKTOP_SHELL=native bash apps/desktop-tauri/scripts/pack-appimage.sh "$DSH_DESKTOP_TARGET"
+
+      - name: Verify the native AppImage
+        run: bash apps/desktop-tauri/scripts/appimage-probe.sh "$(ls apps/desktop/.desktop-build/targets/$DSH_DESKTOP_TARGET/appimage/DeepSeek-Harness-native-*.AppImage | head -1)"
+
       - name: Pack the Debian package
         env:
           DSH_APPIMAGE_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.FEED_TAG }}/manifest.json

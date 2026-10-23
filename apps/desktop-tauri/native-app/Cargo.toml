@@ -27,3 +27,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # semver rejects downgrade candidates during the metadata check.
 semver = "1"
+# base64 decodes the Ed25519 feed signature.
+base64 = "0.22"
+# ring verifies the Ed25519 feed signature before any artifact is trusted.
+ring = "0.17"

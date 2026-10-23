@@ -1,0 +1,200 @@
+//! Signed update feed check. Executable replacement remains manual.
+
+use base64::Engine;
+use ring::signature::{UnparsedPublicKey, ED25519};
+use serde::Deserialize;
+use serde_json::Value;
+use std::time::Duration;
+
+const PINNED_PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA8nRQMATSaQtVJXuAN8aVNweEc2PkVcAh5jwuhYRJ2ss=\n-----END PUBLIC KEY-----\n";
+
+#[derive(Deserialize)]
+struct FeedArtifact {
+    url: String,
+    sha256: String,
+    size: u64,
+}
+
+#[derive(Deserialize)]
+struct UpdateFeed {
+    #[serde(rename = "schemaVersion")]
+    schema_version: u64,
+    version: String,
+    #[serde(rename = "minimumVersion")]
+    minimum_version: Option<String>,
+    artifacts: std::collections::BTreeMap<String, FeedArtifact>,
+    signature: String,
+}
+
+/// Checks a signed feed for a newer version and, when enabled, downloads the verified artifact.
+pub fn check() {
+    let (Some(feed_url), public_key) = (
+        std::env::var("DSH_DESKTOP_UPDATE_FEED")
+            .or_else(|_| std::env::var("DSH_APPIMAGE_UPDATE_FEED"))
+            .ok(),
+        std::env::var("DSH_DESKTOP_UPDATE_PUBLIC_KEY").unwrap_or_else(|_| PINNED_PUBLIC_KEY.to_owned()),
+    ) else {
+        return;
+    };
+    let current = std::env::var("DSH_DESKTOP_VERSION").unwrap_or_else(|_| "0.0.0".to_owned());
+    let result = verify_and_maybe_download(&feed_url, &public_key, &current);
+    match result {
+        Ok(Some(path)) => eprintln!("desktop update downloaded and verified: {}", path),
+        Ok(None) => {}
+        Err(error) => eprintln!("desktop update check failed: {error}"),
+    }
+}
+
+fn verify_and_maybe_download(
+    feed_url: &str,
+    public_key: &str,
+    current: &str,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    let endpoint = reqwest::Url::parse(feed_url)?;
+    if endpoint.scheme() != "https" {
+        return Err("update feed URL must use HTTPS".into());
+    }
+    let client = reqwest::blocking::Client::builder()
+        .https_only(true)
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(15))
+        .build()?;
+    let feed: UpdateFeed = client.get(endpoint).send()?.error_for_status()?.json()?;
+    if feed.schema_version != 2 {
+        return Err(format!("unsupported feed schema {}", feed.schema_version).into());
+    }
+    let canonical = canonical_feed_bytes(&feed);
+    let signature = base64::engine::general_purpose::STANDARD
+        .decode(feed.signature.trim())
+        .map_err(|error| format!("malformed signature: {error}"))?;
+    let key = UnparsedPublicKey::new(&ED25519, pem_public_key_bytes(public_key)?);
+    key
+        .verify(&canonical, &signature)
+        .map_err(|_| "invalid feed signature")?;
+
+    if !is_newer(current, &feed.version) {
+        eprintln!("desktop is up to date ({current})");
+        return Ok(None);
+    }
+    eprintln!("desktop update available: {} (verified)", feed.version);
+
+    if std::env::var("DSH_AUTO_UPDATE").as_deref() != Ok("1") {
+        eprintln!("desktop auto-download disabled; set DSH_AUTO_UPDATE=1 to cache the verified artifact");
+        return Ok(None);
+    }
+    let target = std::env::var("DSH_DESKTOP_TARGET").unwrap_or_else(|_| "linux-x64".to_owned());
+    let artifact = feed
+        .artifacts
+        .get(&target)
+        .ok_or_else(|| format!("no artifact for {target}"))?;
+    let bytes = client.get(&artifact.url).send()?.error_for_status()?.bytes()?;
+    if bytes.len() as u64 != artifact.size {
+        return Err(format!("artifact size mismatch: {} != {}", bytes.len(), artifact.size).into());
+    }
+    let digest = sha256_hex(&bytes);
+    if digest != artifact.sha256 {
+        return Err("artifact digest mismatch".into());
+    }
+    let cache = dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("dsh-updates")
+        .join(&feed.version);
+    std::fs::create_dir_all(&cache)?;
+    let name = artifact
+        .url
+        .rsplit('/')
+        .next()
+        .unwrap_or("update.AppImage");
+    let path = cache.join(name);
+    std::fs::write(&path, &bytes)?;
+    Ok(Some(path.display().to_string()))
+}
+
+fn canonical_feed_bytes(feed: &UpdateFeed) -> Vec<u8> {
+    let artifacts = serde_json::Map::from_iter(
+        feed
+            .artifacts
+            .iter()
+            .map(|(key, artifact)| {
+                (
+                    key.clone(),
+                    serde_json::json!({
+                        "url": artifact.url,
+                        "sha256": artifact.sha256,
+                        "size": artifact.size,
+                    }),
+                )
+            }),
+    );
+    let mut sorted = serde_json::Map::new();
+    let mut keys: Vec<&String> = feed.artifacts.keys().collect();
+    keys.sort();
+    for key in keys {
+        if let Some(value) = artifacts.get(key) {
+            sorted.insert(key.clone(), value.clone());
+        }
+    }
+    let document = serde_json::json!({
+        "schemaVersion": feed.schema_version,
+        "version": feed.version,
+        "minimumVersion": feed.minimum_version,
+        "artifacts": sorted,
+    });
+    // Remove minimumVersion when absent to match the signer.
+    let mut value = document;
+    if feed.minimum_version.is_none() {
+        if let Some(object) = value.as_object_mut() {
+            object.remove("minimumVersion");
+        }
+    }
+    serde_json::to_vec(&value).unwrap()
+}
+
+fn pem_public_key_bytes(pem: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    // The pinned key is a SubjectPublicKeyInfo PEM; extract the raw 32-byte key.
+    let base64_body: String = pem
+        .lines()
+        .filter(|line| !line.starts_with("-----"))
+        .collect();
+    let der = base64::engine::general_purpose::STANDARD.decode(base64_body.trim())?;
+    // Ed25519 SPKI is 12 bytes of header followed by the 32-byte key.
+    if der.len() < 32 {
+        return Err("invalid public key".into());
+    }
+    Ok(der[der.len() - 32..].to_vec())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    // Use a simple sha256 via ring? ring provides digest.
+    let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
+    digest.as_ref().iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn is_newer(current: &str, offered: &str) -> bool {
+    match (
+        semver::Version::parse(current),
+        semver::Version::parse(offered),
+    ) {
+        (Ok(current), Ok(offered)) => offered > current,
+        _ => {
+            eprintln!("desktop update check skipped: invalid semantic version metadata");
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_newer;
+
+    #[test]
+    fn update_check_rejects_same_older_and_invalid_versions() {
+        assert!(is_newer("1.2.3", "1.2.4"));
+        assert!(!is_newer("1.2.3", "1.2.3"));
+        assert!(!is_newer("1.2.3", "1.2.2"));
+        assert!(!is_newer("1.2.3", "not-a-version"));
+    }
+}
+EOF
+cd native-app && cargo build 2>&1 | grep -E "error|Finished" | head

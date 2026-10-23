@@ -37,7 +37,7 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 - ✓ System tray + product icon + close-to-tray — M7c/M7d
 - ✓ Native file dialogs — M7c
 - ◐ Update check — metadata only; installation is intentionally disabled until signed artifact verification exists
-- ◐ AppImage — `pack-appimage.sh` packs either shell; `DSH_DESKTOP_SHELL=native` produced a native AppImage (87.6 MB) whose AppRun env contract, profile seeding, and packaged Host boot pass `appimage-probe.sh`; not wired into the release lane and not signed
+- ✓ AppImage native — `pack-appimage.sh` packs either shell; `DSH_DESKTOP_SHELL=native` produced a native AppImage (87.6 MB) whose AppRun env contract, profile seeding, and packaged Host boot pass `appimage-probe.sh`; the release lane now packs and verifies it, and publishes it as an extra asset
 
 ## Open parity gaps
 - ◐ Document preview — text page, decoded image preview, and Office preview via the Host converter plus local pdftoppm (first page); no Host probe yet
