@@ -3649,6 +3649,13 @@ impl eframe::App for DesktopApp {
                         self.cancel_turn();
                     }
                 });
+                if self.chat_loading && self.transcript.is_empty() {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(40.0);
+                        ui.spinner();
+                        ui.label("Loading transcript…");
+                    });
+                }
                 let mut feedback_actions = Vec::new();
                 if let Some(status) = &self.feedback_status {
                     ui.label(status);
