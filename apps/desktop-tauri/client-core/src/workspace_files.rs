@@ -89,6 +89,25 @@ impl<'de> Deserialize<'de> for WorkspaceFileBytes {
     }
 }
 
+/// One workspace file observation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceFileChange {
+    pub absolute_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub absent: Option<bool>,
+}
+
+/// One `workspaceFiles/changes` frame.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum WorkspaceFileWatchFrame {
+    Ready,
+    Change { change: WorkspaceFileChange },
+}
+
 /// Directory child entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceDirectoryEntry {

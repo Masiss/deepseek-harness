@@ -12,14 +12,17 @@ pub mod follow;
 pub mod models;
 pub mod plugins;
 pub mod remote_events;
-mod remote_stream;
+pub mod remote_stream;
 pub mod schedules;
 pub mod session;
 pub mod sessions;
 pub mod settings;
+pub mod stream;
+pub mod streams;
 pub mod skills;
 pub mod terminal;
 pub mod transport;
+pub mod upload;
 pub mod workspace_files;
 
 #[derive(Debug, thiserror::Error)]

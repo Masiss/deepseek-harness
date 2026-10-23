@@ -142,6 +142,44 @@ impl HttpTransport {
         })
     }
 
+    /// Posts a raw body to an authenticated route and returns the decoded JSON body.
+    pub fn post_json(
+        &self,
+        path: &str,
+        content_type: &str,
+        body: Vec<u8>,
+        cancel: &AtomicBool,
+    ) -> Result<Value, Error> {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(Error::Cancelled);
+        }
+        let url = self
+            .base_url
+            .join(path.trim_start_matches('/'))
+            .map_err(|source| Error::InvalidUrl { source })?;
+        self.runtime.block_on(async {
+            let exchange = async {
+                let response = self
+                    .client
+                    .post(url)
+                    .header(reqwest::header::CONTENT_TYPE, content_type)
+                    .body(body)
+                    .send()
+                    .await?;
+                let status = response.status();
+                if !status.is_success() {
+                    return Err(Error::HttpStatus(status.as_u16()));
+                }
+                Ok(response.json().await?)
+            };
+            tokio::select! {
+                biased;
+                () = wait_for_cancel(cancel) => Err(Error::Cancelled),
+                result = exchange => result,
+            }
+        })
+    }
+
     /// Runs a request on a worker thread and lets the caller abort it by sending or dropping the handle.
     pub fn request_cancellable(
         &self,

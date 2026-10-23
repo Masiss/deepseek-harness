@@ -5,8 +5,7 @@
 //! socket shutdown, waking blocked iteration without awaiting worker completion.
 
 use crate::{
-    auth::Credential,
-    remote_stream::{self, ClientFrame},
+    remote_stream::{RemoteStreamMux, Uplink},
     session::SessionAddress,
     Error,
 };
@@ -177,8 +176,7 @@ pub enum FollowFrame {
 /// Stops a follow stream and closes its WebSocket.
 pub struct FollowCancel {
     cancelled: Arc<AtomicBool>,
-    uplink: mpsc::Sender<ClientFrame>,
-    stream_id: String,
+    uplink: Uplink,
 }
 impl FollowCancel {
     /// Requests stream shutdown without waiting for the socket worker to exit.
@@ -186,9 +184,7 @@ impl FollowCancel {
         if self.cancelled.swap(true, Ordering::AcqRel) {
             return;
         }
-        let _ = self.uplink.send(ClientFrame::Cancel {
-            stream_id: self.stream_id.clone(),
-        });
+        self.uplink.cancel();
     }
 }
 
@@ -216,22 +212,16 @@ impl Drop for FollowStream {
 }
 
 /// Opens an authenticated `session/follow` WebSocket using the supplied cookie.
-pub fn follow(
-    base_url: &str,
-    credential: &Credential,
-    request: FollowRequest,
-) -> Result<FollowStream, Error> {
-    let (stream_id, uplink, mux_receiver) = remote_stream::open(
-        base_url,
-        credential,
+pub fn follow(mux: &RemoteStreamMux, request: FollowRequest) -> Result<FollowStream, Error> {
+    let stream = mux.open(
         "session/follow",
         serde_json::json!({"request": serde_json::to_value(request)?}),
     )?;
+    let (uplink, mux_receiver) = (stream.uplink, stream.downlink);
     let (sender, receiver) = mpsc::channel();
     let cancelled = Arc::new(AtomicBool::new(false));
     let worker_cancelled = Arc::clone(&cancelled);
     let worker_uplink = uplink.clone();
-    let worker_id = stream_id.clone();
     std::thread::spawn(move || {
         while !worker_cancelled.load(Ordering::Acquire) {
             match mux_receiver.recv() {
@@ -250,16 +240,13 @@ pub fn follow(
             }
         }
         worker_cancelled.store(true, Ordering::Release);
-        let _ = worker_uplink.send(ClientFrame::Cancel {
-            stream_id: worker_id,
-        });
+        worker_uplink.cancel();
     });
     Ok(FollowStream {
         receiver,
         cancel: FollowCancel {
             cancelled,
             uplink,
-            stream_id,
         },
     })
 }
@@ -311,7 +298,8 @@ mod tests {
                 serde_json::json!({"type":"end","streamId":open["streamId"]}),
             );
         });
-        let mut stream = follow(&url, &credential, request()).unwrap();
+        let mux = RemoteStreamMux::connect(&url, &credential).unwrap();
+        let mut stream = follow(&mux, request()).unwrap();
         let frame = stream.next().unwrap().unwrap();
         let FollowFrame::Snapshot(snapshot) = &frame else {
             panic!("expected snapshot")
@@ -356,7 +344,8 @@ mod tests {
                     serde_json::json!({"type":"cancel","streamId":open["streamId"]})
                 );
             });
-            let stream = follow(&url, &credential, request()).unwrap();
+            let mux = RemoteStreamMux::connect(&url, &credential).unwrap();
+            let stream = follow(&mux, request()).unwrap();
             if explicit {
                 stream.cancel_handle().cancel();
                 assert!(matches!(

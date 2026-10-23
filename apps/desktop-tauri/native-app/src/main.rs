@@ -13,7 +13,10 @@ use dsh_client_core::{
     chat::{ChatClient, PromptContentPart, PromptMode, PromptRequest},
     follow::{self, FollowFrame, FollowRequest},
     remote_events::{RemoteEvent, RemoteEventError, RemoteEvents},
+    remote_stream::RemoteStreamMux,
+    streams::{self, JobFollowFrame, JobView},
     session::{SessionAddress, SessionAddressKind, SessionPage, SessionViewer, ToolCallStatus},
+    stream::FrameStream,
     sessions::{
         CreateSessionRequest, ForkSessionRequest, RenameSessionRequest, SessionSearchResponse,
         SessionsClient,
@@ -22,10 +25,12 @@ use dsh_client_core::{
         SettingsClient, SettingsDescribeValue, SettingsNamespaceView, SettingsUpdateRequest,
     },
     terminal::{
-        self, TerminalClient, TerminalCloseRequest, TerminalCreateRequest, TerminalEnvironment,
-        TerminalFrame, TerminalInput, TerminalRenameRequest, WebTerminalInfo,
+        self, TerminalClient, TerminalCloseRequest, TerminalCreateRequest,
+        TerminalEnvironment, TerminalFrame, TerminalInput, TerminalInputLimits,
+        TerminalRenameRequest, TerminalWriter, WebTerminalInfo,
     },
     transport::HttpTransport,
+    upload::{FileUploadClient, FileUploadValue},
     workspace_files::{WorkspaceFileRange, WorkspaceFileScope, WorkspaceFilesClient},
     Error,
 };
@@ -48,7 +53,7 @@ enum ApprovalCommand {
 const TERMINAL_VISIBLE_BYTES: usize = 128 * 1024;
 
 /// Keeps the newest UTF-8 output, including when a single frame exceeds the visible budget.
-fn append_terminal_output(output: &mut String, text: &str) {
+fn append_bounded_output(output: &mut String, text: &str) {
     if text.len() >= TERMINAL_VISIBLE_BYTES {
         output.clear();
         let mut start = text.len() - TERMINAL_VISIBLE_BYTES;
@@ -96,7 +101,7 @@ struct TerminalPanel {
     selected: Option<String>,
     inventory: Option<mpsc::Receiver<Result<TerminalInventory, String>>>,
     updates: Option<mpsc::Receiver<TerminalUpdate>>,
-    input: Option<mpsc::Sender<TerminalInput>>,
+    input: Option<TerminalWriter>,
     stop: Option<mpsc::Sender<()>>,
     workers: Vec<std::thread::JoinHandle<()>>,
     output: String,
@@ -111,7 +116,6 @@ struct TerminalPanel {
     ack_status: String,
     error: Option<String>,
     writable: bool,
-    sequence: u64,
     pending: Option<u64>,
     cols: u32,
     rows: u32,
@@ -135,11 +139,16 @@ impl TerminalPanel {
     }
 
     fn push_output(&mut self, text: &str) {
-        append_terminal_output(&mut self.output, text);
+        append_bounded_output(&mut self.output, text);
         self.output_revision = self.output_revision.wrapping_add(1);
     }
 
-    fn select_session(&mut self, session: Option<String>, transport: Option<HttpTransport>) {
+    fn select_session(
+        &mut self,
+        session: Option<String>,
+        transport: Option<HttpTransport>,
+        streams: Option<RemoteStreamMux>,
+    ) {
         if self.session == session {
             return;
         }
@@ -159,6 +168,7 @@ impl TerminalPanel {
         self.cols = 80;
         self.rows = 24;
         if let Some(transport) = transport {
+            let _ = streams;
             self.request(transport, TerminalOperation::List);
         }
     }
@@ -199,13 +209,12 @@ impl TerminalPanel {
         self.error = None;
     }
 
-    fn attach(&mut self, transport: HttpTransport) {
+    fn attach(&mut self, streams: RemoteStreamMux) {
         let (Some(session), Some(id)) = (self.session.clone(), self.selected.clone()) else {
             return;
         };
         self.detach();
         self.clear_output();
-        self.sequence = 0;
         self.snapshot_status.clear();
         self.state_status.clear();
         self.ack_status.clear();
@@ -215,9 +224,7 @@ impl TerminalPanel {
         let (sender, receiver) = mpsc::sync_channel(32);
         let (stop_sender, stop_receiver) = mpsc::channel();
         self.workers.push(std::thread::spawn(move || {
-            let result = transport.credential().and_then(|credential| {
-                terminal::attach(transport.base_url().as_str(), credential, session, id)
-            });
+            let result = terminal::attach(&streams, session, id);
             let (mut stream, input) = match result {
                 Ok(result) => result,
                 Err(error) => {
@@ -316,8 +323,23 @@ impl TerminalPanel {
             };
             match receiver.try_recv() {
                 Ok(TerminalUpdate::Attached(input)) => {
-                    self.input = Some(input);
-                    self.status = "Attached — waiting for snapshot".to_owned();
+                    let limits = self.environment.as_ref().map(|environment| TerminalInputLimits {
+                        max_input_bytes: environment.max_input_bytes as usize,
+                        max_buffered_bytes: environment.max_buffered_bytes as usize,
+                        max_cols: environment.max_cols,
+                        max_rows: environment.max_rows,
+                    });
+                    match limits {
+                        Some(limits) => {
+                            self.input = Some(TerminalWriter::new(input, limits));
+                            self.status = "Attached — waiting for snapshot".to_owned();
+                        }
+                        None => {
+                            self.error =
+                                Some("Terminal limits are unavailable; refresh first".to_owned());
+                            self.detach();
+                        }
+                    }
                 }
                 Ok(TerminalUpdate::Error(error)) => {
                     self.detach();
@@ -334,6 +356,10 @@ impl TerminalPanel {
                             frame.info.state, frame.info.exit_code, frame.writable
                         );
                         self.status = "Attached".to_owned();
+                        if let (Some(writer), Some(window)) = (&mut self.input, frame.input_window)
+                        {
+                            writer.set_window(window);
+                        }
                         if let Some(error) = &frame.info.error {
                             self.error = Some(error.clone());
                         }
@@ -402,25 +428,16 @@ impl TerminalPanel {
         if !self.writable || self.pending.is_some() {
             return;
         }
-        let Some(input) = &self.input else {
+        let Some(writer) = &mut self.input else {
             return;
         };
-        let sequence = self.sequence + 1;
-        let command = if resize {
-            TerminalInput::Resize {
-                sequence,
-                cols: self.cols,
-                rows: self.rows,
-            }
+        let result = if resize {
+            writer.resize(self.cols, self.rows)
         } else {
-            TerminalInput::Write {
-                sequence,
-                data: self.text.clone(),
-            }
+            writer.write(&self.text)
         };
-        match input.send(command) {
-            Ok(()) => {
-                self.sequence = sequence;
+        match result {
+            Ok(sequence) => {
                 self.pending = Some(sequence);
                 self.status = format!("Awaiting ack #{sequence}");
                 if !resize {
@@ -434,7 +451,12 @@ impl TerminalPanel {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, transport: Option<HttpTransport>) {
+    fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        transport: Option<HttpTransport>,
+        streams: Option<RemoteStreamMux>,
+    ) {
         ui.heading("Terminals");
         let Some(transport) = transport else {
             ui.label("Connect to use terminals");
@@ -520,7 +542,9 @@ impl TerminalPanel {
                     .add_enabled(self.updates.is_none() && !busy, egui::Button::new("Attach"))
                     .clicked()
                 {
-                    self.attach(transport.clone());
+                    if let Some(streams) = streams.clone() {
+                        self.attach(streams);
+                    }
                 }
                 if ui
                     .add_enabled(self.updates.is_some(), egui::Button::new("Detach"))
@@ -636,7 +660,8 @@ impl Drop for TerminalPanel {
 
 #[cfg(test)]
 mod terminal_panel_tests {
-    use super::{append_terminal_output, TerminalPanel, TERMINAL_VISIBLE_BYTES};
+    use super::{append_bounded_output, TerminalPanel, TERMINAL_VISIBLE_BYTES};
+    use dsh_client_core::terminal::{TerminalInputLimits, TerminalWriter};
     use std::sync::mpsc;
 
     #[test]
@@ -645,7 +670,15 @@ mod terminal_panel_tests {
         let (input, inputs) = mpsc::channel();
         let mut panel = TerminalPanel::default();
         panel.stop = Some(stop);
-        panel.input = Some(input);
+        panel.input = Some(TerminalWriter::new(
+            input,
+            TerminalInputLimits {
+                max_input_bytes: 1024,
+                max_buffered_bytes: 4096,
+                max_cols: 80,
+                max_rows: 24,
+            },
+        ));
         panel.writable = true;
         panel.pending = Some(1);
         panel.detach();
@@ -658,9 +691,9 @@ mod terminal_panel_tests {
     #[test]
     fn output_preserves_exact_budget_and_newest_suffix() {
         let mut output = String::new();
-        append_terminal_output(&mut output, &"x".repeat(TERMINAL_VISIBLE_BYTES));
+        append_bounded_output(&mut output, &"x".repeat(TERMINAL_VISIBLE_BYTES));
         assert_eq!(output.len(), TERMINAL_VISIBLE_BYTES);
-        append_terminal_output(&mut output, "end");
+        append_bounded_output(&mut output, "end");
         assert_eq!(output.len(), TERMINAL_VISIBLE_BYTES);
         assert!(output.ends_with("end"));
     }
@@ -668,10 +701,10 @@ mod terminal_panel_tests {
     #[test]
     fn oversized_and_incremental_output_preserve_utf8() {
         let mut output = "old output".to_owned();
-        append_terminal_output(&mut output, &"界".repeat(TERMINAL_VISIBLE_BYTES));
+        append_bounded_output(&mut output, &"界".repeat(TERMINAL_VISIBLE_BYTES));
         assert!(output.len() <= TERMINAL_VISIBLE_BYTES);
         assert!(output.chars().all(|character| character == '界'));
-        append_terminal_output(&mut output, "🙂tail");
+        append_bounded_output(&mut output, "🙂tail");
         assert!(output.len() <= TERMINAL_VISIBLE_BYTES);
         assert!(output.ends_with("🙂tail"));
     }
@@ -787,6 +820,7 @@ struct DesktopApp {
     sessions_failure_context: &'static str,
     host_url: Option<String>,
     transport: Option<HttpTransport>,
+    streams: Option<RemoteStreamMux>,
     sessions: Vec<String>,
     selected_session: Option<String>,
     session_page: Option<SessionPage>,
@@ -794,6 +828,10 @@ struct DesktopApp {
     page_error: Option<String>,
     page_receiver: Option<mpsc::Receiver<Result<SessionPage, Error>>>,
     chat_text: String,
+    attachment: Option<FileUploadValue>,
+    attachment_name: String,
+    attachment_receiver: Option<mpsc::Receiver<Result<FileUploadValue, String>>>,
+    attachment_error: Option<String>,
     chat_loading: bool,
     chat_receiver: Option<mpsc::Receiver<Result<FollowFrame, Error>>>,
     chat_frames: Vec<FollowFrame>,
@@ -815,6 +853,14 @@ struct DesktopApp {
     preview_receiver: Option<mpsc::Receiver<Result<TextDocument, Error>>>,
     show_document: bool,
     terminal: TerminalPanel,
+    jobs: Vec<JobView>,
+    jobs_session: Option<String>,
+    jobs_receiver: Option<mpsc::Receiver<Result<Vec<JobView>, String>>>,
+    jobs_error: Option<String>,
+    job_selected: Option<String>,
+    job_output: String,
+    job_status: String,
+    job_receiver: Option<mpsc::Receiver<Result<JobFollowFrame, String>>>,
     status: String,
     quitting: Arc<AtomicBool>,
     show_requested: Arc<AtomicBool>,
@@ -851,6 +897,7 @@ impl DesktopApp {
             sessions_failure_context: "",
             host_url: None,
             transport: None,
+            streams: None,
             sessions: Vec::new(),
             selected_session: None,
             session_page: None,
@@ -858,6 +905,10 @@ impl DesktopApp {
             page_error: None,
             page_receiver: None,
             chat_text: String::new(),
+            attachment: None,
+            attachment_name: String::new(),
+            attachment_receiver: None,
+            attachment_error: None,
             chat_loading: false,
             chat_receiver: None,
             chat_frames: Vec::new(),
@@ -879,6 +930,14 @@ impl DesktopApp {
             preview_receiver: None,
             show_document: false,
             terminal: TerminalPanel::default(),
+            jobs: Vec::new(),
+            jobs_session: None,
+            jobs_receiver: None,
+            jobs_error: None,
+            job_selected: None,
+            job_output: String::new(),
+            job_status: String::new(),
+            job_receiver: None,
             status: "Starting Host sidecar…".to_owned(),
             quitting,
             show_requested,
@@ -907,11 +966,11 @@ impl DesktopApp {
         self.status = "Authenticating with Host…".to_owned();
     }
 
-    fn start_remote_events(&mut self, transport: HttpTransport) {
+    fn start_remote_events(&mut self, transport: HttpTransport, streams: RemoteStreamMux) {
         let (event_sender, event_receiver) = mpsc::channel();
         let (command_sender, command_receiver) = mpsc::channel();
         std::thread::spawn(move || {
-            let events = match RemoteEvents::connect(transport) {
+            let events = match RemoteEvents::connect(transport, &streams) {
                 Ok(events) => events,
                 Err(error) => {
                     let _ = event_sender.send(Err(error));
@@ -935,6 +994,9 @@ impl DesktopApp {
                 }
                 match events.recv_timeout(std::time::Duration::from_millis(25)) {
                     Ok(Some(event)) => {
+                        if matches!(event, RemoteEvent::Ready { .. }) {
+                            eprintln!("dsh: native events=ready");
+                        }
                         if event_sender.send(Ok(event)).is_err() {
                             return;
                         }
@@ -1097,8 +1159,19 @@ impl DesktopApp {
         self.session_title.clear();
         self.show_settings = false;
         self.selected_session = Some(session_id.clone());
-        self.terminal
-            .select_session(Some(session_id.clone()), self.transport.clone());
+        self.terminal.select_session(
+            Some(session_id.clone()),
+            self.transport.clone(),
+            self.streams.clone(),
+        );
+        self.jobs.clear();
+        self.jobs_session = None;
+        self.jobs_error = None;
+        self.job_selected = None;
+        self.job_output.clear();
+        self.job_status.clear();
+        self.job_receiver = None;
+        self.start_job_list();
         self.session_page = None;
         self.page_error = None;
         self.chat_receiver = None;
@@ -1121,6 +1194,167 @@ impl DesktopApp {
         self.page_receiver = Some(receiver);
     }
 
+    fn pick_attachment(&mut self) {
+        let Some(path) = dialog::open_file() else {
+            return;
+        };
+        let Some(transport) = self.transport.clone() else {
+            self.attachment_error = Some("Connect before attaching a file".to_owned());
+            return;
+        };
+        let Some(session_id) = self.selected_session.clone() else {
+            self.attachment_error = Some("Select a Session before attaching a file".to_owned());
+            return;
+        };
+        let name = path
+            .file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+        let (sender, receiver) = mpsc::channel();
+        self.attachment_receiver = Some(receiver);
+        self.attachment_error = None;
+        self.attachment = None;
+        self.attachment_name = name.clone();
+        std::thread::spawn(move || {
+            let result = std::fs::read(&path)
+                .map_err(|error| format!("reading {name} failed: {error}"))
+                .and_then(|bytes| {
+                    FileUploadClient::new(&transport)
+                        .upload(&session_id, Some(&name), bytes)
+                        .map_err(|error| error.to_string())
+                });
+            let _ = sender.send(result);
+        });
+    }
+
+    fn poll_attachment(&mut self) {
+        let Some(receiver) = &self.attachment_receiver else {
+            return;
+        };
+        match receiver.try_recv() {
+            Ok(Ok(value)) => {
+                self.attachment = Some(value);
+                self.attachment_receiver = None;
+            }
+            Ok(Err(error)) => {
+                self.attachment_receiver = None;
+                self.attachment_error = Some(format!("Upload failed: {error}"));
+                self.attachment_name.clear();
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.attachment_receiver = None;
+                self.attachment_error = Some("Upload worker stopped unexpectedly".to_owned());
+            }
+        }
+    }
+
+    fn start_job_list(&mut self) {
+        let (Some(session), Some(mux)) = (self.selected_session.clone(), self.streams.clone())
+        else {
+            return;
+        };
+        if self.jobs_session.as_deref() == Some(session.as_str()) {
+            return;
+        }
+        self.jobs_session = Some(session.clone());
+        let (sender, receiver) = mpsc::channel();
+        self.jobs_receiver = Some(receiver);
+        self.jobs_error = None;
+        std::thread::spawn(move || match streams::job_list(&mux, &session) {
+            Ok(stream) => {
+                for frame in stream {
+                    let update = match frame {
+                        Ok(rows) => Ok(rows.jobs),
+                        Err(error) => Err(error.to_string()),
+                    };
+                    let failed = update.is_err();
+                    if sender.send(update).is_err() || failed {
+                        break;
+                    }
+                }
+            }
+            Err(error) => {
+                let _ = sender.send(Err(error.to_string()));
+            }
+        });
+    }
+
+    fn start_job_follow(&mut self, job_id: String) {
+        let Some(mux) = self.streams.clone() else {
+            return;
+        };
+        self.job_selected = Some(job_id.clone());
+        self.job_output.clear();
+        self.job_status = "Opening job…".to_owned();
+        let (sender, receiver) = mpsc::channel();
+        self.job_receiver = Some(receiver);
+        std::thread::spawn(move || {
+            let request = streams::JobFollowRequest {
+                session_id: None,
+                job_id,
+                from: None,
+            };
+            match streams::job_follow(&mux, request) {
+                Ok(stream) => {
+                    for frame in stream {
+                        let update = frame.map_err(|error| error.to_string());
+                        let failed = update.is_err();
+                        if sender.send(update).is_err() || failed {
+                            break;
+                        }
+                    }
+                }
+                Err(error) => {
+                    let _ = sender.send(Err(error.to_string()));
+                }
+            }
+        });
+    }
+
+    fn poll_jobs(&mut self) {
+        loop {
+            let update = self.jobs_receiver.as_ref().map(|receiver| receiver.try_recv());
+            match update {
+                Some(Ok(Ok(rows))) => self.jobs = rows,
+                Some(Ok(Err(error))) => {
+                    self.jobs_error = Some(format!("Job list failed: {error}"));
+                    self.jobs_receiver = None;
+                }
+                Some(Err(mpsc::TryRecvError::Disconnected)) => {
+                    self.jobs_receiver = None;
+                }
+                Some(Err(mpsc::TryRecvError::Empty)) | None => break,
+            }
+        }
+        loop {
+            let update = self.job_receiver.as_ref().map(|receiver| receiver.try_recv());
+            match update {
+                Some(Ok(Ok(frame))) => match frame {
+                    JobFollowFrame::Opened { job, from } => {
+                        self.job_status = format!("{} · from byte {from}", job.status);
+                    }
+                    JobFollowFrame::Output { chunks, next, .. } => {
+                        for chunk in chunks {
+                            append_bounded_output(&mut self.job_output, &chunk.text);
+                        }
+                        self.job_status = format!("output to byte {next}");
+                    }
+                    JobFollowFrame::Status { job } => {
+                        self.job_status = job.status;
+                    }
+                },
+                Some(Ok(Err(error))) => {
+                    self.job_status = format!("Job output failed: {error}");
+                    self.job_receiver = None;
+                }
+                Some(Err(mpsc::TryRecvError::Disconnected)) => {
+                    self.job_receiver = None;
+                }
+                Some(Err(mpsc::TryRecvError::Empty)) | None => break,
+            }
+        }
+    }
+
     fn send_prompt(&mut self) {
         let Some(session_id) = self.selected_session.clone() else {
             return;
@@ -1133,30 +1367,36 @@ impl DesktopApp {
             self.page_error = Some("Connect before sending a prompt".to_owned());
             return;
         };
+        let Some(streams) = self.streams.clone() else {
+            self.page_error = Some("Remote streams are not connected".to_owned());
+            return;
+        };
+        let attachment = self.attachment.clone();
         self.chat_text.clear();
         self.chat_frames.clear();
+        self.attachment = None;
+        self.attachment_name.clear();
         self.chat_loading = true;
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
             let chat = ChatClient::new(&transport);
+            let mut content = vec![PromptContentPart::Text { text }];
+            if let Some(attachment) = attachment {
+                content.push(PromptContentPart::File {
+                    receipt_id: attachment.receipt_id,
+                });
+            }
             let request = PromptRequest {
                 request_id: chat.next_request_id(),
                 session_id: session_id.clone(),
                 mode: PromptMode::Queue,
-                content: vec![PromptContentPart::Text { text }],
+                content,
                 client_time_zone: None,
             };
             if let Err(error) = chat.prompt(request) {
                 let _ = sender.send(Err(error));
                 return;
             }
-            let credential = match transport.credential() {
-                Ok(credential) => credential.clone(),
-                Err(error) => {
-                    let _ = sender.send(Err(error));
-                    return;
-                }
-            };
             let request = FollowRequest {
                 address: SessionAddress {
                     kind: SessionAddressKind::Session,
@@ -1166,7 +1406,7 @@ impl DesktopApp {
                 turn_window: None,
                 assistant_stream: Some(true),
             };
-            match follow::follow(transport.base_url().as_str(), &credential, request) {
+            match follow::follow(&streams, request) {
                 Ok(stream) => {
                     for frame in stream {
                         if sender.send(frame).is_err() {
@@ -1188,13 +1428,21 @@ impl eframe::App for DesktopApp {
         if let Ok(mut viewport) = self.viewport.lock() {
             *viewport = Some(ctx.clone());
         }
+        self.poll_attachment();
+        self.poll_jobs();
+        if self.jobs_receiver.is_some() || self.job_receiver.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
         if self.quitting.load(Ordering::Acquire) {
             self.terminal.detach();
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
-        self.terminal
-            .select_session(self.selected_session.clone(), self.transport.clone());
+        self.terminal.select_session(
+            self.selected_session.clone(),
+            self.transport.clone(),
+            self.streams.clone(),
+        );
         self.terminal.poll(ctx);
         if let Some(receiver) = &self.host_receiver {
             match receiver.try_recv() {
@@ -1229,8 +1477,25 @@ impl eframe::App for DesktopApp {
             match receiver.try_recv() {
                 Ok(Ok((base, transport))) => {
                     eprintln!("dsh: native auth=ok");
+                    let streams = match transport.credential().and_then(|credential| {
+                        RemoteStreamMux::connect(transport.base_url().as_str(), credential)
+                    }) {
+                        Ok(streams) => streams,
+                        Err(error) => {
+                            eprintln!("dsh: native stream mux failed: {error}");
+                            self.connect_receiver = None;
+                            self.status = format!("Remote streams unavailable: {error}");
+                            return;
+                        }
+                    };
                     self.host_url = Some(base);
-                    self.start_remote_events(transport.clone());
+                    self.start_remote_events(transport.clone(), streams.clone());
+                    if std::env::var("DSH_DESKTOP_PROBE_STREAMS").as_deref() == Ok("1") {
+                        let probe_transport = transport.clone();
+                        let probe_mux = streams.clone();
+                        std::thread::spawn(move || probe_streams(probe_transport, probe_mux));
+                    }
+                    self.streams = Some(streams);
                     self.transport = Some(transport);
                     self.connect_receiver = None;
                     self.status = "Connected — loading sessions…".to_owned();
@@ -1621,11 +1886,66 @@ impl eframe::App for DesktopApp {
             ui.label(&self.status);
         });
         if self.selected_session.is_some() {
+            egui::Panel::bottom("jobs-panel").show(ui, |ui| {
+                egui::CollapsingHeader::new(format!("Jobs ({})", self.jobs.len()))
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        if let Some(error) = &self.jobs_error {
+                            ui.colored_label(egui::Color32::LIGHT_RED, error);
+                        }
+                        let mut next = None;
+                        egui::ScrollArea::vertical()
+                            .id_salt("jobs-list")
+                            .max_height(90.0)
+                            .show(ui, |ui| {
+                                for job in &self.jobs {
+                                    let selected =
+                                        self.job_selected.as_deref() == Some(job.id.as_str());
+                                    if ui
+                                        .selectable_label(
+                                            selected,
+                                            format!(
+                                                "{} · {} · {}",
+                                                job.label, job.kind, job.status
+                                            ),
+                                        )
+                                        .clicked()
+                                    {
+                                        next = Some(job.id.clone());
+                                    }
+                                }
+                            });
+                        if let Some(id) = next {
+                            self.start_job_follow(id);
+                        }
+                        if !self.job_status.is_empty() {
+                            ui.small(&self.job_status);
+                        }
+                        if !self.job_output.is_empty() {
+                            egui::ScrollArea::vertical()
+                                .id_salt("job-output")
+                                .max_height(140.0)
+                                .stick_to_bottom(true)
+                                .show(ui, |ui| {
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(&self.job_output).monospace(),
+                                        )
+                                        .selectable(true)
+                                        .wrap_mode(egui::TextWrapMode::Extend),
+                                    );
+                                });
+                        }
+                    });
+            });
+        }
+        if self.selected_session.is_some() {
             egui::Panel::bottom("terminal-panel").show(ui, |ui| {
                 egui::CollapsingHeader::new("Session terminals")
                     .default_open(true)
                     .show(ui, |ui| {
-                        self.terminal.ui(ui, self.transport.clone());
+                        self.terminal
+            .ui(ui, self.transport.clone(), self.streams.clone());
                     });
             });
         }
@@ -1728,9 +2048,36 @@ impl eframe::App for DesktopApp {
                         .hint_text("Message")
                         .desired_rows(3),
                 );
+                ui.horizontal_wrapped(|ui| {
+                    let uploading = self.attachment_receiver.is_some();
+                    if ui
+                        .add_enabled(
+                            !uploading && !self.chat_loading,
+                            egui::Button::new("Attach file…"),
+                        )
+                        .clicked()
+                    {
+                        self.pick_attachment();
+                    }
+                    if !self.attachment_name.is_empty() {
+                        ui.label(&self.attachment_name);
+                    }
+                    if uploading {
+                        ui.spinner();
+                    }
+                    if self.attachment.is_some() && ui.button("Remove").clicked() {
+                        self.attachment = None;
+                        self.attachment_name.clear();
+                    }
+                });
+                if let Some(error) = &self.attachment_error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                }
                 if ui
                     .add_enabled(
-                        !self.chat_loading && !self.chat_text.trim().is_empty(),
+                        !self.chat_loading
+                            && !self.chat_text.trim().is_empty()
+                            && self.attachment_receiver.is_none(),
                         egui::Button::new("Send"),
                     )
                     .clicked()
@@ -1779,6 +2126,85 @@ impl eframe::App for DesktopApp {
                 }
             }
         });
+    }
+}
+
+/// Reports one probed stream: its opening frame, its failure, or a timeout.
+fn probe_first<T: serde::de::DeserializeOwned>(
+    endpoint: &str,
+    opened: Result<FrameStream<T>, Error>,
+    timeout: std::time::Duration,
+) {
+    match opened {
+        Ok(mut stream) => match stream.recv_timeout(timeout) {
+            Some(Ok(_)) => eprintln!("dsh: native stream {endpoint}=ok"),
+            Some(Err(error)) => eprintln!("dsh: native stream {endpoint}=failed: {error}"),
+            None => {
+                eprintln!("dsh: native stream {endpoint}=failed: no frame before probe timeout")
+            }
+        },
+        Err(error) => eprintln!("dsh: native stream {endpoint}=failed: {error}"),
+    }
+}
+
+/// Opens the stream endpoints that need no live id and reports their first frame.
+///
+/// Runs only when `DSH_DESKTOP_PROBE_STREAMS=1`; the lane's GUI probe reads the
+/// `dsh: native stream` lines to prove the endpoints on a real Host.
+fn probe_streams(transport: HttpTransport, mux: RemoteStreamMux) {
+    use std::time::Duration;
+    let timeout = Duration::from_secs(20);
+    probe_first("workspace/follow", streams::workspace_follow(&mux), timeout);
+    probe_first("session/control", streams::session_control(&mux), timeout);
+    probe_first("account/watch", streams::account_watch(&mux), timeout);
+    probe_first(
+        "remoteAccess/follow",
+        streams::remote_access_follow(&mux),
+        timeout,
+    );
+    // The expiry stream carries no opening frame; opening it is the whole check.
+    match streams::account_watch_expiry(&mux) {
+        Ok(_) => eprintln!("dsh: native stream account/watchExpiry=ok"),
+        Err(error) => eprintln!("dsh: native stream account/watchExpiry=failed: {error}"),
+    }
+    let session_id = match SessionViewer::new(&transport).list(None) {
+        Ok(items) if !items.is_empty() => Some(items[0].session_id.clone()),
+        Ok(_) => match SessionsClient::new(&transport).create(CreateSessionRequest {
+            workspace_id: None,
+            cwd: None,
+            session_id: None,
+            agent_preset: None,
+        }) {
+            Ok(session) => Some(session.session_id),
+            Err(error) => {
+                eprintln!("dsh: native stream job/list=failed: session create: {error}");
+                None
+            }
+        },
+        Err(error) => {
+            eprintln!("dsh: native stream job/list=failed: {error}");
+            None
+        }
+    };
+    match &session_id {
+        Some(id) => {
+            probe_first("job/list", streams::job_list(&mux, id), timeout);
+            let scope = WorkspaceFileScope {
+                session_id: id.clone(),
+            };
+            probe_first(
+                "workspaceFiles/changes",
+                streams::workspace_file_changes(&mux, &scope, "cordis.yml"),
+                timeout,
+            );
+        }
+        None => {
+            eprintln!("dsh: native stream job/list=skipped: no sessions");
+            eprintln!("dsh: native stream workspaceFiles/changes=skipped: no sessions");
+        }
+    }
+    for endpoint in ["job/follow", "userQuestions/attachWait"] {
+        eprintln!("dsh: native stream {endpoint}=skipped: needs a live id");
     }
 }
 

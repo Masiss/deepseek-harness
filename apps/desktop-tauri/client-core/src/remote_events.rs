@@ -4,7 +4,11 @@
 //! one-shot: an HTTP failure can leave the Host outcome unknown, so callers must not retry.
 //! Dropping the client cancels the mux subscription and withdraws pending presentations.
 
-use crate::{remote_stream, transport::HttpTransport, Error};
+use crate::{
+    remote_stream::{RemoteStreamMux, Uplink},
+    transport::HttpTransport,
+    Error,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
@@ -272,25 +276,22 @@ impl State {
 /// One authenticated Remote Event subscription. Polling UI events is independent of cancellation processing.
 pub struct RemoteEvents {
     transport: HttpTransport,
-    stream_id: String,
-    uplink: mpsc::Sender<remote_stream::ClientFrame>,
+    uplink: Uplink,
     receiver: mpsc::Receiver<Result<RemoteEvent, RemoteEventError>>,
     state: Arc<Mutex<State>>,
 }
 
 impl RemoteEvents {
     /// Opens `$events` using the transport's authenticated cookie and mounted base URL.
-    pub fn connect(transport: HttpTransport) -> Result<Self, RemoteEventError> {
-        let (stream_id, uplink, downlink) = remote_stream::open(
-            transport.base_url().as_str(),
-            transport.credential()?,
-            "$events",
-            serde_json::json!({}),
-        )?;
+    pub fn connect(
+        transport: HttpTransport,
+        mux: &RemoteStreamMux,
+    ) -> Result<Self, RemoteEventError> {
+        let stream = mux.open("$events", serde_json::json!({}))?;
+        let (uplink, downlink) = (stream.uplink, stream.downlink);
         let state = Arc::new(Mutex::new(State::default()));
         let worker_state = state.clone();
         let worker_uplink = uplink.clone();
-        let worker_stream_id = stream_id.clone();
         let (sender, receiver) = mpsc::channel();
         thread::spawn(move || {
             for value in downlink {
@@ -314,13 +315,10 @@ impl RemoteEvents {
             if let Ok(mut state) = worker_state.lock() {
                 state.close();
             }
-            let _ = worker_uplink.send(remote_stream::ClientFrame::Cancel {
-                stream_id: worker_stream_id,
-            });
+            worker_uplink.cancel();
         });
         Ok(Self {
             transport,
-            stream_id,
             uplink,
             receiver,
             state,
@@ -640,7 +638,12 @@ mod tests {
             );
         });
         let (_, transport) = HttpTransport::authenticate(&url).unwrap();
-        let client = RemoteEvents::connect(transport).unwrap();
+        let mux = RemoteStreamMux::connect(
+            transport.base_url().as_str(),
+            transport.credential().unwrap(),
+        )
+        .unwrap();
+        let client = RemoteEvents::connect(transport, &mux).unwrap();
         assert!(matches!(
             client.recv_timeout(Duration::from_secs(5)).unwrap(),
             Some(RemoteEvent::Ready { .. })
@@ -683,8 +686,6 @@ impl Drop for RemoteEvents {
         if let Ok(mut state) = self.state.lock() {
             state.close();
         }
-        let _ = self.uplink.send(remote_stream::ClientFrame::Cancel {
-            stream_id: self.stream_id.clone(),
-        });
+        self.uplink.cancel();
     }
 }

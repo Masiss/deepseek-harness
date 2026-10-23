@@ -77,6 +77,7 @@ cat >"$launcher" <<LAUNCH
 #!/bin/sh
 export DSH_HOME='$home'
 export DSH_DESKTOP_AUTO_CONNECT='1'
+export DSH_DESKTOP_PROBE_STREAMS='1'
 export DSH_DESKTOP_HOST_BIN='$tree/bin/desktop-host'
 export DSH_DESKTOP_RUNTIME_DIR='$tree/dsh'
 export DSH_DESKTOP_PROJECT_DIR='$project'
@@ -118,6 +119,22 @@ if ! wait_for 'dsh: native auth=ok' 60; then
   exit 1
 fi
 echo "RESULT native-auth=ok"
+if wait_for 'dsh: native events=ready' 40; then
+  echo "RESULT native-events=ready"
+else
+  echo "RESULT native-events=FAIL"
+fi
+# The stream probe runs once the session list is available; give it its own budget.
+wait_for 'dsh: native stream job/list=' 60 || true
+sleep 1
+while read -r line; do
+  echo "RESULT ${line#dsh: native stream }"
+done < <(grep -F 'dsh: native stream ' "$err" || true)
+if grep -F 'dsh: native stream ' "$err" | grep -q 'failed'; then
+  echo "RESULT native-streams=FAIL"
+else
+  echo "RESULT native-streams=OK"
+fi
 
 # Let the session list settle before measuring steady-state memory.
 sleep 3
