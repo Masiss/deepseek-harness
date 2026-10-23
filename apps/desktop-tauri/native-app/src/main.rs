@@ -1712,7 +1712,18 @@ impl eframe::App for DesktopApp {
                     };
                     self.host_url = Some(base);
                     self.refresh_models();
-                    self.start_remote_events(transport.clone(), streams.clone());
+                    let approval_probe = std::env::var("DSH_DESKTOP_PROBE_APPROVAL")
+                        .as_deref()
+                        == Ok("1");
+                    if approval_probe {
+                        // The probe owns the only `$events` reader so one waterfall
+                        // answer cannot race a second connected client.
+                        let probe_transport = transport.clone();
+                        let probe_mux = streams.clone();
+                        std::thread::spawn(move || probe_approval(probe_transport, probe_mux));
+                    } else {
+                        self.start_remote_events(transport.clone(), streams.clone());
+                    }
                     if std::env::var("DSH_DESKTOP_PROBE_STREAMS").as_deref() == Ok("1") {
                         let probe_transport = transport.clone();
                         let probe_mux = streams.clone();
@@ -2813,6 +2824,224 @@ fn decode_preview_image(
     }))
 }
 
+/// Model the probe requests: the DeepSeek API-key route when it exists, else the catalog default.
+fn probe_model_selection(catalog: &ModelCatalog) -> Option<ModelSelection> {
+    catalog
+        .groups
+        .iter()
+        .find(|group| group.id == "deepseek-official")
+        .and_then(|group| group.models.first())
+        .map(|model| ModelSelection {
+            provider: "deepseek-official".to_owned(),
+            model: model.id.clone(),
+            reasoning_effort: model
+                .reasoning
+                .as_ref()
+                .and_then(|reasoning| reasoning.default_effort.clone()),
+        })
+        .or_else(|| {
+            catalog.groups.iter().find_map(|group| {
+                group.models.first().map(|model| ModelSelection {
+                    provider: group.id.clone(),
+                    model: model.id.clone(),
+                    reasoning_effort: model
+                        .reasoning
+                        .as_ref()
+                        .and_then(|reasoning| reasoning.default_effort.clone()),
+                })
+            })
+        })
+}
+
+/// Drives one live approval round-trip: prompt the mock model, allow the
+/// escalated bash call through `$events`, and wait for the marker it writes.
+///
+/// Runs only when `DSH_DESKTOP_PROBE_APPROVAL=1`; `DSH_APPROVAL_PROBE_MARKER`
+/// names the file the approved command writes.
+fn probe_approval(transport: HttpTransport, mux: RemoteStreamMux) {
+    use std::time::{Duration, Instant};
+    let marker = match std::env::var("DSH_APPROVAL_PROBE_MARKER") {
+        Ok(value) if !value.is_empty() => value,
+        _ => {
+            eprintln!("dsh: native approval=failed: DSH_APPROVAL_PROBE_MARKER is required");
+            return;
+        }
+    };
+    let session = match SessionsClient::new(&transport).create(CreateSessionRequest {
+        workspace_id: None,
+        cwd: None,
+        session_id: None,
+        agent_preset: None,
+    }) {
+        Ok(session) => session.session_id,
+        Err(error) => {
+            eprintln!("dsh: native approval=failed: session create: {error}");
+            return;
+        }
+    };
+    let model = match ModelClient::new(&transport).catalog() {
+        Ok(catalog) => match probe_model_selection(&catalog) {
+            Some(selection) => selection,
+            None => {
+                eprintln!("dsh: native approval=failed: empty model catalog");
+                return;
+            }
+        },
+        Err(error) => {
+            eprintln!("dsh: native approval=failed: model catalog: {error}");
+            return;
+        }
+    };
+    eprintln!(
+        "dsh: native approval=model {} / {}",
+        model.provider, model.model
+    );
+    if let Err(error) = ModelClient::new(&transport).select(SelectModelRequest {
+        session_id: session.clone(),
+        selection: model,
+    }) {
+        eprintln!("dsh: native approval=failed: select model: {error}");
+        return;
+    }
+    let events = match RemoteEvents::connect(transport.clone(), &mux) {
+        Ok(events) => events,
+        Err(error) => {
+            eprintln!("dsh: native approval=failed: events: {error}");
+            return;
+        }
+    };
+    let chat = ChatClient::new(&transport);
+    let request = PromptRequest {
+        request_id: chat.next_request_id(),
+        session_id: session.clone(),
+        mode: PromptMode::Queue,
+        content: vec![PromptContentPart::Text {
+            text: "Run the escalated approval probe command.".to_owned(),
+        }],
+        client_time_zone: None,
+    };
+    if let Err(error) = chat.prompt(request) {
+        eprintln!("dsh: native approval=failed: prompt: {error}");
+        return;
+    }
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let mut asked = false;
+    let mut answered = false;
+    while Instant::now() < deadline {
+        if std::path::Path::new(&marker).exists() {
+            eprintln!("dsh: native approval=roundtrip-ok");
+            probe_job_follow(&mux, &session);
+            return;
+        }
+        match events.recv_timeout(Duration::from_millis(250)) {
+            Ok(Some(RemoteEvent::Waterfall(invocation))) => {
+                if invocation.event != "approval/request" {
+                    continue;
+                }
+                let pending = match PendingApproval::from_invocation(invocation) {
+                    Ok(pending) => pending,
+                    Err(error) => {
+                        eprintln!("dsh: native approval=failed: decode request: {error}");
+                        continue;
+                    }
+                };
+                if !asked {
+                    asked = true;
+                    eprintln!(
+                        "dsh: native approval=asked tool={}",
+                        pending.request.tool_name
+                    );
+                }
+                match pending.answer(&events, ApprovalDecision::AllowedOnce) {
+                    Ok(()) => {
+                        if !answered {
+                            answered = true;
+                            eprintln!("dsh: native approval=allowed-once");
+                        }
+                    }
+                    Err(error) => eprintln!("dsh: native approval=answer-failed: {error}"),
+                }
+            }
+            Ok(Some(_)) | Ok(None) => {}
+            Err(error) => {
+                eprintln!("dsh: native approval=failed: events closed: {error}");
+                return;
+            }
+        }
+    }
+    eprintln!(
+        "dsh: native approval=failed: timeout asked={asked} answered={answered} marker={}",
+        std::path::Path::new(&marker).exists()
+    );
+}
+
+/// Follows the background job the mock model starts after the approved turn.
+fn probe_job_follow(mux: &RemoteStreamMux, session: &str) {
+    use std::time::{Duration, Instant};
+    let mut list = match streams::job_list(mux, session) {
+        Ok(list) => list,
+        Err(error) => {
+            eprintln!("dsh: native job=failed: list open: {error}");
+            return;
+        }
+    };
+    let deadline = Instant::now() + Duration::from_secs(45);
+    let mut job_id = None;
+    while Instant::now() < deadline {
+        match list.recv_timeout(Duration::from_millis(250)) {
+            Some(Ok(frame)) => {
+                if let Some(job) = frame.jobs.first() {
+                    job_id = Some(job.id.clone());
+                    break;
+                }
+            }
+            Some(Err(error)) => {
+                eprintln!("dsh: native job=failed: list: {error}");
+                return;
+            }
+            None => {}
+        }
+    }
+    let Some(job_id) = job_id else {
+        eprintln!("dsh: native job=failed: no job listed");
+        return;
+    };
+    let request = streams::JobFollowRequest {
+        session_id: Some(session.to_owned()),
+        job_id,
+        from: Some(0),
+    };
+    let mut follow = match streams::job_follow(mux, request) {
+        Ok(follow) => follow,
+        Err(error) => {
+            eprintln!("dsh: native job=failed: follow open: {error}");
+            return;
+        }
+    };
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut output = String::new();
+    while Instant::now() < deadline {
+        match follow.recv_timeout(Duration::from_millis(250)) {
+            Some(Ok(JobFollowFrame::Output { chunks, .. })) => {
+                for chunk in chunks {
+                    output.push_str(&chunk.text);
+                }
+                if output.contains("job-output-ok") {
+                    eprintln!("dsh: native job=follow-ok");
+                    return;
+                }
+            }
+            Some(Ok(_)) => {}
+            Some(Err(error)) => {
+                eprintln!("dsh: native job=failed: follow: {error}");
+                return;
+            }
+            None => {}
+        }
+    }
+    eprintln!("dsh: native job=failed: output marker missing");
+}
+
 /// Reports one probed stream: its opening frame, its failure, or a timeout.
 fn probe_first<T: serde::de::DeserializeOwned>(
     endpoint: &str,
@@ -3191,5 +3420,68 @@ mod model_catalog_tests {
             reasoning_effort: None,
         };
         assert!(catalog_model(&catalog, &missing).is_none());
+    }
+}
+
+#[cfg(test)]
+mod probe_model_tests {
+    use super::probe_model_selection;
+    use dsh_client_core::models::{
+        ModelCatalog, ModelCatalogModel, ModelProviderGroup, ModelSelection,
+    };
+
+    fn model(id: &str) -> ModelCatalogModel {
+        ModelCatalogModel {
+            id: id.into(),
+            name: id.into(),
+            description: None,
+            reasoning: None,
+        }
+    }
+
+    fn catalog_with(groups: Vec<ModelProviderGroup>) -> ModelCatalog {
+        ModelCatalog {
+            default: ModelSelection {
+                provider: "openai-codex".into(),
+                model: "gpt".into(),
+                reasoning_effort: None,
+            },
+            routable_providers: Vec::new(),
+            groups,
+            failures: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn prefers_the_deepseek_api_key_route() {
+        let catalog = catalog_with(vec![
+            ModelProviderGroup {
+                id: "openai-codex".into(),
+                name: "Codex".into(),
+                models: vec![model("gpt")],
+            },
+            ModelProviderGroup {
+                id: "deepseek-official".into(),
+                name: "DeepSeek".into(),
+                models: vec![model("deepseek-flash")],
+            },
+        ]);
+        let selection = probe_model_selection(&catalog).unwrap();
+        assert_eq!(selection.provider, "deepseek-official");
+        assert_eq!(selection.model, "deepseek-flash");
+    }
+
+    #[test]
+    fn falls_back_to_the_first_catalog_model() {
+        let catalog = catalog_with(vec![ModelProviderGroup {
+            id: "other".into(),
+            name: "Other".into(),
+            models: vec![model("first")],
+        }]);
+        assert_eq!(
+            probe_model_selection(&catalog).map(|selection| selection.model),
+            Some("first".to_owned())
+        );
+        assert!(probe_model_selection(&catalog_with(Vec::new())).is_none());
     }
 }
