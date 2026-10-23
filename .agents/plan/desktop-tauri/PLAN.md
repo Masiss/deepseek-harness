@@ -38,7 +38,7 @@ Goal 1 chứng minh **có thể thay Electron bằng Tauri mà không đổi lõ
 
 | Mốc | Nội dung | Trạng thái | Bằng chứng / việc còn lại |
 |---|---|---|---|
-| G2-M1 | Chốt D40–D43 + regression | **Xong** | Commit `fbe6ea0fe7`; build + build:check xanh; typecheck/lint/test xanh |
+| G2-M1 | Chốt D40–D43 + regression | **Xong** | Build + build:check xanh; typecheck/lint/test xanh |
 | G2-M2 | User journey trên packaged runtime | **Đang làm** | Plugin + Session + profile contention + update PASS; **CSP đã đọc được trên app thật** (console WebKit bật bằng `DSH_DESKTOP_WEB_CONSOLE=1`); còn: lượt model thật **trong GUI** (B3) và bản phát hành mới (B1) |
 | G2-M3 | Fault injection | **Xong (L2)** | 6 kịch bản Host + disk-full + crash-download + crash-extract + manifest bị sửa **PASS**; còn "mất điện giữa rename" (cần fault injection ở mức filesystem/VM) |
 | G2-M4 | CI evidence theo cấp | **Đang làm** | Lane Linux **xanh** ([run 39774116751](https://github.com/Masiss/deepseek-harness/actions/runs/39774116751)) gồm `Desktop shell tests` + `Keyless recorded-session replay`; **release lane chưa chạy lại** sau wave audit (B2); chưa có CI Windows/macOS |
@@ -110,7 +110,7 @@ Ngoài ra: bật `enable-write-console-messages-to-stdout` của WebKit ⇒ **m�
 
 ### Sửa theo source audit L3 (2026-10-22)
 
-Bản audit ở `~/downloads/DSH_L3_Source_Audit_b0a2313d09.md`, kết luận của tôi ở `…verdict.md`. Đã sửa theo thứ tự đề xuất:
+Source audit report và verdict đi kèm ghi lại các finding đã xác minh. Đã sửa theo thứ tự đề xuất:
 
 | Mã | Việc | Kết quả |
 |---|---|---|
@@ -233,30 +233,30 @@ Lane tập trung **Linux**; **macOS và Windows để pending** cho tới khi c�
 
 **Còn giữ nguyên:** toàn bộ tính năng dsh nằm ở **Host** (tools, plugin, session, model, provider, terminal, sandbox) — client native nói chuyện với Host qua **đúng API** web client dùng ⇒ không mất tính năng harness. Mất là **bề mặt UI** (66 package `packages/client/*`) phải viết lại, và **UX mới của upstream không tự về** ⇒ có quy trình đối chiếu (M9).
 
-**Mốc (thứ tự theo rủi ro, Q13) — trạng thái thực tế (2026-10-22):**
+**Mốc (thứ tự theo rủi ro, Q13) — trạng thái thực tế (2026-10-23):**
 
 | Mốc | Nội dung | Trạng thái | Ghi chú |
 |---|---|---|---|
-| **M1** | `client-core` Rust: envelope, auth (token→cookie), transport HTTP + cancel | **Xong** ✓ | `apps/desktop-tauri/client-core/`; inventory 73 request + 12 stream (`API.md`, `api.json`); 6 test |
-| **M2** | Viewer: session list/page, log, trạng thái tool call | **Xong** ✓ | `session.rs`; fixture recorded-session; 7 test |
-| **M3** | Chat: prompt (`session/prompt`), cancel (`session/cancel`), follow stream WS (`session/follow`) | **Xong** ✓ (transport) | `chat.rs` + `follow.rs`; tungstenite (handshake + rustls); 14 test. UI chat còn thiếu |
-| **M4** | Model selection + session management + approval typing | **Xong** ✓ (typing) | `models.rs`, `sessions.rs`, `approvals.rs`; gửi quyết định duyệt cần Remote Event channel (chưa có) |
-| **M5** | Terminal (PTY): environment/shells/list/create/rename/close + attach/retain streams | **Xong** ✓ (transport) | `terminal.rs`; 20 test |
-| **M6** | Settings, plugins, skills, schedules, workspace files | **Xong** ✓ (transport) | 5 module; 31 test. Document preview/marketplace UI chưa có endpoint |
-| **M7** | Native app shell (egui), host sidecar + auth, packaging | **Xong một phần** ◐ | `native-app/` (eframe/egui) + `host.rs` (sidecar + cookie) + `dialog.rs` + `updater.rs` + `package-appimage.sh`; single-instance (fs2), tray (tray-icon ksni), close-to-tray, auto-update sau `DSH_AUTO_UPDATE=1`. **Chưa**: updater ký số, tích hợp AppImage vào release lane |
-| **M8** | Cổng parity: checklist từng màn hình | **Đang làm** ◐ | `.agents/plan/desktop-tauri/PARITY.md` — các màn hình transport đã xong; UI panel còn thiếu |
+| **M1** | `client-core` Rust: Connection envelope, token→API-cookie auth, unary HTTP, mux transport | **Xong một phần** ◐ | `rpcId`, `{args: ...}`, `GET /connect?interactions=answer`, `/api` routing đã đối chiếu; HTTP cancellation đang chờ bị chặn request chưa dừng được |
+| **M2** | Viewer: session list/page, log, trạng thái tool call | **Xong một phần** ◐ | egui list + async page viewer; chưa có probe session thật, pagination còn thiếu |
+| **M3** | Chat: prompt, cancel, follow stream | **Xong một phần** ◐ | egui prompt + authenticated mux follow; UI cancel, transcript projection và lượt model thật chưa probe |
+| **M4** | Model selection + session management + approval | **Xong một phần** ◐ | HTTP clients + native search/create/rename/fork controls; `$events` mux + allow-once/reject UI; chưa probe Host thật |
+| **M5** | Terminal (PTY): RPC + attach/retain + native panel | **Xong một phần** ◐ | Gateway mux + egui list/create/attach/input/resize and bounded text output; no ANSI renderer, bounded uplink window or GUI probe |
+| **M6** | Settings, plugins, skills, schedules, workspace files, preview | **Xong một phần** ◐ | typed clients + multipart decoder; redacted settings viewer + optimistic user-patch editor; text preview limited to one 500-line page; broader UI pending |
+| **M7** | Native app shell, Host sidecar, packaging, system integration | **Xong một phần** ◐ | async Host start/API auth, graceful shutdown, tray, dialogs; updater checks HTTPS/semver metadata and fails closed; AppDir copies packaged Host/runtime but has not been launched, signed, or wired into release lane |
+| **M8** | Cổng parity: checklist từng màn hình | **Đang làm** ◐ | `.agents/plan/desktop-tauri/PARITY.md`; session, chat, approval, terminal, settings, text preview have partial UI; no native acceptance probe |
 | **M9** | Quy trình kịp upstream | **Xong** ✓ | `.agents/plan/desktop-tauri/UPSTREAM.md` |
 
 **Số đo sàn bộ nhớ (2026-10-22):** Host base-only (không `dsh-web-app`) **≈ 180 MiB RSS / 168 MiB PSS**; Host có webview ~190 MiB ⇒ bỏ bundle web chỉ tiết kiệm ~10 MiB ở Host, **webview ~530 MiB mới là chi phí lớn**. Ước tính native: Host 180 + shell ~30 + client 30–80 = **240–290 MiB** ⇒ đạt `< 300 MiB` nếu giữ transcript có giới hạn + tải plugin lazy.
 
-**Cấu trúc code đã có:**
+**Cấu trúc code hiện tại:**
 
 ```
-apps/desktop-tauri/client-core/     # protocol library (Rust), 31 test
-  src/{lib,envelope,auth,transport,session,chat,follow,models,sessions,approvals,terminal,settings,plugins,skills,schedules,workspace_files}.rs
+apps/desktop-tauri/client-core/     # protocol library (Rust), 62 unit + 8 multipart tests
+  src/{lib,envelope,auth,transport,binary_response,remote_stream,remote_events,session,chat,follow,models,sessions,approvals,terminal,settings,plugins,skills,schedules,workspace_files}.rs
   API.md, api.json                  # inventory 73 request + 12 stream
-apps/desktop-tauri/native-app/      # egui shell (no webview)
-  src/{main,host,dialog,updater}.rs
+apps/desktop-tauri/native-app/      # egui shell (no webview), 8 tests
+  src/{main,host,dialog,settings_panel,updater}.rs
   package-appimage.sh
 ```
 
@@ -892,7 +892,7 @@ Provider Rust pass parity; code cũ chỉ bị xoá sau một chu kỳ phát hà
 - [x] Python cài lần đầu chạy được (import check trước khi publish).
 - [x] Không có Office/Python trong bundle core.
 - [x] Size gate: `apps/desktop-tauri/scripts/size-gate.sh` (artifact ≤ 105 MiB, cây cài đặt ≤ 400 MiB) — CI của fork gọi script này.
-- [~] `bun run test:web:built` vẫn pass — **3 ca đỏ có sẵn tại HEAD**, chứng minh bằng checkout `f8d5be74c2^` (trước mọi thay đổi của fork) vẫn đỏ y hệt ⇒ không phải hồi quy của lane. Không sửa expected output.
+- [~] `bun run test:web:built` vẫn có **3 ca đỏ đã được xác định là upstream-owned** (skill invocation policy ×2, replayed Session log ×1); không sửa expected output để che lỗi.
 
 ---
 
@@ -987,7 +987,7 @@ Audit trạng thái migration sau P5-posix + A3. Mỗi điều kiện nghiệm t
 
 | # | Phát hiện | Mức độ | Xử lý |
 |---|---|---|---|
-| 1 | `bun run test:web:built` đỏ 3 test (skill invocation policy ×2, replayed Session log ×1) | **có sẵn, không phải do fork** | Đã kiểm lại bằng cách checkout `f8d5be74c2^ -- packages/client apps/web` (bỏ thẻ Office + slot catalog) và dựng lại client: **vẫn đỏ y hệt** → lỗi của upstream/điều kiện máy, không phải hồi quy của lane Tauri |
+| 1 | `bun run test:web:built` đỏ 3 test (skill invocation policy ×2, replayed Session log ×1) | **upstream-owned** | Đã xác nhận trên source không có các thay đổi của lane; không sửa expected output để che lỗi |
 | 2 | Ngân sách "cài đặt ≤ 105 MB" bất khả thi | đã xử lý | A3′ (D31): artifact ≤ 105 MB, cài đặt ≤ 400 MB; Node 24.21 stripped đã 103,5 MB |
 | 3 | Lỗi có sẵn: `verify-repository-references` (`python/sdk/uv.lock:113`) | có sẵn | Không sửa (ngoài phạm vi) |
 | 4 | Lỗi có sẵn: `scripts/release/pack.spec.ts > does not broaden an empty parallel family` | có sẵn | Không sửa (ngoài phạm vi) |

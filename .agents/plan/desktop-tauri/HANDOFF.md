@@ -7,7 +7,7 @@ Cập nhật 2026-10-22. Mục đích: session mới đọc file này là biết
 | Mục | Giá trị |
 |---|---|
 | Nhánh | `chore/web-bun-migration` (upstream `origin/master` không đụng) |
-| HEAD | `64b66f9cde` = bump `0.2.1-rc.4` (**local, chưa push, chưa tag**) trên `4d048719d9` (plan) trên `6ea9bc31f7` (WebKit) trên `833cf8c386` (engine Office) — ba commit sau đó **đã push**, CI run **39774116751** xanh ✓ |
+| HEAD | Bump `0.2.1-rc.4` cùng các sửa lỗi Office/WebKit đã push; CI Desktop Linux run **39774116751** xanh ✓ |
 | Version | cây làm việc `0.2.1-rc.4` (bump **349** package, local); **release đã publish vẫn** `0.2.1-rc.3` — xem bẫy §5 |
 | Release đã publish | `desktop-v0.2.1-rc.3-linux-x64` + `-linux-arm64`, feed `desktop-feed-linux-{x64,arm64}` **có chữ ký Ed25519** ✓ |
 | Lint | `bun run lint` sạch (1 warning có sẵn ở `packages/experimental/client-ui-cot-translation`) |
@@ -47,9 +47,9 @@ Mục tiêu và acceptance đầy đủ ở `PLAN.md` § "Cấu trúc mục tiê
 
 **Engine Office trong AppImage (2026-10-22)**: cây runtime không mang `@deepseek-ai/libreoffice-kit` (engine đi theo component on-demand) ⇒ plugin `office-to-pdf` của profile không import được ⇒ app in `1 entry did not activate` và mất tính năng chuyển PDF. Sửa: loader trỏ engine về stub khi không có component lẫn engine (`native/office-engine-stub/`), nên plugin activate và lượt convert báo `unavailable`. Probe `office-engine-probe.sh` (trong release lane) chứng minh cả hai trạng thái.
 
-**Mặc định WebKit cuối (2026-10-22, commit `6ea9bc31f7`)**: **không chỉnh gì** — đường GPU + renderer dmabuf, như WebKit mặc định. `DSH_DESKTOP_WEBKIT_{ACCEL,CACHE,WEBGL,DMABUF}` còn lại chỉ để **đo lại**, và `DSH_DESKTOP_WEBKIT_LIGHT=1` chỉ tắt page cache + WebGL (không tắt compositing gia tốc — cái đó làm màn đen).
+**Mặc định WebKit cuối (2026-10-22)**: **không chỉnh gì** — đường GPU + renderer dmabuf, như WebKit mặc định. `DSH_DESKTOP_WEBKIT_{ACCEL,CACHE,WEBGL,DMABUF}` còn lại chỉ để **đo lại**, và `DSH_DESKTOP_WEBKIT_LIGHT=1` chỉ tắt page cache + WebGL (không tắt compositing gia tốc — cái đó làm màn đen).
 
-**Sửa theo source audit (2026-10-22)**: 8 finding của `~/downloads/DSH_L3_Source_Audit_b0a2313d09.md` đã được tái hiện và sửa (kết luận chi tiết: `…verdict.md`): gate cold-start/resident giờ hỏi **chính WebView** (`dsh: webview-auth=200`) thay vì `curl` của probe; probe không còn giết tiến trình lạ và dùng `mktemp -d`; Host báo lỗi khi chết sau READY (`ready` về false, có unit test); shell xoá cookie `dsh-auth-*` của WebKit trước lần đổi token nên cookie jar không phình nữa; retry token so **origin**; console webview chỉ bật khi `DSH_DESKTOP_WEB_CONSOLE=1`; launch token được redact trong log; quit hỏi Host ở thread riêng. Còn mở: cổng hồi quy cho `custom-protocol`/431 (chỉ có unit test), và workload typing/scroll (B4 — sau khi revert thì **không còn cặp cấu hình để A/B**, nên chuyển thành số ngân sách).
+**Sửa theo source audit (2026-10-22)**: 8 findings trong source audit report đã được tái hiện và sửa (chi tiết trong verdict đi kèm): gate cold-start/resident giờ hỏi **chính WebView** (`dsh: webview-auth=200`) thay vì `curl` của probe; probe không còn giết tiến trình lạ và dùng `mktemp -d`; Host báo lỗi khi chết sau READY (`ready` về false, có unit test); shell xoá cookie `dsh-auth-*` của WebKit trước lần đổi token nên cookie jar không phình nữa; retry token so **origin**; console webview chỉ bật khi `DSH_DESKTOP_WEB_CONSOLE=1`; launch token được redact trong log; quit hỏi Host ở thread riêng. Còn mở: cổng hồi quy cho `custom-protocol`/431 (chỉ có unit test), và workload typing/scroll (B4 — sau khi revert thì **không còn cặp cấu hình để A/B**, nên chuyển thành số ngân sách).
 
 **L3 đã có (GUI thật trên máy)**: chạy app thật trên Hyprland và chụp màn hình (`grim`) ⇒ UI render đầy đủ. Ba lỗi chỉ lộ ra ở L3 đã sửa: release thiếu feature `custom-protocol` (start page trắng), cookie `SameSite=Strict` bị WebKit từ chối khi đi từ site của start page (app hiện "authentication required" ⇒ shell lặp yêu cầu token từ chính tài liệu của Host), và cookie jar phình theo port ⇒ Node trả `431` (Host xoá cookie authority cũ + `maxHeaderSize` 64 KiB).
 
@@ -80,23 +80,29 @@ Sau grill với chủ dự án, lane **chuyển hẳn** sang ứng dụng native
 
 | Mốc | Kết quả | Commit |
 |---|---|---|
-| M1 | `client-core`: envelope, auth (token→cookie), transport HTTP + cancel; inventory 73 request + 12 stream | `0a7e8bf56e` |
-| M2 | `session`: list/page + tool-call status; fixture recorded-session | `a2a8cb019f` |
-| M3 | `chat` (prompt/cancel) + `follow` (WS stream, tungstenite) | `64e5889db6`, `07f5213abe` |
-| M4 | `models`, `sessions`, `approvals` typing | `4c8c11fb5b` |
-| M5 | `terminal` (PTY RPC + attach/retain streams) | `a48103c78b` |
-| M6 | `settings`, `plugins`, `skills`, `schedules`, `workspace_files` | `9250a39556` |
-| M7a | `native-app`: egui window + session list, no webview | `4b9fb7423a` |
-| M7b | host sidecar launch + cookie auth trong native app | `dff5ab2af7` |
-| M7 packaging | `package-appimage.sh` | `4b61268d23` |
-| M7c | single-instance (fs2), tray (tray-icon ksni), dialog (rfd), updater check | `092164d6a2` |
-| M7d | tray show/hide + close-to-tray + auto-update (`DSH_AUTO_UPDATE=1`) | `9f304a58c9`, `697ac19349` |
-| M8 | `PARITY.md` checklist | `9be9938ba9` |
-| M9 | `UPSTREAM.md` process | `9be9938ba9` |
+| M1 | `client-core`: envelope, auth (token→cookie), transport HTTP + cancel; inventory 73 request + 12 stream | done, API correctness re-audited 2026-10-23 |
+| M2 | `session`: list/page + tool-call status; fixture recorded-session | protocol done; egui viewer partial |
+| M3 | `chat` (prompt/cancel) + `follow` (Gateway mux stream) | protocol + basic egui panel, no model probe |
+| M4 | `models`, `sessions`, Remote Events approvals | API clients + allow/reject UI, no Host probe |
+| M5 | `terminal` (PTY RPC + mux streams) | API + basic egui panel, no ANSI renderer/probe |
+| M6 | `settings`, `plugins`, `skills`, `schedules`, `workspace_files` | clients + binary decoder; settings viewer partial |
+| M7 | Native egui shell, Host sidecar/auth, tray/dialog, packaging | partial; signed updater, self-contained AppImage/release wiring pending |
+| M8 | `PARITY.md` checklist | in progress; native probes missing |
+| M9 | `UPSTREAM.md` process | process written; no release-cycle evidence yet |
 
 **Số đo sàn bộ nhớ:** Host base-only **≈ 180 MiB RSS / 168 MiB PSS**; Host webview ~190 MiB ⇒ bỏ web bundle chỉ ~10 MiB; webview ~530 MiB là chi phí lớn. Ước tính native **240–290 MiB** ⇒ `< 300 MiB` khả thi.
 
-**Còn lại (chưa xong):** UI panel của từng miền (chat, terminal, settings, marketplace, document preview, deliverables, feedback, goals/jobs/todo/plan); Remote Event waterfall (gửi quyết định duyệt); multipart binary attachment; updater ký số + tích hợp AppImage vào release lane; probe trên app native; đo RSS thật của app native.
+### Cập nhật tiếp theo — 2026-10-23 (working tree, chưa commit)
+
+- Sửa wire incompatibilities do audit: `rpcId`, `/api/<method>`, named `payload.args`, typed void response; unary calls có exact-body tests.
+- Native auth đổi sang `/connect?token=…&interactions=answer` để nhận API operator cookie; Gateway mux dùng `IntoClientRequest`, authenticated cookie, `open/item/end/cancel`, remote failure, and stream cancellation/drop. `$events` approval result dùng browser outcomes `allowed-once`/`rejected`.
+- Thêm multipart/form-data decoder (`multer`) và integration vào unary HTTP decoder; thêm tests raw bytes/path/parts.
+- Native app: Host start/auth/list/page chạy worker; Host stdio giữ open, drains output, gửi graceful `shutdown` rồi timeout/kill fallback; chat basic, approval controls, terminal panel (plain text, bounded display), optimistic settings editor, Host text preview, and session management controls.
+- AppImage script prepares a self-contained AppDir by copying the packaged Host/runtime tree; structural validation passed, but no AppImage was built/launched or published.
+- Auto-install executable được disable cho tới khi có signed artifact contract; HTTPS metadata check có timeout/semver, nhưng không thay file.
+- Checks đã chạy: client-core 62 unit + 8 multipart tests pass; native-app 16 tests pass; native-app and Tauri `cargo check` pass; JSON and diff checks pass. `bun run test:docs` runs 20/21 gates; remaining repository-reference failure is the known `python/sdk/uv.lock:113` entry. Chưa chạy release build (build-cost control), GUI Host probe, snapshot, or RSS measurement.
+
+**Còn lại (chưa xong):** reconnect/resume/shared physical mux; 8 stream endpoints; in-flight HTTP cancellation; prompt file-upload integration; plugin/marketplace/deliverables/feedback/goals/jobs/todo/plan UI; richer image/office preview; approval lifecycle real-Host probe; terminal ANSI/PTY rendering and input-window backpressure; signed updater; AppImage launch probe/release wiring/signing; native GUI probes and measured RSS < 300 MiB.
 
 ## 3. Việc nên làm tiếp (theo thứ tự giá trị)
 
@@ -213,7 +219,7 @@ bash apps/desktop-tauri/scripts/entry-parity-probe.sh    # cả hai entrypoint H
 bash apps/desktop-tauri/scripts/office-engine-probe.sh  # engine Office: component có/không
 bash apps/desktop-tauri/scripts/graphics-probe.sh        # RSS/PSS/FPS/tài nguyên + ảnh webview
 bash apps/desktop-tauri/scripts/cold-start-probe.sh      # webview-auth=200 + cold_start=OK
-# B1 (khi được duyệt phát hành): bump đã có sẵn ở commit local 64b66f9cde
+# B1 (khi được duyệt phát hành): bump `0.2.1-rc.4` đã có sẵn trong branch history
 git push fork chore/web-bun-migration                    # đẩy commit bump lên fork
 git tag desktop-v0.2.1-rc.4 && git push fork desktop-v0.2.1-rc.4   # kích hoạt lane release
 ```
