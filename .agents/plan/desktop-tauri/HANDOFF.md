@@ -124,11 +124,11 @@ Sau grill với chủ dự án, lane **chuyển hẳn** sang ứng dụng native
 - **Panel Jobs**: `job/list` + `job/follow`, output 128 KiB.
 - **Probe mở rộng**: chờ `$events=ready`, in từng stream, và `pluginInventory/list`; số đo mới **265 MiB RSS / 243–245 MiB PSS**.
 - **Preview ảnh** (PNG/JPEG/GIF/WebP/BMP/ICO, trần 16 MiB/8192 px), **tab Plugins** read-only, **model picker** (catalog + selectModel), **panel Schedules** (list/delete), nút **Cancel turn**, và **session list theo title/tuổi/running**.
-- **Approval + job thật**: `scripts/approval-probe.sh` + `scripts/mock-model-server.mjs` chứng minh ask → allow-once → tool chạy (marker ngoài workspace) và `job/follow` đọc output job nền.
+- **Approval + job + câu hỏi thật**: `scripts/approval-probe.sh [allow|reject|delegate]` + `scripts/mock-model-server.mjs` chứng minh ask → allow (tool chạy, marker ngoài workspace) / reject / delegate (audit đúng, không chạy), `job/follow` đọc output job nền, và `ask_user_question` được trả lời qua waterfall `$events`.
 - Lệnh: `bash apps/desktop-tauri/scripts/approval-probe.sh` (cần display; log trong `~/.cache/dsh-probe/approval.*`).
 - Test: `client-core` **79 unit + 8 multipart**, `native-app` **25 unit**.
 
-**Còn lại (2026-10-23):** reject/delegate approval và `attachWait` (cần câu hỏi sống); marketplace/deliverables/feedback/goals/todo/plan UI và skills/schedules UI; office preview; plugin management mutations; updater ký số; nối AppDir/AppImage vào release lane + ký; parity đủ màn hình.
+**Còn lại (2026-10-23):** UI card cho câu hỏi/approval; `attachWait` (Desktop dùng tool legacy nên không có frame, cần overlay timed nếu muốn); marketplace/deliverables/feedback/goals/todo/plan UI và skills/schedules UI; office preview; plugin management mutations; updater ký số; nối AppDir/AppImage vào release lane + ký; parity đủ màn hình.
 
 ## 3. Việc nên làm tiếp (theo thứ tự giá trị)
 

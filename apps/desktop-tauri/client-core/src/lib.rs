@@ -22,6 +22,7 @@ pub mod streams;
 pub mod skills;
 pub mod terminal;
 pub mod transport;
+pub mod user_questions;
 pub mod upload;
 pub mod workspace_files;
 

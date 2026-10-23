@@ -20,7 +20,7 @@ use dsh_client_core::{
     },
     plugins::{PluginInventorySnapshot, PluginsClient},
     schedules::{ScheduleDeleteRequest, ScheduleListRequest, SchedulesClient},
-    remote_events::{RemoteEvent, RemoteEventError, RemoteEvents},
+    remote_events::{RemoteEvent, RemoteEventError, RemoteEventOutcome, RemoteEvents},
     remote_stream::RemoteStreamMux,
     streams::{self, JobFollowFrame, JobView},
     session::{
@@ -43,6 +43,7 @@ use dsh_client_core::{
     },
     transport::HttpTransport,
     upload::{FileUploadClient, FileUploadValue},
+    user_questions::{AskUserQuestionAnswer, AskUserQuestionAnswerItem},
     workspace_files::{
         WorkspaceByteRange, WorkspaceFileRange, WorkspaceFileScope, WorkspaceFilesClient,
     },
@@ -1712,9 +1713,10 @@ impl eframe::App for DesktopApp {
                     };
                     self.host_url = Some(base);
                     self.refresh_models();
-                    let approval_probe = std::env::var("DSH_DESKTOP_PROBE_APPROVAL")
-                        .as_deref()
-                        == Ok("1");
+                    let approval_probe = matches!(
+                        std::env::var("DSH_DESKTOP_PROBE_APPROVAL").as_deref(),
+                        Ok("1" | "allow" | "reject" | "delegate")
+                    );
                     if approval_probe {
                         // The probe owns the only `$events` reader so one waterfall
                         // answer cannot race a second connected client.
@@ -2867,6 +2869,12 @@ fn probe_approval(transport: HttpTransport, mux: RemoteStreamMux) {
             return;
         }
     };
+    let mode = std::env::var("DSH_DESKTOP_PROBE_APPROVAL").unwrap_or_default();
+    let decision = match mode.as_str() {
+        "reject" => Some(ApprovalDecision::Rejected),
+        "delegate" => None,
+        _ => Some(ApprovalDecision::AllowedOnce),
+    };
     let session = match SessionsClient::new(&transport).create(CreateSessionRequest {
         workspace_id: None,
         cwd: None,
@@ -2927,14 +2935,41 @@ fn probe_approval(transport: HttpTransport, mux: RemoteStreamMux) {
     let deadline = Instant::now() + Duration::from_secs(120);
     let mut asked = false;
     let mut answered = false;
+    let mut roundtrip_reported = false;
     while Instant::now() < deadline {
-        if std::path::Path::new(&marker).exists() {
+        if !roundtrip_reported && std::path::Path::new(&marker).exists() {
+            roundtrip_reported = true;
             eprintln!("dsh: native approval=roundtrip-ok");
             probe_job_follow(&mux, &session);
-            return;
         }
         match events.recv_timeout(Duration::from_millis(250)) {
             Ok(Some(RemoteEvent::Waterfall(invocation))) => {
+                if invocation.event == "user-questions/request" {
+                    let answer = user_question_answer(&invocation.request);
+                    match events.submit(
+                        &invocation,
+                        RemoteEventOutcome::Result { value: answer },
+                    ) {
+                        Ok(()) => {
+                            eprintln!("dsh: native question=answered");
+                            if !roundtrip_reported
+                                && std::path::Path::new(&marker).exists()
+                            {
+                                eprintln!("dsh: native approval=roundtrip-ok");
+                                probe_job_follow(&mux, &session);
+                            }
+                            if probe_question_result(&mux, &session) {
+                                eprintln!("dsh: native question=answer-ok");
+                            } else {
+                                eprintln!("dsh: native question=failed: no answered result");
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("dsh: native question=failed: {error}");
+                        }
+                    }
+                    return;
+                }
                 if invocation.event != "approval/request" {
                     continue;
                 }
@@ -2952,11 +2987,40 @@ fn probe_approval(transport: HttpTransport, mux: RemoteStreamMux) {
                         pending.request.tool_name
                     );
                 }
-                match pending.answer(&events, ApprovalDecision::AllowedOnce) {
+                let submitted = match decision {
+                    Some(decision) => pending.answer(&events, decision),
+                    None => pending.delegate(&events),
+                };
+                match submitted {
                     Ok(()) => {
                         if !answered {
                             answered = true;
-                            eprintln!("dsh: native approval=allowed-once");
+                            match decision {
+                                Some(ApprovalDecision::AllowedOnce) => {
+                                    eprintln!("dsh: native approval=allowed-once")
+                                }
+                                Some(ApprovalDecision::Rejected) => {
+                                    eprintln!("dsh: native approval=rejected")
+                                }
+                                None => eprintln!("dsh: native approval=delegated"),
+                            }
+                        }
+                        if decision != Some(ApprovalDecision::AllowedOnce) {
+                            let (expected, label) = match decision {
+                                Some(ApprovalDecision::Rejected) => ("rejected", "rejected-ok"),
+                                _ => ("unavailable", "delegated-ok"),
+                            };
+                            if probe_decided(&mux, &session, expected) {
+                                eprintln!("dsh: native approval={label}");
+                            } else {
+                                eprintln!("dsh: native approval=failed: no {expected} decision logged");
+                            }
+                            if std::path::Path::new(&marker).exists() {
+                                eprintln!(
+                                    "dsh: native approval=failed: command ran despite {expected}"
+                                );
+                            }
+                            return;
                         }
                     }
                     Err(error) => eprintln!("dsh: native approval=answer-failed: {error}"),
@@ -2975,7 +3039,104 @@ fn probe_approval(transport: HttpTransport, mux: RemoteStreamMux) {
     );
 }
 
-/// Follows the background job the mock model starts after the approved turn.
+/// Reads the current session snapshot, retrying after a failed open.
+fn probe_snapshot(
+    mux: &RemoteStreamMux,
+    session: &str,
+) -> Option<follow::SnapshotFrame> {
+    let request = FollowRequest {
+        address: SessionAddress {
+            kind: SessionAddressKind::Session,
+            session_id: session.to_owned(),
+        },
+        max_messages: Some(200),
+        turn_window: None,
+        assistant_stream: None,
+    };
+    let stream = follow::follow(mux, request).ok()?;
+    for frame in stream {
+        match frame {
+            Ok(FollowFrame::Snapshot(snapshot)) => return Some(snapshot),
+            Ok(_) => {}
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
+/// Waits for the audit event the Host appends after a decision.
+fn probe_decided(mux: &RemoteStreamMux, session: &str, expected: &str) -> bool {
+    use std::time::{Duration, Instant};
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        if let Some(snapshot) = probe_snapshot(mux, session) {
+            for entry in &snapshot.records {
+                let event = &entry.event;
+                if event.event_type == "approval/decided"
+                    && event.data.get("outcome").and_then(serde_json::Value::as_str)
+                        == Some(expected)
+                {
+                    return true;
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    false
+}
+
+/// Builds an answer that selects the first option of each asked question.
+fn user_question_answer(request: &serde_json::Map<String, serde_json::Value>) -> AskUserQuestionAnswer {
+    let answers = request
+        .get("questions")
+        .and_then(serde_json::Value::as_array)
+        .map(|questions| {
+            questions
+                .iter()
+                .filter_map(|question| {
+                    let id = question
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)?
+                        .to_owned();
+                    let selected = question
+                        .get("options")
+                        .and_then(serde_json::Value::as_array)
+                        .and_then(|options| options.first())
+                        .and_then(|option| option.get("label"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(|label| vec![label.to_owned()])
+                        .unwrap_or_default();
+                    Some(AskUserQuestionAnswerItem {
+                        id,
+                        selected,
+                        custom: None,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    AskUserQuestionAnswer { answers }
+}
+
+/// Waits for the answered tool result in the durable log.
+fn probe_question_result(mux: &RemoteStreamMux, session: &str) -> bool {
+    use std::time::{Duration, Instant};
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while Instant::now() < deadline {
+        if let Some(snapshot) = probe_snapshot(mux, session) {
+            for entry in &snapshot.records {
+                let event = &entry.event;
+                if event.event_type == "tool/result" && event.data.to_string().contains("Yes") {
+                    return true;
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    false
+}
+
+/// Follows the background job the mock model starts after the approved turn./// Follows the background job the mock model starts after the approved turn.
 fn probe_job_follow(mux: &RemoteStreamMux, session: &str) {
     use std::time::{Duration, Instant};
     let mut list = match streams::job_list(mux, session) {

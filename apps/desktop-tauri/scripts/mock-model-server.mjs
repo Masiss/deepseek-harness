@@ -107,6 +107,52 @@ function jobTurn() {
   ].join('')
 }
 
+function questionTurn() {
+  const input = {
+    questions: [{
+      id: 'probe',
+      question: 'Continue the approval probe?',
+      options: [{ label: 'Yes' }, { label: 'No' }],
+    }],
+  }
+  return [
+    frame({
+      type: 'message_start',
+      message: {
+        id: 'msg_mock_question',
+        type: 'message',
+        role: 'assistant',
+        model: 'deepseek-flash',
+        content: [],
+        usage: { input_tokens: 26, output_tokens: 1 },
+      },
+    }),
+    frame({
+      type: 'content_block_start',
+      index: 0,
+      content_block: { type: 'text', text: '' },
+    }),
+    frame({
+      type: 'content_block_delta',
+      index: 0,
+      delta: { type: 'text_delta', text: 'I need one answer before continuing.' },
+    }),
+    frame({ type: 'content_block_stop', index: 0 }),
+    frame({
+      type: 'content_block_start',
+      index: 1,
+      content_block: { type: 'tool_use', id: 'call_mock_question', name: 'ask_user_question', input },
+    }),
+    frame({ type: 'content_block_stop', index: 1 }),
+    frame({
+      type: 'message_delta',
+      delta: { stop_reason: 'tool_use' },
+      usage: { output_tokens: 16 },
+    }),
+    frame({ type: 'message_stop' }),
+  ].join('')
+}
+
 function textTurn() {
   return [
     frame({
@@ -165,14 +211,19 @@ const server = createServer((request, response) => {
       return
     }
     const results = toolResults(body.messages)
-    const turn = results === 0 ? 'approval' : results === 1 ? 'job' : 'text'
+    const turn = results === 0 ? 'approval' : results === 1 ? 'job' : results === 2 ? 'question' : 'text'
     console.error(`mock-model-server: turn=${turn} results=${results} messages=${body.messages?.length ?? 0}`)
     response.writeHead(200, {
       'content-type': 'text/event-stream',
       'cache-control': 'no-cache',
       connection: 'keep-alive',
     })
-    response.end(turn === 'approval' ? toolTurn() : turn === 'job' ? jobTurn() : textTurn())
+    response.end(
+      turn === 'approval' ? toolTurn()
+      : turn === 'job' ? jobTurn()
+      : turn === 'question' ? questionTurn()
+      : textTurn(),
+    )
   })
 })
 

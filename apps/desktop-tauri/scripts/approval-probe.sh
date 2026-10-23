@@ -6,10 +6,16 @@
 # command must then write the marker outside the workspace. The app runs on an
 # isolated DSH_HOME and the mock never reaches a real provider.
 #
-# Usage: approval-probe.sh
+# Usage: approval-probe.sh [allow|reject|delegate]
 # Output: RESULT markers on stdout; app, Host, and mock logs stay in the work
 # directory.
 set -euo pipefail
+
+mode=${1:-allow}
+case "$mode" in
+  allow|reject|delegate) ;;
+  *) echo "usage: $0 [allow|reject|delegate]" >&2; exit 2 ;;
+esac
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 bin="$root/apps/desktop-tauri/native-app/target/release/dsh-desktop-native-app"
@@ -93,7 +99,7 @@ cat >"$launcher" <<LAUNCH
 #!/bin/sh
 export DSH_HOME='$home'
 export DSH_DESKTOP_AUTO_CONNECT='1'
-export DSH_DESKTOP_PROBE_APPROVAL='1'
+export DSH_DESKTOP_PROBE_APPROVAL='$mode'
 export DSH_APPROVAL_PROBE_MARKER='$marker'
 export DEEPSEEK_API_KEY='approval-probe-key'
 export DEEPSEEK_BASE_URL='$mock_url'
@@ -130,7 +136,11 @@ if ! wait_for 'dsh: native auth=ok' 120; then
   status=1
 else
   echo "RESULT approval-auth=ok"
-  if wait_for 'dsh: native approval=asked' 120; then
+  if ! wait_for 'dsh: native approval=asked' 120; then
+    echo "RESULT approval=FAIL stage=ask"
+    tail -30 "$work/app.err" >&2 || true
+    status=1
+  elif [ "$mode" = allow ]; then
     echo "RESULT approval=asked"
     if wait_for 'dsh: native approval=allowed-once' 60; then
       echo "RESULT approval=allowed-once"
@@ -143,6 +153,12 @@ else
           echo "RESULT job-follow=FAIL"
           status=1
         fi
+        if wait_for 'dsh: native question=answer-ok' 90; then
+          echo "RESULT question-answer=OK"
+        else
+          echo "RESULT question-answer=FAIL"
+          status=1
+        fi
       else
         echo "RESULT approval=FAIL stage=marker"
         status=1
@@ -152,9 +168,24 @@ else
       status=1
     fi
   else
-    echo "RESULT approval=FAIL stage=ask"
-    tail -30 "$work/app.err" >&2 || true
-    status=1
+    # Rejected and delegated decisions must log the audit outcome and never run the command.
+    expected="rejected-ok"
+    [ "$mode" = delegate ] && expected="delegated-ok"
+    echo "RESULT approval=asked"
+    if wait_for "dsh: native approval=$expected" 90; then
+      echo "RESULT approval=$expected"
+      if [ -e "$marker" ]; then
+        echo "RESULT approval=FAIL stage=command-ran"
+        status=1
+      else
+        echo "RESULT approval=no-command"
+        echo "RESULT approval-$mode=OK"
+      fi
+    else
+      echo "RESULT approval=FAIL stage=decision"
+      tail -30 "$work/app.err" >&2 || true
+      status=1
+    fi
   fi
 fi
 echo "work=$work"

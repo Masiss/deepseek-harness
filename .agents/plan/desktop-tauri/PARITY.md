@@ -10,7 +10,7 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 - ◐ Chat submit (`session/prompt`) + follow (`session/follow`) — egui composer with **file attachment** (upload → receipt → prompt file part) and follow display; no real model probe, cancel UI or transcript projection
 - ✓ Chat cancel API (`session/cancel`) — transport only; UI cancellation pending
 - ✓ Follow stream (`session/follow`) — shared authenticated mux with reconnect
-- ✓ Permission approval — `$events` mux + allow-once/reject; `scripts/approval-probe.sh` drives a mock model's escalated bash call through ask → allow-once → execution (marker written outside the workspace) on the packaged runtime; reject/delegate UI paths still need their own probe
+- ✓ Permission approval — `$events` mux + allow-once/reject/delegate; `scripts/approval-probe.sh [allow|reject|delegate]` drives a mock model's escalated bash call through every decision on the packaged runtime: allow runs the command (marker outside the workspace), reject and delegate log the audit outcome and never run it
 - ◐ Model selection (`session/modelCatalog`, `session/selectModel`) — composer picker groups providers/models, shows the catalog default, selects the model's default effort, and offers its reasoning efforts; `initializeDefaultModel` transport only
 - ◐ Session management (`search`, `create`, `rename`, `fork`) — native controls wired; no live Host probe
 
@@ -41,7 +41,7 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 ## Open parity gaps
 - ◐ Document preview — text page (500 lines, literal selectable) and decoded image preview (PNG/JPEG/GIF/WebP/BMP/ICO up to 16 MiB and 8192 px per side); office preview and Host probe pending
 - ☐ Deliverables view
-- ☐ Feedback / human interaction
+- ◐ Human interaction — live `ask_user_question` answered through the `$events` waterfall (`scripts/approval-probe.sh allow`), and `userQuestions/answer` transport for continued questions; no question card UI yet. `userQuestions/attachWait` yields no frames because Desktop composes the blocking legacy tool, not the timed one
 - ✓ Jobs panel — session job list (`job/list`) with per-job output follow (`job/follow`); the approval probe starts a background job and reads its output through `job/follow` on a real Host
 - ☐ Goals, todo, plan panels
 - ✓ Remote Event `$events` waterfall transport and approval outcomes; projections/control stream UI pending
