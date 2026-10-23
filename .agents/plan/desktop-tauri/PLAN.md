@@ -237,26 +237,28 @@ Lane tập trung **Linux**; **macOS và Windows để pending** cho tới khi c�
 
 | Mốc | Nội dung | Trạng thái | Ghi chú |
 |---|---|---|---|
-| **M1** | `client-core` Rust: Connection envelope, token→API-cookie auth, unary HTTP, mux transport | **Xong một phần** ◐ | `rpcId`, `{args: ...}`, `GET /connect?interactions=answer`, `/api` routing đã đối chiếu; HTTP cancellation đang chờ bị chặn request chưa dừng được |
+| **M1** | `client-core` Rust: Connection envelope, token→API-cookie auth, unary HTTP, mux transport | **Xong một phần** ◐ | `rpcId`, `{args: ...}`, `GET /connect?interactions=answer`, `/api` routing đã đối chiếu; request chạy trên tokio nên cờ huỷ **thật sự bỏ request đang bay** (test với server treo); chưa có mux vật lý dùng chung/reconnect |
 | **M2** | Viewer: session list/page, log, trạng thái tool call | **Xong một phần** ◐ | egui list + async page viewer; chưa có probe session thật, pagination còn thiếu |
 | **M3** | Chat: prompt, cancel, follow stream | **Xong một phần** ◐ | egui prompt + authenticated mux follow; UI cancel, transcript projection và lượt model thật chưa probe |
 | **M4** | Model selection + session management + approval | **Xong một phần** ◐ | HTTP clients + native search/create/rename/fork controls; `$events` mux + allow-once/reject UI; chưa probe Host thật |
-| **M5** | Terminal (PTY): RPC + attach/retain + native panel | **Xong một phần** ◐ | Gateway mux + egui list/create/attach/input/resize and bounded text output; no ANSI renderer, bounded uplink window or GUI probe |
+| **M5** | Terminal (PTY): RPC + attach/retain + native panel | **Xong một phần** ◐ | Gateway mux + egui list/create/attach/input/resize; `terminal_ansi` render SGR màu, `\r` ghi đè và `K` xoá cuối dòng (không mô phỏng định vị con trỏ); chưa có cửa sổ input có giới hạn hay GUI probe |
 | **M6** | Settings, plugins, skills, schedules, workspace files, preview | **Xong một phần** ◐ | typed clients + multipart decoder; redacted settings viewer + optimistic user-patch editor; text preview limited to one 500-line page; broader UI pending |
-| **M7** | Native app shell, Host sidecar, packaging, system integration | **Xong một phần** ◐ | async Host start/API auth, graceful shutdown, tray, dialogs; updater checks HTTPS/semver metadata and fails closed; AppDir copies packaged Host/runtime but has not been launched, signed, or wired into release lane |
-| **M8** | Cổng parity: checklist từng màn hình | **Đang làm** ◐ | `.agents/plan/desktop-tauri/PARITY.md`; session, chat, approval, terminal, settings, text preview have partial UI; no native acceptance probe |
+| **M7** | Native app shell, Host sidecar, packaging, system integration | **Xong một phần** ◐ | async Host start/API auth, graceful shutdown, tray, dialogs; updater checks HTTPS/semver metadata and fails closed; AppDir tự chứa **đã chạy được** (`host=ready`, `auth=ok`); chưa ký và chưa nối vào release lane |
+| **M8** | Cổng parity: checklist từng màn hình | **Đang làm** ◐ | `.agents/plan/desktop-tauri/PARITY.md`; session, chat, approval, terminal, settings, text preview have partial UI; probe native (`native-gui-probe.sh`) chứng minh boot + auth + ngân sách bộ nhớ |
 | **M9** | Quy trình kịp upstream | **Xong** ✓ | `.agents/plan/desktop-tauri/UPSTREAM.md` |
 
 **Số đo sàn bộ nhớ (2026-10-22):** Host base-only (không `dsh-web-app`) **≈ 180 MiB RSS / 168 MiB PSS**; Host có webview ~190 MiB ⇒ bỏ bundle web chỉ tiết kiệm ~10 MiB ở Host, **webview ~530 MiB mới là chi phí lớn**. Ước tính native: Host 180 + shell ~30 + client 30–80 = **240–290 MiB** ⇒ đạt `< 300 MiB` nếu giữ transcript có giới hạn + tải plugin lazy.
 
+**Đo thật app native (2026-10-23, Hyprland, cây đóng gói):** sau khi Host sẵn sàng và auth xong, cây tiến trình (app + shell + Host) **263 MiB RSS / 240 MiB PSS** ⇒ **đạt ngân sách < 300 MiB**. `native-gui-probe.sh` in lại được số này trên máy thật.
+
 **Cấu trúc code hiện tại:**
 
 ```
-apps/desktop-tauri/client-core/     # protocol library (Rust), 62 unit + 8 multipart tests
+apps/desktop-tauri/client-core/     # protocol library (Rust), 63 unit + 8 multipart tests
   src/{lib,envelope,auth,transport,binary_response,remote_stream,remote_events,session,chat,follow,models,sessions,approvals,terminal,settings,plugins,skills,schedules,workspace_files}.rs
   API.md, api.json                  # inventory 73 request + 12 stream
-apps/desktop-tauri/native-app/      # egui shell (no webview), 8 tests
-  src/{main,host,dialog,settings_panel,updater}.rs
+apps/desktop-tauri/native-app/      # egui shell (no webview), 25 tests
+  src/{main,host,dialog,settings_panel,document_preview,terminal_ansi,updater}.rs
   package-appimage.sh
 ```
 

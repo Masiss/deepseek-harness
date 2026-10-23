@@ -104,6 +104,19 @@ Sau grill với chủ dự án, lane **chuyển hẳn** sang ứng dụng native
 
 **Còn lại (chưa xong):** reconnect/resume/shared physical mux; 8 stream endpoints; in-flight HTTP cancellation; prompt file-upload integration; plugin/marketplace/deliverables/feedback/goals/jobs/todo/plan UI; richer image/office preview; approval lifecycle real-Host probe; terminal ANSI/PTY rendering and input-window backpressure; signed updater; AppImage launch probe/release wiring/signing; native GUI probes and measured RSS < 300 MiB.
 
+### Đã chốt — 2026-10-23 (đã commit)
+
+- Khối working tree của session 2026-10-23 đã chia thành 3 commit: `fix(desktop-client)` (wire protocol), `feat(desktop-native)` (egui panels), `docs(desktop)` (mốc).
+- **Huỷ HTTP trong lúc bay**: transport chạy `reqwest` async trên runtime tokio riêng, `select!` với cờ huỷ ⇒ request đang chờ bị drop (test với server treo).
+- **Terminal ANSI**: `native-app/src/terminal_ansi.rs` render SGR (16/256/RGB + bold/dim/italic/underline/inverse), `\r` ghi đè, tab, `ESC[K`; LayoutJob monospace; cache theo revision. 9 test.
+- **Probe native**: `apps/desktop-tauri/scripts/native-gui-probe.sh` chạy binary release + cây đóng gói, Home/project tách riêng, `DSH_DESKTOP_AUTO_CONNECT=1`, chờ `dsh: native host=ready` / `auth=ok`, in RSS/PSS của cả cây.
+- **Số đo thật (Hyprland)**: **263 MiB RSS / 240 MiB PSS** khi idle sau auth ⇒ **đạt ngân sách < 300 MiB** (điều kiện "xong" #2).
+- **AppDir tự chứa đã chạy**: `package-appimage.sh --appdir-only` rồi `AppRun` với `DSH_HOME` tạm ⇒ `host=ready` + `auth=ok`.
+- Test: `client-core` 63 unit + 8 multipart; `native-app` 25 unit. `cargo build --release` xanh (app 40 MB).
+- Bẫy mới: cửa sổ trên workspace `special:` + `silent` ⇒ egui không chạy frame ⇒ không đọc `host_receiver`; probe phải mở cửa sổ thật. Và Host orphan giữ lease khiến lần chạy sau không `ready` — luôn dùng work dir mới.
+
+**Còn lại (cập nhật 2026-10-23):** shared physical mux + reconnect/resume; 8 stream endpoint; prompt file-upload; plugin/marketplace/deliverables/feedback/goals/jobs/todo/plan UI; ảnh/office preview; probe approval lifecycle trên Host thật; cửa sổ input terminal có giới hạn; updater ký số; nối AppDir/AppImage vào release lane + ký; parity đủ màn hình.
+
 ## 3. Việc nên làm tiếp (theo thứ tự giá trị)
 
 **Ưu tiên: Linux trước — macOS và Windows để pending** (2026-10-22). Lane chỉ mở việc cho macOS/Windows khi có runner + chứng thư; ma trận portability trong PLAN là hồ sơ, không phải việc đang làm.

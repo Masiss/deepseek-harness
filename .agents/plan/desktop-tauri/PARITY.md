@@ -17,7 +17,7 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 ## Tools & terminal
 - ✓ Terminal RPC (`environment`, `shells`, `list`, `create`, `rename`, `close`) — M5 transport
 - ✓ Terminal streams (`attach` with single-input uplink, `retain`) — Gateway mux transport; bounded input/backpressure pending
-- ◐ Terminal UI — list/create/select/rename/close, attach, resize, input, bounded plain-text output; no ANSI/PTY rendering or live Host probe
+- ◐ Terminal UI — list/create/select/rename/close, attach, resize, input; ANSI SGR colors, carriage-return overwrites, and erase-to-end-of-line are rendered; cursor addressing is not emulated; no live Host probe
 
 ## Settings & plugins
 - ✓ Settings (`describe`, `update`, `replace`, `mutate`, `openSettingsDocument`) — M6
@@ -35,7 +35,7 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 - ✓ System tray + product icon + close-to-tray — M7c/M7d
 - ✓ Native file dialogs — M7c
 - ◐ Update check — metadata only; installation is intentionally disabled until signed artifact verification exists
-- ◐ AppImage AppDir script copies the packaged Host/runtime and supplies AppRun; not launched, not wired into release lane, and not signed
+- ◐ AppImage AppDir script copies the packaged Host/runtime and supplies AppRun; a self-contained AppDir launch reached `host=ready` and `auth=ok`; not wired into the release lane and not signed
 
 ## Open parity gaps
 - ◐ Text document preview — user-supplied Host path, 500-line page, literal selectable text; images/office preview and Host probe pending
@@ -44,8 +44,8 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 - ☐ Goals, jobs, todo, plan panels
 - ✓ Remote Event `$events` waterfall transport and approval outcomes; projections/control stream UI pending
 - ✓ Multipart binary response decoder; prompt attachment upload remains pending
-- ☐ Probes on the native app
-- ☐ RSS measurement of the native app
+- ✓ Native probe (`scripts/native-gui-probe.sh`) launches the packaged runtime, waits for Host readiness and authentication, and reports tree RSS/PSS
+- ✓ RSS measurement on a real Hyprland session: 263 MiB RSS / 240 MiB PSS idle after authentication
 
 ## Memory gate
-- ☐ RSS < 300 MiB measured on a real machine (estimate 240–290 MiB)
+- ✓ RSS < 300 MiB measured on a real machine (263 MiB RSS / 240 MiB PSS idle)
