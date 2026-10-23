@@ -155,6 +155,12 @@ else
         fi
         if wait_for 'dsh: native question=answer-ok' 90; then
           echo "RESULT question-answer=OK"
+          if wait_for 'dsh: native transcript=ok' 30; then
+            echo "RESULT transcript=OK"
+          else
+            echo "RESULT transcript=FAIL"
+            status=1
+          fi
         else
           echo "RESULT question-answer=FAIL"
           status=1

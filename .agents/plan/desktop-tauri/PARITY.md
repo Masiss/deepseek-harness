@@ -7,9 +7,10 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 - ◐ Session list (`session/list`) — projected title, running/blank marker, relative update age, identity on hover; no list-specific native probe yet
 - ◐ Session viewer / log (`session/page`) — async read-only page shown in egui; pagination/probe pending
 - ✓ Tool-call status derivation — M2
-- ◐ Chat submit (`session/prompt`) + follow (`session/follow`) — egui composer with **file attachment** (upload → receipt → prompt file part) and follow display; no real model probe, cancel UI or transcript projection
+- ✓ Chat submit (`session/prompt`) + follow (`session/follow`) — composer with **file attachment** and **Cancel turn**; history and live events render through the transcript projection; a mock-model run proves prompt → approval → tool → question on the packaged runtime
 - ✓ Chat cancel API (`session/cancel`) — transport only; UI cancellation pending
-- ✓ Follow stream (`session/follow`) — shared authenticated mux with reconnect
+- ✓ Follow stream (`session/follow`) — shared authenticated mux with reconnect; snapshot records and live events feed one transcript
+- ◐ Transcript projection — durable user/assistant messages, tool calls and results, approvals, job start/settle, and the streaming assistant draft; provider reasoning and specialized tool cards (deliverables, feedback, todo/plan) are not rendered yet
 - ✓ Permission approval — `$events` mux + allow-once/reject/delegate; `scripts/approval-probe.sh [allow|reject|delegate]` drives a mock model's escalated bash call through every decision on the packaged runtime: allow runs the command (marker outside the workspace), reject and delegate log the audit outcome and never run it
 - ◐ Model selection (`session/modelCatalog`, `session/selectModel`) — composer picker groups providers/models, shows the catalog default, selects the model's default effort, and offers its reasoning efforts; `initializeDefaultModel` transport only
 - ◐ Session management (`search`, `create`, `rename`, `fork`) — native controls wired; no live Host probe

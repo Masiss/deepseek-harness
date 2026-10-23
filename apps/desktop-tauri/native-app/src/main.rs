@@ -5,8 +5,10 @@ mod document_preview;
 mod host;
 mod settings_panel;
 mod terminal_ansi;
+mod transcript;
 mod updater;
 
+use transcript::{RowKind, Transcript};
 use document_preview::{
     DocumentPreview, ImageDocument, ImagePreview, PreviewDocument, TextDocument,
 };
@@ -850,7 +852,9 @@ struct DesktopApp {
     attachment_error: Option<String>,
     chat_loading: bool,
     chat_receiver: Option<mpsc::Receiver<Result<FollowFrame, Error>>>,
-    chat_frames: Vec<FollowFrame>,
+    transcript: Transcript,
+    assistant_streaming: bool,
+    assistant_draft: String,
     approval_events_receiver: Option<mpsc::Receiver<Result<RemoteEvent, RemoteEventError>>>,
     approval_commands: Option<mpsc::Sender<ApprovalCommand>>,
     pending_approvals: Vec<PendingApproval>,
@@ -945,7 +949,9 @@ impl DesktopApp {
             attachment_error: None,
             chat_loading: false,
             chat_receiver: None,
-            chat_frames: Vec::new(),
+            transcript: Transcript::default(),
+            assistant_streaming: false,
+            assistant_draft: String::new(),
             approval_events_receiver: None,
             approval_commands: None,
             pending_approvals: Vec::new(),
@@ -1292,7 +1298,9 @@ impl DesktopApp {
         self.page_error = None;
         self.chat_receiver = None;
         self.chat_loading = false;
-        self.chat_frames.clear();
+        self.transcript.reset();
+        self.assistant_streaming = false;
+        self.assistant_draft.clear();
         self.preview_document = None;
         self.preview_error = None;
         self.show_document = false;
@@ -1591,7 +1599,6 @@ impl DesktopApp {
         };
         let attachment = self.attachment.clone();
         self.chat_text.clear();
-        self.chat_frames.clear();
         self.attachment = None;
         self.attachment_name.clear();
         self.chat_loading = true;
@@ -1989,7 +1996,32 @@ impl eframe::App for DesktopApp {
         }
         if let Some(receiver) = &self.chat_receiver {
             match receiver.try_recv() {
-                Ok(Ok(frame)) => self.chat_frames.push(frame),
+                Ok(Ok(frame)) => match frame {
+                    FollowFrame::Snapshot(snapshot) => {
+                        self.transcript.apply_snapshot(&snapshot.records);
+                    }
+                    FollowFrame::Event(frame) => {
+                        if frame.event.event_type == "assistant/message" {
+                            self.assistant_draft.clear();
+                        }
+                        self.transcript.apply(&frame.event);
+                    }
+                    FollowFrame::AssistantStream { frame } => {
+                        use dsh_client_core::follow::AssistantStreamFrame;
+                        match &frame {
+                            AssistantStreamFrame::Start { .. } => {
+                                self.assistant_streaming = true;
+                                self.assistant_draft.clear();
+                            }
+                            AssistantStreamFrame::Chunk { chunk, .. } => {
+                                append_stream_text(&mut self.assistant_draft, chunk);
+                            }
+                            AssistantStreamFrame::End { .. } => {
+                                self.assistant_streaming = false;
+                            }
+                        }
+                    }
+                },
                 Ok(Err(error)) => {
                     self.page_error = Some(format!("Chat stream failed: {error}"));
                     self.chat_loading = false;
@@ -2657,22 +2689,13 @@ impl eframe::App for DesktopApp {
                         self.cancel_turn();
                     }
                 });
-                if self.chat_loading {
-                    ui.label("Waiting for assistant…");
-                }
-                for frame in &self.chat_frames {
-                    match frame {
-                        FollowFrame::Event(frame) => {
-                            ui.label(format!("{} · {}", frame.event.seq, frame.event.event_type));
-                        }
-                        FollowFrame::AssistantStream { frame } => {
-                            ui.label(format!("Assistant stream: {frame:?}"));
-                        }
-                        FollowFrame::Snapshot(snapshot) => {
-                            ui.label(format!("Stream snapshot at {}", snapshot.cursor));
-                        }
-                    }
-                }
+                render_transcript(
+                    ui,
+                    &self.transcript,
+                    &self.assistant_draft,
+                    self.chat_loading,
+                    self.assistant_streaming,
+                );
                 if let Some(pending) = self.pending_approvals.first().cloned() {
                     ui.separator();
                     ui.heading(format!("Permission: {}", pending.request.tool_name));
@@ -2748,6 +2771,88 @@ fn relative_time(updated_at: i64, now: i64) -> String {
         86_400..=2_591_999 => format!("{}d ago", seconds / 86_400),
         _ => format!("{}mo ago", seconds / 2_592_000),
     }
+}
+
+/// Renders the projected transcript with bounded height.
+fn render_transcript(
+    ui: &mut egui::Ui,
+    transcript: &Transcript,
+    draft: &str,
+    loading: bool,
+    streaming: bool,
+) {
+    if loading || streaming {
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label("Waiting for assistant…");
+        });
+    }
+    let height = (ui.available_height() - 140.0).max(80.0);
+    egui::ScrollArea::vertical()
+        .id_salt("chat-transcript")
+        .auto_shrink([false, false])
+        .stick_to_bottom(true)
+        .max_height(height)
+        .show(ui, |ui| {
+            if transcript.is_empty() && !loading {
+                ui.label("No messages in this window yet.");
+            }
+            for row in transcript.rows() {
+                let color = match row.kind {
+                    RowKind::User => egui::Color32::LIGHT_BLUE,
+                    RowKind::Assistant => ui.visuals().strong_text_color(),
+                    RowKind::Job => egui::Color32::LIGHT_GREEN,
+                    RowKind::ToolResult => {
+                        if row.title == "Tool error" {
+                            egui::Color32::LIGHT_RED
+                        } else {
+                            ui.visuals().weak_text_color()
+                        }
+                    }
+                    RowKind::Approval => egui::Color32::YELLOW,
+                };
+                ui.add(
+                    egui::Label::new(egui::RichText::new(&row.title).strong().color(color))
+                        .wrap()
+                        .selectable(true),
+                );
+                if !row.text.is_empty() {
+                    let text = egui::RichText::new(&row.text);
+                    let text = match row.kind {
+                        RowKind::ToolResult | RowKind::Job => text.monospace(),
+                        _ => text,
+                    };
+                    ui.add(egui::Label::new(text).wrap().selectable(true));
+                }
+                ui.separator();
+            }
+            if !draft.trim().is_empty() {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new("Assistant (streaming)")
+                            .strong()
+                            .color(ui.visuals().strong_text_color()),
+                    )
+                    .wrap(),
+                );
+                ui.add(egui::Label::new(draft).wrap().selectable(true));
+                ui.separator();
+            }
+        });
+}
+
+/// Appends one assistant-stream text delta, bounded to the transcript budget.
+fn append_stream_text(draft: &mut String, chunk: &serde_json::Value) {
+    if chunk.get("type").and_then(serde_json::Value::as_str) != Some("text-delta") {
+        return;
+    }
+    let Some(text) = chunk.get("text").and_then(serde_json::Value::as_str) else {
+        return;
+    };
+    if draft.len() + text.len() > transcript::MAX_BYTES {
+        return;
+    }
+    draft.push_str(text);
 }
 
 /// Largest image preview read; larger files are rejected instead of fetched.
@@ -2960,6 +3065,11 @@ fn probe_approval(transport: HttpTransport, mux: RemoteStreamMux) {
                             }
                             if probe_question_result(&mux, &session) {
                                 eprintln!("dsh: native question=answer-ok");
+                                if probe_transcript(&mux, &session) {
+                                    eprintln!("dsh: native transcript=ok");
+                                } else {
+                                    eprintln!("dsh: native transcript=failed");
+                                }
                             } else {
                                 eprintln!("dsh: native question=failed: no answered result");
                             }
@@ -3134,6 +3244,34 @@ fn probe_question_result(mux: &RemoteStreamMux, session: &str) -> bool {
         std::thread::sleep(Duration::from_millis(300));
     }
     false
+}
+
+/// Projects the live session log into transcript rows and checks the kinds.
+fn probe_transcript(mux: &RemoteStreamMux, session: &str) -> bool {
+    let Some(snapshot) = probe_snapshot(mux, session) else {
+        eprintln!("dsh: native transcript=failed: no snapshot");
+        return false;
+    };
+    let mut transcript = Transcript::default();
+    transcript.apply_snapshot(&snapshot.records);
+    let rows = transcript.rows();
+    let has = |kind| rows.iter().any(|row| row.kind == kind);
+    let ok = has(RowKind::User)
+        && has(RowKind::Assistant)
+        && has(RowKind::ToolResult)
+        && has(RowKind::Approval)
+        && has(RowKind::Job)
+        && rows.len() >= 5;
+    eprintln!(
+        "dsh: native transcript rows={} user={} assistant={} tool={} approval={} job={}",
+        rows.len(),
+        has(RowKind::User),
+        has(RowKind::Assistant),
+        has(RowKind::ToolResult),
+        has(RowKind::Approval),
+        has(RowKind::Job)
+    );
+    ok
 }
 
 /// Follows the background job the mock model starts after the approved turn./// Follows the background job the mock model starts after the approved turn.
@@ -3644,5 +3782,120 @@ mod probe_model_tests {
             Some("first".to_owned())
         );
         assert!(probe_model_selection(&catalog_with(Vec::new())).is_none());
+    }
+}
+
+#[cfg(test)]
+mod transcript_render_tests {
+    use super::render_transcript;
+    use crate::transcript::Transcript;
+    use dsh_client_core::follow::SessionWireEvent;
+    use eframe::egui;
+    use serde_json::json;
+
+    fn event(seq: i64, event_type: &str, data: serde_json::Value) -> SessionWireEvent {
+        SessionWireEvent {
+            event_type: event_type.into(),
+            seq,
+            time: 0,
+            data,
+            ignorable: None,
+            source_event_seqs: None,
+            surface_op: None,
+        }
+    }
+
+    fn render(transcript: &Transcript) -> Vec<String> {
+        let ctx = egui::Context::default();
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 480.0),
+            )),
+            ..Default::default()
+        });
+        let mut ui = egui::Ui::new(
+            ctx.clone(),
+            egui::Id::new("transcript"),
+            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 480.0),
+            )),
+        );
+        render_transcript(&mut ui, transcript, "", false, false);
+        assert!(ui.min_rect().is_finite());
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+        let mut texts = Vec::new();
+        for clipped in output.shapes {
+            collect_text(&clipped.shape, &mut texts);
+        }
+        texts
+    }
+
+    fn collect_text(shape: &egui::Shape, texts: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(text) => texts.push(text.galley.job.text.clone()),
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    collect_text(shape, texts);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn renders_the_streaming_draft() {
+        let ctx = egui::Context::default();
+        ctx.begin_pass(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 480.0),
+            )),
+            ..Default::default()
+        });
+        let mut ui = egui::Ui::new(
+            ctx.clone(),
+            egui::Id::new("draft"),
+            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(640.0, 480.0),
+            )),
+        );
+        render_transcript(&mut ui, &Transcript::default(), "partial answer", false, true);
+        let mut output = ctx.end_pass();
+        output.textures_delta.clear();
+        let mut texts = Vec::new();
+        for clipped in output.shapes {
+            collect_text(&clipped.shape, &mut texts);
+        }
+        for expected in ["Waiting for assistant…", "Assistant (streaming)", "partial answer"] {
+            assert!(texts.iter().any(|text| text == expected), "{texts:?}");
+        }
+    }
+
+    #[test]
+    fn renders_titles_bodies_and_the_empty_state() {
+        let mut transcript = Transcript::default();
+        transcript.apply(&event(
+            1,
+            "user/message",
+            json!({"content": [{"type": "text", "text": "hello transcript"}]}),
+        ));
+        transcript.apply(&event(
+            2,
+            "tool/result",
+            json!({"message": {"isError": true, "content": [{"type": "text", "text": "exit 1"}]}}),
+        ));
+        let texts = render(&transcript);
+        for expected in ["You", "hello transcript", "Tool error", "exit 1"] {
+            assert!(texts.iter().any(|text| text == expected), "{texts:?}");
+        }
+
+        let empty = render(&Transcript::default());
+        assert!(empty
+            .iter()
+            .any(|text| text == "No messages in this window yet."));
     }
 }
