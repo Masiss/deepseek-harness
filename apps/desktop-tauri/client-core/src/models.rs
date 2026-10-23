@@ -139,7 +139,7 @@ mod tests {
                     "result": {"ok": true, "value": value}
                 }))),
             );
-            let client = reqwest::blocking::Client::builder()
+            let client = reqwest::Client::builder()
                 .no_proxy()
                 .build()
                 .unwrap();

@@ -6,49 +6,50 @@ use crate::{
     Error,
 };
 use serde_json::Value;
-use std::sync::mpsc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc, Arc,
+};
 use std::thread;
+use std::time::Duration;
+use url::Url;
+
+const CANCEL_POLL: Duration = Duration::from_millis(20);
 
 #[derive(Clone)]
 pub struct HttpTransport {
-    client: reqwest::blocking::Client,
-    base_url: reqwest::Url,
-    next_id: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    client: reqwest::Client,
+    base_url: Url,
+    next_id: Arc<std::sync::atomic::AtomicU64>,
     credential: Option<Credential>,
+    runtime: Arc<tokio::runtime::Runtime>,
 }
+
 impl HttpTransport {
     pub fn new(base_url: &str) -> Result<Self, Error> {
-        Self::with_client(
-            base_url,
-            reqwest::blocking::Client::builder()
-                .connect_timeout(std::time::Duration::from_secs(5))
-                .timeout(std::time::Duration::from_secs(30))
-                .cookie_store(true)
-                .build()?,
-        )
+        Self::with_client(base_url, default_client()?)
     }
 
     /// Builds a transport from an already configured cookie-preserving client.
-    pub fn with_client(base_url: &str, client: reqwest::blocking::Client) -> Result<Self, Error> {
+    pub fn with_client(base_url: &str, client: reqwest::Client) -> Result<Self, Error> {
         Ok(Self {
             client,
-            base_url: reqwest::Url::parse(base_url)
-                .map_err(|source| Error::InvalidUrl { source })?,
-            next_id: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            base_url: Url::parse(base_url).map_err(|source| Error::InvalidUrl { source })?,
+            next_id: Arc::new(std::sync::atomic::AtomicU64::new(1)),
             credential: None,
+            runtime: Arc::new(runtime()?),
         })
     }
 
     /// Exchanges a Host launch URL and returns the clean redirected base URL plus transport.
     pub fn authenticate(launch_url: &str) -> Result<(String, Self), Error> {
-        let client = reqwest::blocking::Client::builder()
+        let client = reqwest::Client::builder()
             .cookie_store(true)
             .redirect(reqwest::redirect::Policy::none())
-            .connect_timeout(std::time::Duration::from_secs(5))
-            .timeout(std::time::Duration::from_secs(15))
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(15))
             .build()?;
-        let mut connect_url =
-            reqwest::Url::parse(launch_url).map_err(|source| Error::InvalidUrl { source })?;
+        let mut connect_url = Url::parse(launch_url).map_err(|source| Error::InvalidUrl { source })?;
         let tokens: Vec<_> = connect_url
             .query_pairs()
             .filter(|(key, _)| key == "token")
@@ -63,7 +64,8 @@ impl HttpTransport {
             .query_pairs_mut()
             .append_pair("token", &tokens[0])
             .append_pair("interactions", "answer");
-        let response = client.get(connect_url).send()?;
+        let runtime = Arc::new(runtime()?);
+        let response = runtime.block_on(async { client.get(connect_url).send().await })?;
         if !response.status().is_redirection() {
             return Err(Error::HttpStatus(response.status().as_u16()));
         }
@@ -91,7 +93,7 @@ impl HttpTransport {
     }
 
     /// Returns the clean Host base URL established during authentication.
-    pub fn base_url(&self) -> &reqwest::Url {
+    pub fn base_url(&self) -> &Url {
         &self.base_url
     }
 
@@ -99,78 +101,103 @@ impl HttpTransport {
     pub fn credential(&self) -> Result<&Credential, Error> {
         self.credential.as_ref().ok_or(Error::MissingCredential)
     }
+
+    /// Sends one unary RPC; setting `cancel` aborts an in-flight request at the next poll point.
     pub fn request(
         &self,
         method: &str,
         payload: Value,
-        cancel: &std::sync::atomic::AtomicBool,
+        cancel: &AtomicBool,
     ) -> Result<Value, Error> {
-        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+        if cancel.load(Ordering::Relaxed) {
             return Err(Error::Cancelled);
         }
         let id = format!(
             "native-{}",
-            self.next_id
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            self.next_id.fetch_add(1, Ordering::Relaxed)
         );
         let url = self
             .base_url
             .join(&format!("api/{method}"))
             .map_err(|source| Error::InvalidUrl { source })?;
-        let response = self
-            .client
-            .post(url)
-            .json(&RequestEnvelope::new(id.clone(), method, payload))
-            .send()?;
-        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
-            return Err(Error::Cancelled);
-        }
-        if !response.status().is_success() {
-            return Err(Error::HttpStatus(response.status().as_u16()));
-        }
-        decode_response(response, &id)
+        let envelope = RequestEnvelope::new(id.clone(), method, payload);
+        self.runtime.block_on(async {
+            let exchange = async {
+                let response = self
+                    .client
+                    .post(url)
+                    .json(&envelope)
+                    .send()
+                    .await?;
+                if !response.status().is_success() {
+                    return Err(Error::HttpStatus(response.status().as_u16()));
+                }
+                decode_response(response, &id).await
+            };
+            tokio::select! {
+                biased;
+                () = wait_for_cancel(cancel) => Err(Error::Cancelled),
+                result = exchange => result,
+            }
+        })
     }
+
+    /// Runs a request on a worker thread and lets the caller abort it by sending or dropping the handle.
     pub fn request_cancellable(
         &self,
         method: String,
         payload: Value,
     ) -> (mpsc::Receiver<Result<Value, Error>>, mpsc::Sender<()>) {
-        let id = format!(
-            "native-{}",
-            self.next_id
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-        );
         let (done_tx, done_rx) = mpsc::channel();
-        let (cancel_tx, cancel_rx) = mpsc::channel();
-        let client = self.client.clone();
-        let base = self.base_url.clone();
-        let method = method.clone();
+        let (cancel_tx, cancel_rx) = mpsc::channel::<()>();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = Arc::clone(&cancel);
+        let transport = self.clone();
         thread::spawn(move || {
-            if cancel_rx.try_recv().is_ok() {
-                let _ = done_tx.send(Err(Error::Cancelled));
-                return;
-            }
-            let result = (|| {
-                let response = client
-                    .post(
-                        base.join(&format!("api/{method}"))
-                            .map_err(|source| Error::InvalidUrl { source })?,
-                    )
-                    .json(&RequestEnvelope::new(id.clone(), &method, payload))
-                    .send()?;
-                if response.status().is_success() {
-                    decode_response(response, &id)
-                } else {
-                    Err(Error::HttpStatus(response.status().as_u16()))
+            // A signal or a dropped handle both abort the in-flight request.
+            while !worker_cancel.load(Ordering::Acquire) {
+                match cancel_rx.recv_timeout(CANCEL_POLL) {
+                    Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        worker_cancel.store(true, Ordering::Release);
+                        return;
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
                 }
-            })();
+            }
+        });
+        thread::spawn(move || {
+            let result = transport.request(&method, payload, &cancel);
+            // Release the cancellation watcher once the request settles.
+            cancel.store(true, Ordering::Release);
             let _ = done_tx.send(result);
         });
         (done_rx, cancel_tx)
     }
 }
 
-fn decode_response(response: reqwest::blocking::Response, rpc_id: &str) -> Result<Value, Error> {
+fn runtime() -> Result<tokio::runtime::Runtime, Error> {
+    Ok(tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .map_err(Error::Runtime)?)
+}
+
+fn default_client() -> Result<reqwest::Client, Error> {
+    Ok(reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(30))
+        .cookie_store(true)
+        .build()?)
+}
+
+async fn wait_for_cancel(cancel: &AtomicBool) {
+    while !cancel.load(Ordering::Relaxed) {
+        tokio::time::sleep(CANCEL_POLL).await;
+    }
+}
+
+async fn decode_response(response: reqwest::Response, rpc_id: &str) -> Result<Value, Error> {
     let full_content_type = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -183,14 +210,14 @@ fn decode_response(response: reqwest::blocking::Response, rpc_id: &str) -> Resul
         .unwrap_or_default()
         .trim();
     if content_type.eq_ignore_ascii_case("multipart/form-data") {
-        let bytes = response.bytes()?;
+        let bytes = response.bytes().await?;
         return Ok(crate::binary_response::parse_binary_response(
             &full_content_type,
             &bytes,
             rpc_id,
         )?);
     }
-    let envelope: ResponseEnvelope = response.json()?;
+    let envelope: ResponseEnvelope = response.json().await?;
     match envelope.validate(rpc_id)? {
         ResponseResult::Success { value, .. } => Ok(value.clone()),
         ResponseResult::Failure { error, .. } => Err(Error::Remote {
@@ -229,10 +256,42 @@ mod tests {
     #[test]
     fn cancelled_request_fails_before_network() {
         let transport = HttpTransport::new("http://127.0.0.1/").unwrap();
-        let flag = std::sync::atomic::AtomicBool::new(true);
+        let flag = AtomicBool::new(true);
         assert!(matches!(
             transport.request("api", serde_json::json!({}), &flag),
             Err(Error::Cancelled)
         ));
+    }
+
+    #[test]
+    fn cancellation_aborts_a_blocked_request() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::time::Instant;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0_u8; 1024];
+            let _ = stream.read(&mut buffer);
+            // Hold the response open until the client aborts the connection.
+            let mut sink = [0_u8; 1024];
+            let _ = stream.read(&mut sink);
+            let _ = stream.write_all(b"HTTP/1.1 500 Late\r\n\r\n");
+        });
+        let transport = HttpTransport::new(&format!("http://{address}")).unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = Arc::clone(&cancel);
+        let started = Instant::now();
+        let worker = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(120));
+            worker_cancel.store(true, Ordering::Release);
+        });
+        let result = transport.request("slow", serde_json::json!({}), &cancel);
+        assert!(matches!(result, Err(Error::Cancelled)));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        worker.join().unwrap();
+        server.join().unwrap();
     }
 }

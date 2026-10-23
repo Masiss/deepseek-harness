@@ -32,6 +32,8 @@ pub enum Error {
     CorrelationMismatch { expected: String, actual: String },
     #[error("HTTP request failed: {0}")]
     Http(#[from] reqwest::Error),
+    #[error("transport runtime failed: {0}")]
+    Runtime(#[from] std::io::Error),
     #[error("HTTP status {0}")]
     HttpStatus(u16),
     #[error("invalid binary RPC response: {0}")]
