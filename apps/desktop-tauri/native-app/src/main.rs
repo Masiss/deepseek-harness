@@ -3140,6 +3140,12 @@ impl eframe::App for DesktopApp {
                     }
                 });
                 ui.add_space(4.0);
+                if self.plugins_loading {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Loading plugins…");
+                    });
+                }
                 if let Some(error) = &self.plugins_error {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
                 }
@@ -3276,6 +3282,12 @@ impl eframe::App for DesktopApp {
                     }
                 });
                 ui.add_space(4.0);
+                if self.market_loading {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Loading…");
+                    });
+                }
                 if let Some(status) = &self.market_status {
                     ui.label(status);
                 }
@@ -3347,6 +3359,12 @@ impl eframe::App for DesktopApp {
                     }
                 });
                 ui.add_space(4.0);
+                if self.skills_loading {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Loading skills…");
+                    });
+                }
                 if self.selected_session.is_none() {
                     ui.label("Select a session to list the skills its composer can invoke.");
                 }
