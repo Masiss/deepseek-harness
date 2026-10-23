@@ -4,13 +4,13 @@ A screen is done only when it runs on the native app and its probe passes.
 Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 
 ## Core
-- ◐ Session list (`session/list`) — projected title, running/blank marker, relative update age, identity on hover; no list-specific native probe yet
+- ◐ Session list (`session/list`) — separate `session_list.rs` renderer for projected titles, running/blank markers, relative update age, identity on hover, bounded labels, and arrow-key navigation when no text editor owns keyboard input; navigation bounds and label formatting have unit coverage, but no list-specific native probe yet
 - ◐ Session viewer / log (`session/page`) — async read-only page shown in egui; pagination/probe pending
 - ✓ Tool-call status derivation — M2
 - ✓ Chat submit (`session/prompt`) + follow (`session/follow`) — composer with **file attachment** and **Cancel turn**; history and live events render through the transcript projection; a mock-model run proves prompt → approval → tool → question on the packaged runtime
 - ✓ Chat cancel API (`session/cancel`) — transport only; UI cancellation pending
 - ✓ Follow stream (`session/follow`) — shared authenticated mux with reconnect; snapshot records and live events feed one transcript
-- ◐ Transcript projection — durable user/assistant messages, provider reasoning, tool calls and results, approvals, jobs, todo lists, deliverables, goals, plan mode, feedback, and the streaming assistant draft
+- ◐ Transcript projection — durable user/assistant messages, provider reasoning, tool calls and results, approvals, jobs, todo lists, deliverables, goals, plan mode, feedback, and the streaming assistant draft; renderer lives in `transcript_view.rs` with headless render tests
 - ✓ Permission approval — `$events` mux + allow-once/reject/delegate; `scripts/approval-probe.sh [allow|reject|delegate]` drives a mock model's escalated bash call through every decision on the packaged runtime: allow runs the command (marker outside the workspace), reject and delegate log the audit outcome and never run it
 - ◐ Model selection (`session/modelCatalog`, `session/selectModel`) — composer picker groups providers/models, shows the catalog default, selects the model's default effort, and offers its reasoning efforts; `initializeDefaultModel` transport only
 - ◐ Session management (`search`, `create`, `rename`, `fork`) — native controls wired; no live Host probe
@@ -32,6 +32,7 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 
 ## App shell
 - ✓ Native egui window (no webview) — M7a
+- ◐ Native layout — egui headless panel geometry tested at 1024×768, 1440×900, 1920×1080, and 1119×1381; debug probe reports measured panel sizes; no independent visual review
 - ✓ Host sidecar launch + cookie auth — M7b
 - ✓ Single-instance lock — M7c
 - ✓ System tray + product icon + close-to-tray — M7c/M7d
@@ -40,6 +41,8 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 - ✓ AppImage native — `pack-appimage.sh` packs either shell; `DSH_DESKTOP_SHELL=native` produced a native AppImage (87.6 MB) whose AppRun env contract, profile seeding, and packaged Host boot pass `appimage-probe.sh`; the release lane now packs and verifies it, and publishes it as an extra asset
 
 ## Open parity gaps
+- ◐ Composer — multiline egui text editing, native clipboard/IME handling, and Ctrl+Enter submission with a unit-tested key predicate; interactive IME and clipboard verification remains pending
+- ◐ UI hardening — loading, empty, disconnected, and retry states exist on key screens; fault injection and independent visual review remain pending
 - ◐ Document preview — text page, decoded image preview, and Office preview via the Host converter plus local pdftoppm (first page); no Host probe yet
 - ✓ Deliverables view — `deliverables/presented` files collect into a panel whose links open the document preview
 - ✓ Human interaction — question cards answer `ask_user_question` through the `$events` waterfall (options, multi-select, free text, skip); `userQuestions/answer` transports continued questions; `scripts/approval-probe.sh allow` proves the live round trip. `userQuestions/attachWait` yields no frames because Desktop composes the blocking legacy tool, not the timed one

@@ -1,6 +1,14 @@
 # Bàn giao — lane Desktop Tauri (fork `Masiss/deepseek-harness`)
 
-Cập nhật 2026-10-22. Mục đích: session mới đọc file này là biết đang ở đâu, cái gì đã xong, cái gì nên làm tiếp và bẫy nào đã mắc.
+Cập nhật 2026-10-23. Mục đích: session mới đọc file này là biết đang ở đâu, cái gì đã xong, cái gì nên làm tiếp và bẫy nào đã mắc.
+
+## Cập nhật native UI — 2026-10-23
+
+`native-app` tiếp tục có navigation rail/sidebar, session-list renderer riêng, composer multiline với Ctrl+Enter, trạng thái loading/disconnected/retry, và transcript renderer riêng trong `src/transcript_view.rs`. Eguis headless test dựng rail/sidebar/central panels ở bốn viewport; debug layout đo kích thước panel thật mỗi frame. `cargo test --manifest-path apps/desktop-tauri/native-app/Cargo.toml` (53 tests) và `cargo build --manifest-path apps/desktop-tauri/native-app/Cargo.toml --release` xanh.
+
+`bun run build` xanh (9/9); `bun run test:docs` đạt 20/21, lỗi `python/sdk/uv.lock:113`; `bun run doc-sync` đạt 39/43, còn ba generated catalogs stale (`api-catalog.ts`, config catalog, event graphs) và cùng repository-reference error. Không sửa các generated artifact ngoài phạm vi.
+
+Chưa xong: Goal 3 parity đầy đủ, interactive GUI verification cho IME/clipboard, fault injection riêng cho UI, independent visual review, signed native updater executable swap/restart, và release signing/publishing native AppImage. Các trạng thái chi tiết nằm trong [`PARITY.md`](PARITY.md); không coi các hạng mục này là đã nghiệm thu.
 
 ## 1. Trạng thái repo
 

@@ -1,5 +1,6 @@
 //! Native desktop shell: a pure egui window that reads the Host session inventory through client-core.
 
+mod composer_input;
 mod dialog;
 mod document_preview;
 mod host;
@@ -9,9 +10,11 @@ mod question_card;
 mod settings_panel;
 mod terminal_ansi;
 mod transcript;
+mod transcript_view;
 mod updater;
 
 use transcript::{RowKind, Transcript};
+use transcript_view::render_transcript;
 use document_preview::{
     DocumentPreview, ImageDocument, ImagePreview, PreviewDocument, TextDocument,
 };
@@ -2574,6 +2577,9 @@ impl eframe::App for DesktopApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let mut nav_rail_width = 0.0;
+        let mut sessions_width = 0.0;
+        let mut central_size = egui::Vec2::ZERO;
         if ui.ctx().input(|i| i.viewport().close_requested())
             && self.tray_available
             && !self.quitting.load(std::sync::atomic::Ordering::Acquire)
@@ -2587,8 +2593,9 @@ impl eframe::App for DesktopApp {
         // Navigation rail: compact, icon-first, grouped.
         egui::Panel::left("nav_rail")
             .resizable(false)
-            .exact_size(56.0)
+            .exact_size(layout::NAV_RAIL_WIDTH)
             .show(ui, |ui| {
+                nav_rail_width = ui.max_rect().width();
                 ui.vertical_centered(|ui| {
                     ui.add_space(8.0);
                     ui.label(egui::RichText::new("DSH").strong().size(11.0));
@@ -2678,9 +2685,11 @@ impl eframe::App for DesktopApp {
             });
         egui::Panel::left("sessions")
             .resizable(true)
-            .default_size(280.0)
-            .min_size(220.0)
+            .default_size(layout::SIDEBAR_DEFAULT)
+            .min_size(layout::SIDEBAR_MIN)
+            .max_size(layout::SIDEBAR_MAX)
             .show(ui, |ui| {
+            sessions_width = ui.max_rect().width();
             if ui
                 .selectable_label(
                     !self.show_settings && !self.show_plugins && !self.show_skills,
@@ -2831,81 +2840,31 @@ impl eframe::App for DesktopApp {
                 }
             }
             ui.add_enabled_ui(!busy, |ui| {
-                let mut selected = None;
-                egui::ScrollArea::vertical()
-                    .id_salt("session-inventory")
-                    .max_height(300.0)
-                    .show(ui, |ui| {
-                        if let Some(results) = &self.session_search {
-                            for item in &results.items {
-                                let display = if item.session_id.chars().count() > 26 {
-                                    format!("{}…", item.session_id.chars().take(25).collect::<String>())
-                                } else {
-                                    item.session_id.clone()
-                                };
-                                if ui
-                                    .selectable_label(
-                                        self.selected_session.as_ref() == Some(&item.session_id),
-                                        display,
-                                    )
-                                    .on_hover_text(format!("{}\n{}", item.session_id, item.snippet))
-                                    .clicked()
-                                {
-                                    selected = Some(item.session_id.clone());
-                                }
-                            }
-                            if results.has_more {
-                                ui.small("More matches exist; refine your search.");
-                            }
-                        } else {
-                            let now = now_millis();
-                            for summary in &self.sessions {
-                                let label = session_label(summary);
-                                let running = if summary.running { "● " } else { "" };
-                                let blank = if summary.blank { " (blank)" } else { "" };
-                                let age = relative_time(summary.updated_at, now);
-                                let display = format!("{running}{label}{blank}");
-                                let display = if display.chars().count() > 26 {
-                                    format!("{}…", display.chars().take(25).collect::<String>())
-                                } else {
-                                    display
-                                };
-                                if ui
-                                    .selectable_label(
-                                        self.selected_session.as_ref()
-                                            == Some(&summary.session_id),
-                                        format!("{display}  ·  {age}"),
-                                    )
-                                    .on_hover_text(format!(
-                                        "{}\n{}",
-                                        summary.session_id, label
-                                    ))
-                                    .clicked()
-                                {
-                                    selected = Some(summary.session_id.clone());
-                                }
-                            }
-                        }
-                    });
+                let mut selected = session_list::render(
+                    ui,
+                    &self.sessions,
+                    self.session_search.as_ref(),
+                    self.selected_session.as_deref(),
+                    now_millis(),
+                );
                 // Keyboard navigation in session list
-                if ui.input(|i| i.key_pressed(egui::Key::ArrowDown) || i.key_pressed(egui::Key::ArrowUp)) {
+                if !ui.ctx().egui_wants_keyboard_input()
+                    && ui.input(|i| {
+                        i.key_pressed(egui::Key::ArrowDown) || i.key_pressed(egui::Key::ArrowUp)
+                    })
+                {
                     let direction = if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) { 1 } else { -1 };
                     let sessions = if self.session_search.is_some() {
                         self.session_search.as_ref().map(|r| r.items.iter().map(|i| i.session_id.clone()).collect::<Vec<_>>()).unwrap_or_default()
                     } else {
                         self.sessions.iter().map(|s| s.session_id.clone()).collect()
                     };
-                    if !sessions.is_empty() {
-                        let current_idx = self.selected_session.as_ref()
-                            .and_then(|id| sessions.iter().position(|s| s == id))
-                            .unwrap_or(0);
-                        let new_idx = if direction > 0 {
-                            (current_idx + 1).min(sessions.len() - 1)
-                        } else {
-                            current_idx.saturating_sub(1)
-                        };
-                        selected = Some(sessions[new_idx].clone());
-                    }
+                    let current_idx = self
+                        .selected_session
+                        .as_ref()
+                        .and_then(|id| sessions.iter().position(|session| session == id));
+                    selected = session_list::next_index(current_idx, direction, sessions.len())
+                        .map(|index| sessions[index].clone());
                 }
                 if let Some(session_id) = selected {
                     self.load_session(session_id);
@@ -3075,17 +3034,8 @@ impl eframe::App for DesktopApp {
                     });
             });
         }
-        if std::env::var("DSH_DESKTOP_DEBUG_LAYOUT").as_deref() == Ok("1") {
-            let vp = ui.ctx().input(|i| i.viewport().inner_rect).unwrap_or(egui::Rect::ZERO);
-            eprintln!(
-                "dsh: layout viewport={}x{} nav_rail=56 sessions=280 central={}x{}",
-                vp.width() as i32,
-                vp.height() as i32,
-                (vp.width() - 56.0 - 280.0) as i32,
-                (vp.height() - 36.0 - 24.0) as i32
-            );
-        }
         egui::CentralPanel::default().show(ui, |ui| {
+            central_size = ui.available_size();
             if self.transport.is_none() {
                 ui.vertical_centered(|ui| {
                     ui.add_space(40.0);
@@ -3139,9 +3089,6 @@ impl eframe::App for DesktopApp {
                         .clicked()
                     {
                         self.refresh_plugins();
-                    }
-                    if self.plugins_loading {
-                        ui.spinner();
                     }
                 });
                 ui.add_space(4.0);
@@ -3282,9 +3229,6 @@ impl eframe::App for DesktopApp {
                     {
                         self.refresh_market_indexes();
                     }
-                    if self.market_loading {
-                        ui.spinner();
-                    }
                 });
                 ui.add_space(4.0);
                 if self.market_loading {
@@ -3358,9 +3302,6 @@ impl eframe::App for DesktopApp {
                         .clicked()
                     {
                         self.refresh_skills();
-                    }
-                    if self.skills_loading {
-                        ui.spinner();
                     }
                 });
                 ui.add_space(4.0);
@@ -3615,10 +3556,11 @@ impl eframe::App for DesktopApp {
                         .hint_text("Message (Ctrl+Enter to send)")
                         .desired_rows(3),
                 );
-                if text_edit.has_focus()
-                    && ui.input(|input| {
-                        input.key_pressed(egui::Key::Enter) && input.modifiers.ctrl
-                    })
+                if composer_input::submit_requested(
+                    text_edit.has_focus(),
+                    ui.input(|input| input.key_pressed(egui::Key::Enter)),
+                    ui.input(|input| input.modifiers.ctrl),
+                )
                     && !self.chat_loading
                     && !self.chat_text.trim().is_empty()
                     && self.attachment_receiver.is_none()
@@ -3672,13 +3614,6 @@ impl eframe::App for DesktopApp {
                         self.cancel_turn();
                     }
                 });
-                if self.chat_loading && self.transcript.is_empty() {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(40.0);
-                        ui.spinner();
-                        ui.label("Loading transcript…");
-                    });
-                }
                 let mut feedback_actions = Vec::new();
                 if let Some(status) = &self.feedback_status {
                     ui.label(status);
@@ -3768,6 +3703,21 @@ impl eframe::App for DesktopApp {
                 }
             }
         });
+        if std::env::var("DSH_DESKTOP_DEBUG_LAYOUT").as_deref() == Ok("1") {
+            let viewport = ui
+                .ctx()
+                .input(|input| input.viewport().inner_rect)
+                .unwrap_or(egui::Rect::ZERO);
+            eprintln!(
+                "dsh: layout viewport={}x{} nav_rail={} sessions={} central={}x{}",
+                viewport.width() as i32,
+                viewport.height() as i32,
+                nav_rail_width as i32,
+                sessions_width as i32,
+                central_size.x as i32,
+                central_size.y as i32
+            );
+        }
     }
 }
 
@@ -3789,34 +3739,6 @@ fn now_millis() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))
-}
-
-/// Display label for a session: its projected title, else the identity.
-fn session_label(summary: &SessionSummary) -> String {
-    summary
-        .projections
-        .as_ref()
-        .and_then(|projections| projections.get("title"))
-        .and_then(serde_json::Value::as_str)
-        .filter(|title| !title.is_empty())
-        .map_or_else(|| summary.session_id.clone(), str::to_owned)
-}
-
-/// Relative age of a session update, tolerant of second- or millisecond-scale times.
-fn relative_time(updated_at: i64, now: i64) -> String {
-    let updated_at = if updated_at < 1_000_000_000_000 {
-        updated_at.saturating_mul(1000)
-    } else {
-        updated_at
-    };
-    let seconds = now.saturating_sub(updated_at) / 1000;
-    match seconds {
-        ..=59 => "just now".to_owned(),
-        60..=3599 => format!("{}m ago", seconds / 60),
-        3600..=86_399 => format!("{}h ago", seconds / 3600),
-        86_400..=2_591_999 => format!("{}d ago", seconds / 86_400),
-        _ => format!("{}mo ago", seconds / 2_592_000),
-    }
 }
 
 /// Appends or refreshes the files a `deliverables/presented` event declared.
@@ -3847,97 +3769,6 @@ fn record_deliverables(
             }),
         }
     }
-}
-
-/// Renders the projected transcript with bounded height.
-fn render_transcript(
-    ui: &mut egui::Ui,
-    transcript: &Transcript,
-    draft: &str,
-    feedback: &std::collections::BTreeMap<String, String>,
-    loading: bool,
-    streaming: bool,
-    feedback_actions: &mut Vec<(String, String)>,
-) {
-    if loading || streaming {
-        ui.horizontal(|ui| {
-            ui.spinner();
-            ui.label("Waiting for assistant…");
-        });
-    }
-    let height = (ui.available_height() - 140.0).max(80.0);
-    egui::ScrollArea::vertical()
-        .id_salt("chat-transcript")
-        .auto_shrink([false, false])
-        .stick_to_bottom(true)
-        .max_height(height)
-        .show(ui, |ui| {
-            if transcript.is_empty() && !loading {
-                ui.label("No messages in this window yet.");
-            }
-            for row in transcript.rows() {
-                let color = match row.kind {
-                    RowKind::User => egui::Color32::LIGHT_BLUE,
-                    RowKind::Assistant => ui.visuals().strong_text_color(),
-                    RowKind::Job => egui::Color32::LIGHT_GREEN,
-                    RowKind::ToolResult => {
-                        if row.title == "Tool error" {
-                            egui::Color32::LIGHT_RED
-                        } else {
-                            ui.visuals().weak_text_color()
-                        }
-                    }
-                    RowKind::Approval => egui::Color32::YELLOW,
-                    RowKind::Reasoning => ui.visuals().weak_text_color(),
-                    RowKind::Todo => egui::Color32::LIGHT_GREEN,
-                    RowKind::Deliverable => egui::Color32::LIGHT_BLUE,
-                    RowKind::Goal => egui::Color32::YELLOW,
-                    RowKind::Notice => egui::Color32::LIGHT_GRAY,
-                };
-                ui.add(
-                    egui::Label::new(egui::RichText::new(&row.title).strong().color(color))
-                        .wrap()
-                        .selectable(true),
-                );
-                if !row.text.is_empty() {
-                    let text = egui::RichText::new(&row.text);
-                    let text = match row.kind {
-                        RowKind::ToolResult | RowKind::Job | RowKind::Todo => text.monospace(),
-                        RowKind::Reasoning => text.italics(),
-                        _ => text,
-                    };
-                    ui.add(egui::Label::new(text).wrap().selectable(true));
-                }
-                if row.kind == RowKind::Assistant {
-                    if let Some(message_id) = &row.message_id {
-                        ui.horizontal(|ui| {
-                            if let Some(rating) = feedback.get(message_id) {
-                                ui.label(format!("Feedback: {rating}"));
-                            }
-                            if ui.small_button("👍").clicked() {
-                                feedback_actions.push((message_id.clone(), "positive".into()));
-                            }
-                            if ui.small_button("👎").clicked() {
-                                feedback_actions.push((message_id.clone(), "negative".into()));
-                            }
-                        });
-                    }
-                }
-                ui.separator();
-            }
-            if !draft.trim().is_empty() {
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new("Assistant (streaming)")
-                            .strong()
-                            .color(ui.visuals().strong_text_color()),
-                    )
-                    .wrap(),
-                );
-                ui.add(egui::Label::new(draft).wrap().selectable(true));
-                ui.separator();
-            }
-        });
 }
 
 /// Appends one assistant-stream text delta, bounded to the transcript budget.
@@ -4700,62 +4531,6 @@ mod preview_path_tests {
         let error = decode_preview_image("notes.txt".into(), "/host/notes.txt".into(), b"text")
             .unwrap_err();
         assert!(error.starts_with("image decoding failed: "), "{error}");
-    }
-}
-
-#[cfg(test)]
-mod session_label_tests {
-    use super::{relative_time, session_label};
-    use dsh_client_core::session::SessionSummary;
-
-    fn summary(projections: Option<serde_json::Value>) -> SessionSummary {
-        SessionSummary {
-            agent_available: true,
-            format_status: None,
-            session_id: "session-1".into(),
-            updated_at: 1_760_000_000_000,
-            running: false,
-            blank: false,
-            parent_session_id: None,
-            origin: None,
-            cwd: None,
-            projections,
-        }
-    }
-
-    #[test]
-    fn prefers_the_projected_title_and_falls_back_to_the_id() {
-        assert_eq!(
-            session_label(&summary(Some(serde_json::json!({"title": "Roadmap"})))),
-            "Roadmap"
-        );
-        for projections in [
-            Some(serde_json::json!({"title": null})),
-            Some(serde_json::json!({"title": ""})),
-            Some(serde_json::json!({})),
-            None,
-        ] {
-            assert_eq!(session_label(&summary(projections)), "session-1");
-        }
-    }
-
-    #[test]
-    fn formats_relative_age_in_seconds_and_milliseconds() {
-        let now = 1_760_000_000_000;
-        for (updated, expected) in [
-            (now, "just now"),
-            (now - 30_000, "just now"),
-            (now - 90_000, "1m ago"),
-            (now - 7_200_000, "2h ago"),
-            (now - 172_800_000, "2d ago"),
-            (now - 5_184_000_000, "2mo ago"),
-        ] {
-            assert_eq!(relative_time(updated, now), expected);
-        }
-        // Second-scale timestamps convert before differencing.
-        assert_eq!(relative_time(1_760_000_000 - 120, now), "2m ago");
-        // Clock skew stays "just now" instead of underflowing.
-        assert_eq!(relative_time(now + 60_000, now), "just now");
     }
 }
 
