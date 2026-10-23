@@ -5,12 +5,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::atomic::AtomicBool;
 
-/// Session workspace resolution scope.
+/// Session identity used by the Host to resolve its active workspace scope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct WorkspaceFileScope {
     pub session_id: String,
-    pub workspace_root: String,
 }
 
 /// Line range for text reads.
@@ -129,7 +127,7 @@ impl<'a> WorkspaceFilesClient<'a> {
     ) -> Result<WorkspaceFileText, Error> {
         self.call(
             "workspaceFiles/read",
-            serde_json::json!({"workspaceFileScope":scope,"path":path.into(),"range":range}),
+            serde_json::json!({"workspaceFileScopeId":scope.session_id,"path":path.into(),"range":range}),
         )
     }
     /// Reads a binary attachment page. The current HTTP transport expects the attachment bytes as `data` in the decoded result.
@@ -141,7 +139,7 @@ impl<'a> WorkspaceFilesClient<'a> {
     ) -> Result<WorkspaceFileBytes, Error> {
         self.call(
             "workspaceFiles/readBytes",
-            serde_json::json!({"workspaceFileScope":scope,"path":path.into(),"options":options}),
+            serde_json::json!({"workspaceFileScopeId":scope.session_id,"path":path.into(),"options":options}),
         )
     }
     /// Reads file metadata.
@@ -152,7 +150,7 @@ impl<'a> WorkspaceFilesClient<'a> {
     ) -> Result<WorkspaceFileStat, Error> {
         self.call(
             "workspaceFiles/stat",
-            serde_json::json!({"workspaceFileScope":scope,"path":path.into()}),
+            serde_json::json!({"workspaceFileScopeId":scope.session_id,"path":path.into()}),
         )
     }
     /// Lists direct workspace directory children.
@@ -163,7 +161,7 @@ impl<'a> WorkspaceFilesClient<'a> {
     ) -> Result<WorkspaceDirectoryListing, Error> {
         self.call(
             "workspaceFiles/list",
-            serde_json::json!({"workspaceFileScope":scope,"path":path.into()}),
+            serde_json::json!({"workspaceFileScopeId":scope.session_id,"path":path.into()}),
         )
     }
 
@@ -183,12 +181,11 @@ mod tests {
     fn serializes_scoped_binary_request() {
         let scope = WorkspaceFileScope {
             session_id: "s".into(),
-            workspace_root: "/work".into(),
         };
-        let value = serde_json::json!({"workspaceFileScope":scope,"path":"a.bin","options":{"range":{"offset":2,"length":4}}});
+        let value = serde_json::json!({"workspaceFileScopeId":scope.session_id,"path":"a.bin","options":{"range":{"offset":2,"length":4}}});
         assert_eq!(
-            serde_json::to_value(value["workspaceFileScope"].clone()).unwrap(),
-            serde_json::json!({"sessionId":"s","workspaceRoot":"/work"})
+            value,
+            serde_json::json!({"workspaceFileScopeId":"s","path":"a.bin","options":{"range":{"offset":2,"length":4}}})
         );
     }
     #[test]

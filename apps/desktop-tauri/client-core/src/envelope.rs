@@ -7,6 +7,7 @@ use serde_json::Value;
 pub struct RequestEnvelope {
     #[serde(rename = "type")]
     pub message_type: String,
+    #[serde(rename = "rpcId")]
     pub rpc_id: String,
     pub method: String,
     pub payload: Value,
@@ -16,11 +17,13 @@ pub struct RequestEnvelope {
 pub struct ResponseEnvelope {
     #[serde(rename = "type")]
     pub message_type: String,
+    #[serde(rename = "rpcId")]
     pub rpc_id: String,
     pub result: ResponseResult,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
 pub enum ResponseResult {
     Success { ok: bool, value: Value },
     Failure { ok: bool, error: RpcError },
@@ -30,12 +33,11 @@ pub enum ResponseResult {
 pub struct RpcError {
     pub code: String,
     pub message: String,
-    pub details: Value,
+    pub details: serde_json::Map<String, Value>,
 }
 
-// The wire format carries `ok` as a JSON boolean, so the boolean is read
-// first and the variant is chosen from it. serde's tagged/untagged enums
-// cannot express "variant depends on a boolean tag" directly.
+// The wire result is a boolean-tagged object. Void success may omit `value`;
+// failures must carry their structured error for callers to handle them.
 impl<'de> serde::Deserialize<'de> for ResponseResult {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -44,9 +46,7 @@ impl<'de> serde::Deserialize<'de> for ResponseResult {
         #[derive(serde::Deserialize)]
         struct Raw {
             ok: bool,
-            #[serde(default)]
             value: Option<Value>,
-            #[serde(default)]
             error: Option<RpcError>,
         }
         let raw = Raw::deserialize(deserializer)?;
@@ -58,11 +58,9 @@ impl<'de> serde::Deserialize<'de> for ResponseResult {
         } else {
             Ok(ResponseResult::Failure {
                 ok: false,
-                error: raw.error.unwrap_or_else(|| RpcError {
-                    code: "unknown".to_owned(),
-                    message: String::new(),
-                    details: Value::Null,
-                }),
+                error: raw
+                    .error
+                    .ok_or_else(|| serde::de::Error::missing_field("error"))?,
             })
         }
     }
@@ -74,7 +72,7 @@ impl RequestEnvelope {
             message_type: "client-request".into(),
             rpc_id: rpc_id.into(),
             method: method.into(),
-            payload,
+            payload: serde_json::json!({ "args": payload }),
         }
     }
 }
@@ -102,17 +100,17 @@ mod tests {
         let value = serde_json::to_value(RequestEnvelope::new(
             "r1",
             "goals/get",
-            serde_json::json!({"args":{}}),
+            serde_json::json!({}),
         ))
         .unwrap();
         assert_eq!(
             value,
-            serde_json::json!({"type":"client-request","rpc_id":"r1","method":"goals/get","payload":{"args":{}}})
+            serde_json::json!({"type":"client-request","rpcId":"r1","method":"goals/get","payload":{"args":{}}})
         );
     }
     #[test]
     fn validates_success_and_correlation() {
-        let response: ResponseEnvelope = serde_json::from_value(serde_json::json!({"type":"server-response","rpc_id":"r1","result":{"ok":true,"value":7}})).unwrap();
+        let response: ResponseEnvelope = serde_json::from_value(serde_json::json!({"type":"server-response","rpcId":"r1","result":{"ok":true,"value":7}})).unwrap();
         assert!(response.validate("r1").is_ok());
         assert!(matches!(
             response.validate("r2"),
@@ -121,7 +119,36 @@ mod tests {
     }
     #[test]
     fn preserves_error_shape() {
-        let response: ResponseEnvelope = serde_json::from_value(serde_json::json!({"type":"server-response","rpc_id":"r1","result":{"ok":false,"error":{"code":"gateway/internal","message":"bad","details":{}}}})).unwrap();
+        let response: ResponseEnvelope = serde_json::from_value(serde_json::json!({"type":"server-response","rpcId":"r1","result":{"ok":false,"error":{"code":"gateway/internal","message":"bad","details":{}}}})).unwrap();
         assert!(matches!(response.result, ResponseResult::Failure { .. }));
+    }
+
+    #[test]
+    fn accepts_void_success_and_rejects_failure_without_error() {
+        let void: ResponseEnvelope = serde_json::from_value(
+            serde_json::json!({"type":"server-response","rpcId":"r1","result":{"ok":true}}),
+        )
+        .unwrap();
+        assert!(matches!(void.result, ResponseResult::Success { value, .. } if value.is_null()));
+        assert!(serde_json::from_value::<ResponseEnvelope>(
+            serde_json::json!({"type":"server-response","rpcId":"r1","result":{"ok":false}})
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn serializes_response_result_as_connection_wire_object() {
+        let result = ResponseResult::Failure {
+            ok: false,
+            error: RpcError {
+                code: "gateway/internal".to_owned(),
+                message: "failed".to_owned(),
+                details: serde_json::Map::from_iter([("retryable".to_owned(), Value::Bool(false))]),
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(result).unwrap(),
+            serde_json::json!({"ok":false,"error":{"code":"gateway/internal","message":"failed","details":{"retryable":false}}})
+        );
     }
 }

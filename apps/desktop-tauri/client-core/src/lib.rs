@@ -5,11 +5,14 @@
 
 pub mod approvals;
 pub mod auth;
+pub mod binary_response;
 pub mod chat;
 pub mod envelope;
 pub mod follow;
 pub mod models;
 pub mod plugins;
+pub mod remote_events;
+mod remote_stream;
 pub mod schedules;
 pub mod session;
 pub mod sessions;
@@ -31,6 +34,8 @@ pub enum Error {
     Http(#[from] reqwest::Error),
     #[error("HTTP status {0}")]
     HttpStatus(u16),
+    #[error("invalid binary RPC response: {0}")]
+    BinaryResponse(#[from] binary_response::BinaryResponseError),
     #[error("request cancelled before completion")]
     Cancelled,
     #[error("authentication response did not include a cookie")]
@@ -38,7 +43,11 @@ pub enum Error {
     #[error("authentication response contained an invalid cookie")]
     InvalidCredential,
     #[error("remote RPC failed ({code}): {message}")]
-    Remote { code: String, message: String },
+    Remote {
+        code: String,
+        message: String,
+        details: serde_json::Map<String, serde_json::Value>,
+    },
 }
 
 impl From<serde_json::Error> for Error {

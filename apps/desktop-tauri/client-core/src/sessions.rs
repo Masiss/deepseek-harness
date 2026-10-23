@@ -19,6 +19,7 @@ pub struct SessionSearchItem {
     pub snippet: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionSearchResponse {
     pub items: Vec<SessionSearchItem>,
     pub has_more: bool,
@@ -103,7 +104,7 @@ impl<'a> SessionsClient<'a> {
     ) -> Result<T, Error> {
         Ok(serde_json::from_value(self.transport.request(
             method,
-            payload,
+            serde_json::json!({"request": payload}),
             &AtomicBool::new(false),
         )?)?)
     }

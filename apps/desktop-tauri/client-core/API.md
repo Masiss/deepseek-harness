@@ -7,12 +7,12 @@ This inventory describes the authenticated `/api` protocol mounted by the Deskto
 Unary calls are `POST /api/<namespace>/<method>` with a JSON `client-request` envelope:
 
 ```json
-{"type":"client-request","rpcId":"caller-generated UUID","method":"endpoint","payload":{}}
+{"type":"client-request","rpcId":"caller-generated UUID","method":"session/page","payload":{"args":{"request":{"address":{"kind":"session","sessionId":"..."},"throughSeq":42}}}}
 ```
 
-The Host answers `server-response`, echoing `rpcId`, with either `{ "ok": true, "value": ... }` or `{ "ok": false, "error": { "code", "message", "details" } }`. Binary response fields use a multipart response with JSON metadata and byte parts. Streams use the authenticated Gateway WebSocket mux; terminal attachment also has a Client-to-Host uplink.
+`payload.args` maps the declared Remote method parameter names to their values. The Host answers `server-response`, echoing `rpcId`, with either `{ "ok": true, "value": ... }` or `{ "ok": false, "error": { "code", "message", "details" } }`. A void success may omit `value`. Binary response fields use `multipart/form-data` with a JSON `metadata` field and raw byte parts. Streams use `/api/remote.mux`; each logical stream opens with an `open` frame whose `payload` uses the same `{args: ...}` map, then exchanges `item`, `end`, `cancel`, and server `error` frames correlated by `streamId`.
 
-The browser does not put a token in each RPC envelope. Connection creates or reuses a 32-byte signing secret in the persistent credentials provider under `client-connection/browser-session`, then creates one random process-launch token. The Host adds that token as `?token=` to the application URL. A matching `GET /` mints an HMAC-signed, HttpOnly, SameSite=Strict `dsh-auth-*` cookie and redirects to the clean URL. The browser cookie jar sends that cookie on API HTTP requests and WebSocket upgrades; the Host checks its signature, authority, and expiry.
+The browser does not put a token in each RPC envelope. Connection creates or reuses a 32-byte signing secret in the persistent credentials provider under `client-connection/browser-session`, then creates one random process-launch token. The Host adds that token as `?token=` to the application URL. A matching `GET /` mints an HMAC-signed browser-session `dsh-auth-*` cookie and redirects to the clean URL. An answering native Client exchanges the launch token at `GET /connect?token=…&interactions=answer`; the Host mints an API-operator cookie and redirects to `/api/remote.mux`. The browser cookie jar or native HTTP client sends its cookie on API requests and WebSocket upgrades; the Host checks its signature, authority, and expiry.
 
 ## Plain requests
 
@@ -88,7 +88,7 @@ Every plain request is a POST unless noted otherwise. `request` and `response` u
 | `terminal/rename` | agent-scoped `{id, title}` | `void` | Desktop |
 | `terminal/close` | agent-scoped `{id}` | `void` | Desktop |
 | `workspaceFiles/read` | `{workspaceFileScope, path, range}` | `WorkspaceFileText` | Desktop |
-| `workspaceFiles/readBytes` | `{workspaceFileScope, path, options}` | `WorkspaceFileBytes` with bytes | Desktop |
+| `workspaceFiles/readBytes` | `{workspaceFileScopeId: SessionId, path, options}` | `WorkspaceFileBytes` with bytes | Desktop |
 | `workspaceFiles/stat` | `{workspaceFileScope, path}` | `WorkspaceFileStat` | Desktop |
 | `workspaceFiles/list` | `{workspaceFileScope, path}` | `WorkspaceDirectoryListing` | Desktop |
 | `/api/file` (`GET`/`HEAD`) | query `path=<absolute path>` | authenticated bounded file `Response` | Desktop exact Fetch route |
@@ -105,8 +105,8 @@ All streams below use the Gateway WebSocket mux and are cancelled by closing the
 | `job/list` | `{sessionId}` | complete `rows` sets |
 | `job/follow` | `{sessionId?, jobId, from?}` | `opened`, `output`, `status` |
 | `terminal/retain` | `{sessionId, id}` | `retained` |
-| `terminal/attach` | agent-scoped `{id}` plus `TerminalInput[]` uplink | `snapshot`, `output`, `state`, `ack` |
-| `workspaceFiles/changes` | `{workspaceFileScope, path}` | `ready`, `change` |
+| `terminal/attach` | agent-scoped `{agentId, id}` plus one `TerminalInput` per uplink item | `snapshot`, `output`, `state`, `ack` |
+| `workspaceFiles/changes` | `{workspaceFileScopeId: SessionId, path}` | `ready`, `change` |
 | `account/watchExpiry` | `{}` | `session-expired` |
 | `account/watch` | `{}` | `AccountView` snapshots |
 | `remoteAccess/follow` | `{}` | `baseline`, `upsert`, `remove` |
@@ -116,6 +116,6 @@ All streams below use the Gateway WebSocket mux and are cancelled by closing the
 
 There are **73 plain requests and 12 streams**. The inventory covers the Desktop profile's Web application composition and the protocol-facing registrations found in its Host bundle. It does not cover model tools, Cordis internal events, direct in-process service methods, browser UI slots, upload transport outside Connection, or optional plugins and user-installed profile overlays. It also does not claim that an optional capability is available merely because its controller is mounted.
 
-A native client must add a native transport carrier, cookie/token exchange or an equivalent explicitly supported credential flow, WebSocket mux framing and reconnect/resume behavior, RPC envelope and binary multipart decoding, typed codecs for every listed endpoint, cancellation and uplink handling, Host-path and attachment policy, and UI-specific lifecycle/state presentation. It must not invent endpoints for operations absent from this inventory.
+A native client must provide a native presentation for every listed capability. `client-core` implements the `rpcId` envelope, named `args` payloads, API-operator cookie exchange, unary HTTP calls including multipart byte restoration, and Gateway mux clients for `$events`, `session/follow`, and terminal attach/retain. Each logical stream currently owns its own mux socket; reconnect/resume and the other eight listed stream endpoints remain unsupported. The egui app has a session list/read-only viewer, a basic prompt/follow panel, a basic terminal panel, a redacted settings viewer, and allow-once/reject approval controls. These screens have not passed a real-Host GUI probe. Editing settings, terminal ANSI rendering, attachment upload, full chat transcript projection, marketplace, document preview, deliverables, feedback, goals/jobs/todo/plan panels, and native RSS validation remain incomplete. It must not invent endpoints for operations absent from this inventory.
 
-The following `client-core` crate must implement first: the authenticated Connection transport and exact RPC envelopes, including correlation IDs, result/error handling, binary attachments, WebSocket stream opening, cancellation, and generation reconnect semantics. Domain clients can safely build on that layer only after it can establish and re-establish an authenticated `/api` connection.
+The native profile also needs signed update metadata and release-lane AppImage integration before update installation can be enabled. `DSH_AUTO_UPDATE=1` currently remains fail-closed because the feed does not provide a signature-verification contract.

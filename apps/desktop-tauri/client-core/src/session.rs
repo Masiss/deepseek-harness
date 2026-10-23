@@ -117,7 +117,8 @@ impl<'a> SessionViewer<'a> {
     /// List sessions using the inventory's cursor request.
     pub fn list(&self, cursor: Option<&str>) -> Result<Vec<SessionSummary>, Error> {
         let cancel = AtomicBool::new(false);
-        let payload = cursor.map_or_else(|| json!({}), |value| json!({"cursor": value}));
+        let request = cursor.map_or_else(|| json!({}), |value| json!({"cursor": value}));
+        let payload = json!({"_request": request});
         let value = self.transport.request("session/list", payload, &cancel)?;
         let response: SessionListResponse = serde_json::from_value(value)?;
         Ok(response.items)
@@ -126,10 +127,10 @@ impl<'a> SessionViewer<'a> {
     /// Read one page of a session's durable event log.
     pub fn page(&self, session_id: &str, through_seq: i64) -> Result<SessionPage, Error> {
         let cancel = AtomicBool::new(false);
-        let payload = json!({
+        let payload = json!({"request": {
             "address": {"kind": "session", "sessionId": session_id},
             "throughSeq": through_seq
-        });
+        }});
         let value = self.transport.request("session/page", payload, &cancel)?;
         Ok(serde_json::from_value(value)?)
     }

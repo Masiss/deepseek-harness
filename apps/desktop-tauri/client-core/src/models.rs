@@ -26,6 +26,7 @@ pub struct ModelReasoningEffort {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelReasoning {
     pub efforts: Vec<ModelReasoningEffort>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -57,6 +58,7 @@ pub struct ModelCatalogFailure {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ModelCatalog {
     pub default: ModelSelection,
     pub routable_providers: Vec<String>,
@@ -75,11 +77,6 @@ pub struct SelectModelRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SelectModelResponse {
     pub selected: ModelSelection,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AcceptedResponse {
-    pub accepted: bool,
 }
 
 pub struct ModelClient<'a> {
@@ -103,25 +100,79 @@ impl<'a> ModelClient<'a> {
     pub fn select(&self, request: SelectModelRequest) -> Result<SelectModelResponse, Error> {
         let value = self.transport.request(
             "session/selectModel",
-            serde_json::to_value(request)?,
+            serde_json::json!({"request": request}),
             &AtomicBool::new(false),
         )?;
         Ok(serde_json::from_value(value)?)
     }
 
-    pub fn initialize_default_model(&self) -> Result<AcceptedResponse, Error> {
+    pub fn initialize_default_model(&self) -> Result<(), Error> {
         let value = self.transport.request(
             "session/initializeDefaultModel",
             serde_json::json!({}),
             &AtomicBool::new(false),
         )?;
-        Ok(serde_json::from_value(value).unwrap_or(AcceptedResponse { accepted: true }))
+        Ok(serde_json::from_value(value)?)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_model_initialization_accepts_void_without_inventing_a_receipt() {
+        use httptest::{matchers::*, responders::json_encoded, Expectation, Server};
+
+        for (value, succeeds) in [
+            (serde_json::Value::Null, true),
+            (serde_json::json!({"accepted": true}), false),
+        ] {
+            let server = Server::run();
+            server.expect(
+                Expectation::matching(request::body(json_decoded(eq(serde_json::json!({
+                    "type": "client-request", "rpcId": "native-1",
+                    "method": "session/initializeDefaultModel", "payload": {"args": {}}
+                })))))
+                .respond_with(json_encoded(serde_json::json!({
+                    "type": "server-response", "rpcId": "native-1",
+                    "result": {"ok": true, "value": value}
+                }))),
+            );
+            let client = reqwest::blocking::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap();
+            let transport = HttpTransport::with_client(&server.url_str("/"), client).unwrap();
+            assert_eq!(
+                ModelClient::new(&transport)
+                    .initialize_default_model()
+                    .is_ok(),
+                succeeds
+            );
+        }
+    }
+
+    #[test]
+    fn reads_server_catalog_field_names() {
+        let catalog: ModelCatalog = serde_json::from_value(serde_json::json!({
+            "default": {"provider": "p", "model": "m"}, "routableProviders": ["p"],
+            "groups": [{"id": "p", "name": "Provider", "models": [{
+                "id": "m", "name": "Model", "reasoning": {"efforts": [], "defaultEffort": "high"}
+            }]}], "failures": []
+        }))
+        .unwrap();
+        assert_eq!(catalog.routable_providers, vec!["p"]);
+        assert_eq!(
+            catalog.groups[0].models[0]
+                .reasoning
+                .as_ref()
+                .unwrap()
+                .default_effort
+                .as_deref(),
+            Some("high")
+        );
+    }
     #[test]
     fn serializes_selection_request() {
         let request = SelectModelRequest {

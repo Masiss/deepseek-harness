@@ -30,7 +30,7 @@ pub struct SkillListRequest {
     pub session_id: String,
 }
 
-/// Native client for both skill list endpoints.
+/// Native client for the session-addressed skill catalog.
 pub struct SkillsClient<'a> {
     transport: &'a HttpTransport,
 }
@@ -46,15 +46,15 @@ impl<'a> SkillsClient<'a> {
         self.call("skills/list", session_id.into())
     }
 
-    /// Lists skills through the session namespace endpoint.
+    /// Lists session-visible skills through the Host skill catalog.
     pub fn session_list(&self, session_id: impl Into<String>) -> Result<SkillListResponse, Error> {
-        self.call("session/skills/list", session_id.into())
+        self.list(session_id)
     }
 
     fn call(&self, method: &str, session_id: String) -> Result<SkillListResponse, Error> {
         Ok(serde_json::from_value(self.transport.request(
             method,
-            serde_json::to_value(SkillListRequest { session_id })?,
+            serde_json::json!({"request": SkillListRequest { session_id }}),
             &AtomicBool::new(false),
         )?)?)
     }

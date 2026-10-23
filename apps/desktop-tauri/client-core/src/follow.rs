@@ -1,17 +1,19 @@
 //! Authenticated `session/follow` WebSocket frames for native chat clients.
 //!
 //! The stream sends the same snapshot, durable event, and optional assistant
-//! stream records as the browser client. A cancel handle closes the socket so
-//! blocked iteration ends without leaving a live Host subscription.
+//! stream records as the browser client. Cancellation and stream drop request
+//! socket shutdown, waking blocked iteration without awaiting worker completion.
 
-use crate::{auth::Credential, session::SessionAddress, Error};
+use crate::{
+    auth::Credential,
+    remote_stream::{self, ClientFrame},
+    session::SessionAddress,
+    Error,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
-use std::thread;
-use tungstenite::Message;
-use url::Url;
 
 /// Request options for `session/follow`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -74,7 +76,7 @@ pub struct SessionWireEvent {
 /// A durable event frame.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventFrame {
-    #[serde(rename = "type", default)]
+    #[serde(rename = "type", default, skip_serializing_if = "String::is_empty")]
     pub frame_type: String,
     pub event: SessionWireEvent,
 }
@@ -93,6 +95,7 @@ pub struct AssistantStreamAttempt {
 
 /// Assistant-stream snapshot baseline.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AssistantStreamBaseline {
     pub revision: u64,
     #[serde(default)]
@@ -103,8 +106,6 @@ pub struct AssistantStreamBaseline {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SnapshotFrame {
-    #[serde(rename = "type", default)]
-    pub frame_type: String,
     pub header: SessionWireHeader,
     pub cursor: i64,
     pub records: Vec<EventFrame>,
@@ -176,11 +177,18 @@ pub enum FollowFrame {
 /// Stops a follow stream and closes its WebSocket.
 pub struct FollowCancel {
     cancelled: Arc<AtomicBool>,
+    uplink: mpsc::Sender<ClientFrame>,
+    stream_id: String,
 }
 impl FollowCancel {
-    /// Requests stream shutdown.
+    /// Requests stream shutdown without waiting for the socket worker to exit.
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Release);
+        if self.cancelled.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let _ = self.uplink.send(ClientFrame::Cancel {
+            stream_id: self.stream_id.clone(),
+        });
     }
 }
 
@@ -201,6 +209,11 @@ impl Iterator for FollowStream {
         self.receiver.recv().ok()
     }
 }
+impl Drop for FollowStream {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
 
 /// Opens an authenticated `session/follow` WebSocket using the supplied cookie.
 pub fn follow(
@@ -208,61 +221,153 @@ pub fn follow(
     credential: &Credential,
     request: FollowRequest,
 ) -> Result<FollowStream, Error> {
-    let mut url = Url::parse(base_url).map_err(|source| Error::InvalidUrl { source })?;
-    let scheme = match url.scheme() {
-        "http" => "ws",
-        "https" => "wss",
-        _ => {
-            return Err(Error::InvalidUrl {
-                source: url::ParseError::RelativeUrlWithoutBase,
-            })
-        }
-    };
-    url.set_scheme(scheme)
-        .map_err(|_| Error::InvalidCredential)?;
-    let path = format!(
-        "{}session/follow",
-        url.path().trim_end_matches('/').to_owned() + "/api/"
-    );
-    url.set_path(&path);
-    let request_text = serde_json::to_string(&request)?;
-    let request = tungstenite::http::Request::builder()
-        .uri(url.as_str())
-        .header("Cookie", credential.cookie.as_str())
-        .body(())
-        .map_err(|_| Error::InvalidCredential)?;
-    let (mut socket, _) =
-        tungstenite::client::connect(request).map_err(|_| Error::InvalidCredential)?;
-    socket
-        .write(Message::Text(request_text.into()))
-        .map_err(|_| Error::InvalidCredential)?;
+    let (stream_id, uplink, mux_receiver) = remote_stream::open(
+        base_url,
+        credential,
+        "session/follow",
+        serde_json::json!({"request": serde_json::to_value(request)?}),
+    )?;
     let (sender, receiver) = mpsc::channel();
     let cancelled = Arc::new(AtomicBool::new(false));
     let worker_cancelled = Arc::clone(&cancelled);
-    thread::spawn(move || {
+    let worker_uplink = uplink.clone();
+    let worker_id = stream_id.clone();
+    std::thread::spawn(move || {
         while !worker_cancelled.load(Ordering::Acquire) {
-            match socket.read() {
-                Ok(Message::Text(text)) => {
-                    let result = serde_json::from_str::<FollowFrame>(&text);
-                    if sender.send(result.map_err(Error::from)).is_err() {
+            match mux_receiver.recv() {
+                Ok(Ok(value)) => {
+                    let result = serde_json::from_value::<FollowFrame>(value).map_err(Error::from);
+                    let failed = result.is_err();
+                    if sender.send(result).is_err() || failed {
                         break;
                     }
                 }
-                Ok(Message::Close(_)) | Err(_) => break,
-                Ok(_) => {}
+                Ok(Err(error)) => {
+                    let _ = sender.send(Err(error));
+                    break;
+                }
+                Err(_) => break,
             }
         }
-        let _ = socket.close(None);
+        worker_cancelled.store(true, Ordering::Release);
+        let _ = worker_uplink.send(ClientFrame::Cancel {
+            stream_id: worker_id,
+        });
     });
     Ok(FollowStream {
         receiver,
-        cancel: FollowCancel { cancelled },
+        cancel: FollowCancel {
+            cancelled,
+            uplink,
+            stream_id,
+        },
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::remote_stream::tests::{read, send, server};
+    use std::time::Duration;
+
+    fn request() -> FollowRequest {
+        FollowRequest {
+            address: SessionAddress {
+                kind: crate::session::SessionAddressKind::Session,
+                session_id: "s".into(),
+            },
+            max_messages: Some(20),
+            turn_window: Some(TurnWindow {
+                min_messages: 2,
+                min_turns: 1,
+            }),
+            assistant_stream: Some(true),
+        }
+    }
+
+    #[test]
+    fn authenticated_follow_sends_named_request_and_decodes_exact_snapshot_fields() {
+        let (url, credential, worker) = server(|mut socket| {
+            let open = read(&mut socket);
+            assert_eq!(open["endpoint"], "session/follow");
+            assert_eq!(
+                open["payload"],
+                serde_json::json!({"args":{"request":{
+                    "address":{"kind":"session","sessionId":"s"},"maxMessages":20,
+                    "turnWindow":{"minMessages":2,"minTurns":1},"assistantStream":true
+                }}})
+            );
+            send(
+                &mut socket,
+                serde_json::json!({"type":"item","streamId":open["streamId"],"value":{
+                    "type":"snapshot","header":{"version":4,"id":"s","createdAt":1,"isSeeded":true,"parentSession":"parent","agentPreset":"preset"},
+                    "cursor":7,"hasMore":true,"projections":{"asOfSeq":7,"values":{}},
+                    "records":[{"type":"event","event":{"type":"user/message","seq":7,"time":10,"data":{"text":"hello"},"surfaceOp":"append"}}],
+                    "assistantStream":{"revision":3,"activeAttempt":{"attemptId":"a","startedAfterSeq":7,"turn":2,"step":1,"nextIndex":1,"stream":[{"text":"hi"}]}}
+                }}),
+            );
+            send(
+                &mut socket,
+                serde_json::json!({"type":"end","streamId":open["streamId"]}),
+            );
+        });
+        let mut stream = follow(&url, &credential, request()).unwrap();
+        let frame = stream.next().unwrap().unwrap();
+        let FollowFrame::Snapshot(snapshot) = &frame else {
+            panic!("expected snapshot")
+        };
+        assert_eq!(snapshot.cursor, 7);
+        assert!(snapshot.has_more);
+        assert_eq!(snapshot.header.parent_session.as_deref(), Some("parent"));
+        assert_eq!(snapshot.header.agent_preset.as_deref(), Some("preset"));
+        assert_eq!(snapshot.records[0].frame_type, "event");
+        assert_eq!(
+            snapshot.records[0].event.surface_op,
+            Some(serde_json::json!("append"))
+        );
+        let attempt = snapshot
+            .assistant_stream
+            .as_ref()
+            .unwrap()
+            .active_attempt
+            .as_ref()
+            .unwrap();
+        assert_eq!(attempt.attempt_id, "a");
+        assert_eq!(attempt.next_index, 1);
+        assert_eq!(attempt.stream, vec![serde_json::json!({"text":"hi"})]);
+        let encoded = serde_json::to_string(&frame).unwrap();
+        assert!(encoded.starts_with("{\"type\":\"snapshot\",\"header\":"));
+        assert!(encoded.contains("\"activeAttempt\":"));
+        assert_eq!(
+            serde_json::from_str::<FollowFrame>(&encoded).unwrap(),
+            frame
+        );
+        assert!(stream.next().is_none());
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn cancel_and_drop_release_idle_follow_subscriptions() {
+        for explicit in [true, false] {
+            let (url, credential, worker) = server(|mut socket| {
+                let open = read(&mut socket);
+                assert_eq!(
+                    read(&mut socket),
+                    serde_json::json!({"type":"cancel","streamId":open["streamId"]})
+                );
+            });
+            let stream = follow(&url, &credential, request()).unwrap();
+            if explicit {
+                stream.cancel_handle().cancel();
+                assert!(matches!(
+                    stream.receiver.recv_timeout(Duration::from_secs(3)),
+                    Err(mpsc::RecvTimeoutError::Disconnected)
+                ));
+            }
+            drop(stream);
+            worker.join().unwrap();
+        }
+    }
     #[test]
     fn deserializes_snapshot() {
         let frame: FollowFrame = serde_json::from_str(r#"{"type":"snapshot","header":{"version":4,"id":"s","createdAt":1,"isSeeded":false},"cursor":2,"records":[],"hasMore":false,"projections":{"asOfSeq":2,"values":{}}}"#).unwrap();

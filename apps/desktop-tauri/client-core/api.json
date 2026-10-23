@@ -1,7 +1,7 @@
 {
   "protocol": {
     "channel": "/api",
-    "requestEnvelope": {"type":"client-request","rpcId":"string","method":"channel-relative endpoint","payload":"endpoint-defined"},
+    "requestEnvelope": {"type":"client-request","rpcId":"string","method":"channel-relative endpoint","payload":{"args":"map of named Remote method parameters"}},
     "responseEnvelope": {"type":"server-response","rpcId":"echoed request rpcId","result":{"ok":"boolean","value":"endpoint-defined on success","error":{"code":"string","message":"string","details":"object"}}},
     "credential": {
       "kind":"signed browser-session cookie",
@@ -10,8 +10,9 @@
         "Host creates or reuses a 32-byte random signing secret in the credentials provider under client-connection/browser-session.",
         "Host generates one process-launch token per process owner.",
         "Host authenticatedUrl appends token=<launch token> to the clean application URL.",
-        "GET / with exactly that token causes Host to set an HttpOnly SameSite=Strict dsh-auth-* cookie and redirect to clean ./.",
-        "Subsequent API HTTP and WebSocket requests present that cookie automatically through the browser cookie jar; the Host verifies its HMAC, authority, and expiry."
+        "Browser: GET / with exactly that token sets the browser-session dsh-auth-* cookie and redirects to clean ./.",
+        "Answering native Client: GET /connect?token=<launch token>&interactions=answer sets an API-operator dsh-auth-* cookie and redirects to /api/remote.mux.",
+        "API HTTP and WebSocket requests present the selected cookie; the Host verifies its HMAC, authority, and expiry."
       ],
       "notBearerHeader":"The RPC request envelope contains no credential field."
     },

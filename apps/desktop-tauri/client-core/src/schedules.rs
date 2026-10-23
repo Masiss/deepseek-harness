@@ -83,19 +83,19 @@ impl<'a> SchedulesClient<'a> {
         &self,
         request: ScheduleHistoryRequest,
     ) -> Result<ScheduleDeliveryHistoryResult, Error> {
-        self.call_value("schedule/history", serde_json::to_value(request)?)
+        self.call_value("schedule/history", serde_json::json!({"request": request}))
     }
     /// Deletes one schedule.
     pub fn delete(&self, request: ScheduleDeleteRequest) -> Result<ScheduleDeleteResult, Error> {
-        self.call_value("schedule/delete", serde_json::to_value(request)?)
+        self.call_value("schedule/delete", serde_json::json!({"request": request}))
     }
     /// Updates one schedule using compare-and-update semantics.
     pub fn update(&self, request: ScheduleUpdateRequest) -> Result<ScheduleUpdateResult, Error> {
-        self.call_value("schedule/update", serde_json::to_value(request)?)
+        self.call_value("schedule/update", serde_json::json!({"request": request}))
     }
 
     fn call<R: Serialize>(&self, method: &str, request: R) -> Result<Vec<Value>, Error> {
-        self.call_value(method, serde_json::to_value(request)?)
+        self.call_value(method, serde_json::json!({"request": request}))
     }
     fn call_value<T: for<'de> Deserialize<'de>>(
         &self,
