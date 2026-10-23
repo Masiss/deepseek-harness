@@ -3,6 +3,7 @@
 mod dialog;
 mod document_preview;
 mod host;
+mod layout;
 mod question_card;
 mod settings_panel;
 mod terminal_ansi;
@@ -3536,12 +3537,22 @@ impl eframe::App for DesktopApp {
                 if let Some(error) = &self.model_error {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
                 }
-                ui.add_enabled(
+                let text_edit = ui.add_enabled(
                     !self.chat_loading,
                     egui::TextEdit::multiline(&mut self.chat_text)
-                        .hint_text("Message")
+                        .hint_text("Message (Ctrl+Enter to send)")
                         .desired_rows(3),
                 );
+                if text_edit.has_focus()
+                    && ui.input(|input| {
+                        input.key_pressed(egui::Key::Enter) && input.modifiers.ctrl
+                    })
+                    && !self.chat_loading
+                    && !self.chat_text.trim().is_empty()
+                    && self.attachment_receiver.is_none()
+                {
+                    self.send_prompt();
+                }
                 ui.horizontal_wrapped(|ui| {
                     let uploading = self.attachment_receiver.is_some();
                     if ui
