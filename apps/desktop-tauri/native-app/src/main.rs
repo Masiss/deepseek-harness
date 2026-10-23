@@ -3,6 +3,7 @@
 mod dialog;
 mod document_preview;
 mod host;
+mod session_list;
 mod layout;
 mod question_card;
 mod settings_panel;
