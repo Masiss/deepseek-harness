@@ -7,16 +7,16 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 - ◐ Session list (`session/list`) — M2; shown in egui, no native probe yet
 - ◐ Session viewer / log (`session/page`) — async read-only page shown in egui; pagination/probe pending
 - ✓ Tool-call status derivation — M2
-- ◐ Chat submit (`session/prompt`) + follow (`session/follow`) — basic egui composer and stream display; no real model probe, cancel UI or transcript projection
+- ◐ Chat submit (`session/prompt`) + follow (`session/follow`) — egui composer with **file attachment** (upload → receipt → prompt file part) and follow display; no real model probe, cancel UI or transcript projection
 - ✓ Chat cancel API (`session/cancel`) — transport only; UI cancellation pending
-- ✓ Follow stream (`session/follow`) — authenticated Gateway mux
-- ◐ Permission approval — `$events` mux + correlated allow-once/reject API; egui approval buttons wired, needs real Host probe and lifecycle review
+- ✓ Follow stream (`session/follow`) — shared authenticated mux with reconnect
+- ◐ Permission approval — `$events` mux + correlated allow-once/reject API; egui approval buttons wired; `$events=ready` proven on a real Host, a decision round-trip still needs a live tool call
 - ✓ Model-selection RPCs (`session/modelCatalog`, `session/selectModel`, `session/initializeDefaultModel`) — M4 transport; selector UI pending
 - ◐ Session management (`search`, `create`, `rename`, `fork`) — native controls wired; no live Host probe
 
 ## Tools & terminal
 - ✓ Terminal RPC (`environment`, `shells`, `list`, `create`, `rename`, `close`) — M5 transport
-- ✓ Terminal streams (`attach` with single-input uplink, `retain`) — Gateway mux transport; bounded input/backpressure pending
+- ✓ Terminal streams (`attach`, `retain`) — shared mux; `TerminalWriter` enforces the raw byte budget and the snapshot's encoded-frame window, queueing until acknowledgements
 - ◐ Terminal UI — list/create/select/rename/close, attach, resize, input; ANSI SGR colors, carriage-return overwrites, and erase-to-end-of-line are rendered; cursor addressing is not emulated; no live Host probe
 
 ## Settings & plugins
@@ -27,6 +27,7 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 - ✓ Workspace files (`read`, `readBytes`, `stat`, `list`) — unary and multipart bytes transport
 - ◐ Settings UI — namespace/schema/redacted values; optimistic user-override patch editor wired, replace/mutate and live Host probe pending
 - ☐ Plugin manager / marketplace UI
+- ✓ Workspace, session-control, job, account, remote-access, file-watch, and user-question streams — typed clients over the shared mux; probe verifies workspace/follow, session/control, account/watch, remoteAccess/follow, account/watchExpiry, job/list, and workspaceFiles/changes on a real Host (job/follow and attachWait need a live job or question)
 
 ## App shell
 - ✓ Native egui window (no webview) — M7a
@@ -41,11 +42,12 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 - ◐ Text document preview — user-supplied Host path, 500-line page, literal selectable text; images/office preview and Host probe pending
 - ☐ Deliverables view
 - ☐ Feedback / human interaction
-- ☐ Goals, jobs, todo, plan panels
+- ◐ Jobs panel — session job list (`job/list`) with per-job output follow (`job/follow`); visible in egui, live-id probe pending
+- ☐ Goals, todo, plan panels
 - ✓ Remote Event `$events` waterfall transport and approval outcomes; projections/control stream UI pending
-- ✓ Multipart binary response decoder; prompt attachment upload remains pending
-- ✓ Native probe (`scripts/native-gui-probe.sh`) launches the packaged runtime, waits for Host readiness and authentication, and reports tree RSS/PSS
-- ✓ RSS measurement on a real Hyprland session: 263 MiB RSS / 240 MiB PSS idle after authentication
+- ✓ Multipart binary response decoder and prompt attachment upload (`session/uploadFileBinary`)
+- ✓ Native probe (`scripts/native-gui-probe.sh`) launches the packaged runtime, waits for Host readiness, authentication, `$events`, and the stream probe, and reports tree RSS/PSS
+- ✓ RSS measurement on a real Hyprland session: 263–265 MiB RSS / 240–245 MiB PSS idle after authentication
 
 ## Memory gate
-- ✓ RSS < 300 MiB measured on a real machine (263 MiB RSS / 240 MiB PSS idle)
+- ✓ RSS < 300 MiB measured on a real machine (263–265 MiB RSS / 240–245 MiB PSS idle)

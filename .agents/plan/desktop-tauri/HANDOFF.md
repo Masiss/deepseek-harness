@@ -115,7 +115,17 @@ Sau grill với chủ dự án, lane **chuyển hẳn** sang ứng dụng native
 - Test: `client-core` 63 unit + 8 multipart; `native-app` 25 unit. `cargo build --release` xanh (app 40 MB).
 - Bẫy mới: cửa sổ trên workspace `special:` + `silent` ⇒ egui không chạy frame ⇒ không đọc `host_receiver`; probe phải mở cửa sổ thật. Và Host orphan giữ lease khiến lần chạy sau không `ready` — luôn dùng work dir mới.
 
-**Còn lại (cập nhật 2026-10-23):** shared physical mux + reconnect/resume; 8 stream endpoint; prompt file-upload; plugin/marketplace/deliverables/feedback/goals/jobs/todo/plan UI; ảnh/office preview; probe approval lifecycle trên Host thật; cửa sổ input terminal có giới hạn; updater ký số; nối AppDir/AppImage vào release lane + ký; parity đủ màn hình.
+### Tiếp — 2026-10-23 (đợt 2, đã commit)
+
+- **Mux dùng chung + reconnect**: `RemoteStreamMux` giữ một WebSocket cho mọi logical stream; mất carrier → stream đang mở fail có kiểu, `open` mới xếp hàng chờ socket kế tiếp (backoff 200 ms→5 s). Bỏ mô hình một socket mỗi stream.
+- **Đủ 12 stream endpoint** trong `client-core/src/streams.rs` + `stream.rs` (typed frame, shared mux): session/control, workspace/follow, job/list, job/follow, workspaceFiles/changes, account/watch, account/watchExpiry, remoteAccess/follow, userQuestions/attachWait (cộng 4 đã có). Probe thật xác nhận 7/9 không cần id sống; `job/follow` và `attachWait` cần job/câu hỏi sống.
+- **Cửa sổ input terminal**: `TerminalWriter` theo `maxInputBytes`, `maxBufferedBytes`, `inputWindow` trong snapshot; queue + ack, chặn frame quá lớn, clamp resize.
+- **Đính kèm tệp**: `POST /api/session/uploadFileBinary` + `PromptContentPart::File{receiptId}`; nút Attach file… trong panel chat.
+- **Panel Jobs**: `job/list` + `job/follow`, output 128 KiB.
+- **Probe mở rộng**: chờ `$events=ready` và in từng stream; số đo mới **265 MiB RSS / 245 MiB PSS**.
+- Test: `client-core` **79 unit + 8 multipart**, `native-app` **25 unit**.
+
+**Còn lại (2026-10-23):** lượt quyết định approval thật (cần tool call sống); `job/follow`/`attachWait` với id sống; plugin/marketplace/deliverables/feedback/goals/todo/plan UI; ảnh/office preview; settings replace/mutate UI; updater ký số; nối AppDir/AppImage vào release lane + ký; parity đủ màn hình.
 
 ## 3. Việc nên làm tiếp (theo thứ tự giá trị)
 
