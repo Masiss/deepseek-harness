@@ -4,6 +4,7 @@ mod dialog;
 mod document_preview;
 mod host;
 mod settings_panel;
+mod terminal_ansi;
 mod updater;
 
 use document_preview::{DocumentPreview, TextDocument};
@@ -99,6 +100,9 @@ struct TerminalPanel {
     stop: Option<mpsc::Sender<()>>,
     workers: Vec<std::thread::JoinHandle<()>>,
     output: String,
+    output_revision: u64,
+    parsed: Vec<terminal_ansi::AnsiLine>,
+    parsed_revision: u64,
     text: String,
     title: String,
     status: String,
@@ -125,6 +129,16 @@ impl TerminalPanel {
         self.status = "Detached (shell remains alive)".to_owned();
     }
 
+    fn clear_output(&mut self) {
+        self.output.clear();
+        self.output_revision = self.output_revision.wrapping_add(1);
+    }
+
+    fn push_output(&mut self, text: &str) {
+        append_terminal_output(&mut self.output, text);
+        self.output_revision = self.output_revision.wrapping_add(1);
+    }
+
     fn select_session(&mut self, session: Option<String>, transport: Option<HttpTransport>) {
         if self.session == session {
             return;
@@ -135,7 +149,7 @@ impl TerminalPanel {
         self.selected = None;
         self.inventory = None;
         self.environment = None;
-        self.output.clear();
+        self.clear_output();
         self.text.clear();
         self.title.clear();
         self.snapshot_status.clear();
@@ -190,7 +204,7 @@ impl TerminalPanel {
             return;
         };
         self.detach();
-        self.output.clear();
+        self.clear_output();
         self.sequence = 0;
         self.snapshot_status.clear();
         self.state_status.clear();
@@ -258,7 +272,7 @@ impl TerminalPanel {
                             if let Some(id) = inventory.selected {
                                 self.detach();
                                 self.selected = Some(id);
-                                self.output.clear();
+                                self.clear_output();
                                 self.snapshot_status.clear();
                                 self.state_status.clear();
                                 self.ack_status.clear();
@@ -275,7 +289,7 @@ impl TerminalPanel {
                             {
                                 self.detach();
                                 self.selected = None;
-                                self.output.clear();
+                                self.clear_output();
                                 self.snapshot_status.clear();
                                 self.state_status.clear();
                                 self.ack_status.clear();
@@ -311,8 +325,8 @@ impl TerminalPanel {
                 }
                 Ok(TerminalUpdate::Frame(frame)) => match frame {
                     TerminalFrame::Snapshot(frame) => {
-                        self.output.clear();
-                        append_terminal_output(&mut self.output, &frame.screen);
+                        self.clear_output();
+                        self.push_output(&frame.screen);
                         self.writable = frame.writable;
                         self.snapshot_status = format!("Snapshot #{}", frame.sequence);
                         self.state_status = format!(
@@ -330,7 +344,7 @@ impl TerminalPanel {
                         }
                     }
                     TerminalFrame::Output(frame) => {
-                        append_terminal_output(&mut self.output, &frame.data);
+                        self.push_output(&frame.data);
                         self.status =
                             format!("Output #{} · writable: {}", frame.sequence, self.writable);
                     }
@@ -480,7 +494,7 @@ impl TerminalPanel {
         if selection != self.selected {
             self.detach();
             self.selected = selection;
-            self.output.clear();
+            self.clear_output();
             self.text.clear();
             self.snapshot_status.clear();
             self.state_status.clear();
@@ -561,15 +575,20 @@ impl TerminalPanel {
             ui.colored_label(egui::Color32::LIGHT_RED, error);
         }
         ui.small(
-            "Plain-text terminal output (last 128 KiB); ANSI cursor positioning is not emulated.",
+            "ANSI SGR colors and carriage returns are rendered; cursor positioning is not emulated.",
         );
+        if self.parsed_revision != self.output_revision {
+            self.parsed = terminal_ansi::parse(&self.output);
+            self.parsed_revision = self.output_revision;
+        }
+        let job = terminal_ansi::layout(&self.parsed, ui.available_width());
         egui::ScrollArea::both()
             .id_salt("terminal-output")
             .max_height(180.0)
             .stick_to_bottom(true)
             .show(ui, |ui| {
                 ui.add(
-                    egui::Label::new(egui::RichText::new(&self.output).monospace())
+                    egui::Label::new(job)
                         .selectable(true)
                         .wrap_mode(egui::TextWrapMode::Extend),
                 );
@@ -803,6 +822,7 @@ struct DesktopApp {
     hidden: Arc<AtomicBool>,
     viewport: Arc<Mutex<Option<egui::Context>>>,
     tray_available: bool,
+    auto_connect: bool,
 }
 
 impl DesktopApp {
@@ -866,6 +886,7 @@ impl DesktopApp {
             hidden,
             viewport,
             tray_available,
+            auto_connect: std::env::var("DSH_DESKTOP_AUTO_CONNECT").as_deref() == Ok("1"),
         }
     }
 
@@ -1190,6 +1211,10 @@ impl eframe::App for DesktopApp {
                     );
                     self.host = Some(host);
                     self.host_receiver = None;
+                    eprintln!("dsh: native host=ready");
+                    if self.auto_connect && self.host_url.is_some() {
+                        self.connect();
+                    }
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.status = "Host startup worker stopped unexpectedly".to_owned();
@@ -1203,6 +1228,7 @@ impl eframe::App for DesktopApp {
         if let Some(receiver) = &self.connect_receiver {
             match receiver.try_recv() {
                 Ok(Ok((base, transport))) => {
+                    eprintln!("dsh: native auth=ok");
                     self.host_url = Some(base);
                     self.start_remote_events(transport.clone());
                     self.transport = Some(transport);
@@ -1212,6 +1238,7 @@ impl eframe::App for DesktopApp {
                 }
                 Ok(Err(error)) => {
                     self.connect_receiver = None;
+                    eprintln!("dsh: native auth=failed: {error}");
                     self.status = format!("Authentication failed: {error}");
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
