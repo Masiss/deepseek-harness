@@ -5,6 +5,7 @@ mod document_preview;
 mod host;
 mod question_card;
 mod settings_panel;
+mod ui;
 mod terminal_ansi;
 mod transcript;
 mod updater;
@@ -1964,6 +1965,10 @@ impl DesktopApp {
 }
 
 impl eframe::App for DesktopApp {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        self.render_ui(ui, frame);
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if let Ok(mut viewport) = self.viewport.lock() {
             *viewport = Some(ctx.clone());
