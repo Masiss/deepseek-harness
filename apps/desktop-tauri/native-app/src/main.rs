@@ -14,6 +14,7 @@ use dsh_client_core::{
     approvals::{ApprovalDecision, PendingApproval},
     chat::{ChatClient, PromptContentPart, PromptMode, PromptRequest},
     follow::{self, FollowFrame, FollowRequest},
+    models::{ModelCatalog, ModelClient, ModelSelection, SelectModelRequest, SelectModelResponse},
     plugins::{PluginInventorySnapshot, PluginsClient},
     remote_events::{RemoteEvent, RemoteEventError, RemoteEvents},
     remote_stream::RemoteStreamMux,
@@ -861,6 +862,11 @@ struct DesktopApp {
     preview_receiver: Option<mpsc::Receiver<Result<PreviewDocument, String>>>,
     show_document: bool,
     show_plugins: bool,
+    model_catalog: Option<ModelCatalog>,
+    model_selection: Option<ModelSelection>,
+    model_error: Option<String>,
+    model_receiver: Option<mpsc::Receiver<Result<ModelCatalog, Error>>>,
+    model_select_receiver: Option<mpsc::Receiver<Result<SelectModelResponse, Error>>>,
     plugins_snapshot: Option<PluginInventorySnapshot>,
     plugins_loading: bool,
     plugins_error: Option<String>,
@@ -945,6 +951,11 @@ impl DesktopApp {
             preview_receiver: None,
             show_document: false,
             show_plugins: false,
+            model_catalog: None,
+            model_selection: None,
+            model_error: None,
+            model_receiver: None,
+            model_select_receiver: None,
             plugins_snapshot: None,
             plugins_loading: false,
             plugins_error: None,
@@ -1095,6 +1106,40 @@ impl DesktopApp {
             return;
         }
         self.refresh_settings();
+    }
+
+    fn refresh_models(&mut self) {
+        if self.model_receiver.is_some() {
+            return;
+        }
+        let Some(transport) = self.transport.clone() else {
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(ModelClient::new(&transport).catalog());
+        });
+        self.model_receiver = Some(receiver);
+        self.model_error = None;
+    }
+
+    fn select_model(&mut self, selection: ModelSelection) {
+        let (Some(session), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.model_error = Some("Select a Session before choosing a model".to_owned());
+            return;
+        };
+        let request = SelectModelRequest {
+            session_id: session,
+            selection,
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(ModelClient::new(&transport).select(request));
+        });
+        self.model_select_receiver = Some(receiver);
+        self.model_error = None;
     }
 
     fn refresh_plugins(&mut self) {
@@ -1535,6 +1580,7 @@ impl eframe::App for DesktopApp {
                         }
                     };
                     self.host_url = Some(base);
+                    self.refresh_models();
                     self.start_remote_events(transport.clone(), streams.clone());
                     if std::env::var("DSH_DESKTOP_PROBE_STREAMS").as_deref() == Ok("1") {
                         let probe_transport = transport.clone();
@@ -1706,6 +1752,49 @@ impl eframe::App for DesktopApp {
                     self.preview_loading = false;
                     self.preview_error = Some("Document read worker stopped unexpectedly".into());
                     self.preview_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30));
+                }
+            }
+        }
+        if let Some(receiver) = &self.model_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(catalog)) => {
+                    if self.model_selection.is_none() {
+                        self.model_selection = Some(catalog.default.clone());
+                    }
+                    self.model_catalog = Some(catalog);
+                    self.model_error = None;
+                    self.model_receiver = None;
+                }
+                Ok(Err(error)) => {
+                    self.model_error = Some(format!("Could not load models: {error}"));
+                    self.model_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.model_error = Some("Model catalog worker stopped unexpectedly".into());
+                    self.model_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30));
+                }
+            }
+        }
+        if let Some(receiver) = &self.model_select_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(response)) => {
+                    self.model_selection = Some(response.selected);
+                    self.model_error = None;
+                    self.model_select_receiver = None;
+                }
+                Ok(Err(error)) => {
+                    self.model_error = Some(format!("Model selection failed: {error}"));
+                    self.model_select_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.model_error = Some("Model selection worker stopped unexpectedly".into());
+                    self.model_select_receiver = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     ctx.request_repaint_after(std::time::Duration::from_millis(30));
@@ -2196,6 +2285,57 @@ impl eframe::App for DesktopApp {
                 }
                 ui.separator();
                 ui.heading("Chat");
+                ui.horizontal_wrapped(|ui| {
+                    let selected = self.model_selection.as_ref().map_or_else(
+                        || "Model: loading…".to_owned(),
+                        |selection| format!("{} / {}", selection.provider, selection.model),
+                    );
+                    egui::ComboBox::from_id_salt("model-selection")
+                        .selected_text(selected)
+                        .show_ui(ui, |ui| {
+                            let mut next = None;
+                            if let Some(catalog) = &self.model_catalog {
+                                for group in &catalog.groups {
+                                    ui.label(egui::RichText::new(&group.name).strong());
+                                    for model in &group.models {
+                                        let selection = ModelSelection {
+                                            provider: group.id.clone(),
+                                            model: model.id.clone(),
+                                            reasoning_effort: None,
+                                        };
+                                        let current = self
+                                            .model_selection
+                                            .as_ref()
+                                            .is_some_and(|current| {
+                                                current.provider == selection.provider
+                                                    && current.model == selection.model
+                                            });
+                                        if ui
+                                            .selectable_label(
+                                                current,
+                                                format!("{} · {}", model.name, model.id),
+                                            )
+                                            .clicked()
+                                        {
+                                            next = Some(selection);
+                                        }
+                                    }
+                                }
+                            }
+                            if let Some(selection) = next {
+                                self.select_model(selection);
+                            }
+                        });
+                    if ui
+                        .add_enabled(self.model_receiver.is_none(), egui::Button::new("Reload"))
+                        .clicked()
+                    {
+                        self.refresh_models();
+                    }
+                });
+                if let Some(error) = &self.model_error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                }
                 ui.add_enabled(
                     !self.chat_loading,
                     egui::TextEdit::multiline(&mut self.chat_text)
@@ -2439,6 +2579,14 @@ fn probe_streams(transport: HttpTransport, mux: RemoteStreamMux) {
     match PluginsClient::new(&transport).list() {
         Ok(snapshot) => eprintln!("dsh: native plugins={}", snapshot.entries.len()),
         Err(error) => eprintln!("dsh: native plugins=failed: {error}"),
+    }
+    match ModelClient::new(&transport).catalog() {
+        Ok(catalog) => eprintln!(
+            "dsh: native models={} failures={}",
+            catalog.groups.iter().map(|group| group.models.len()).sum::<usize>(),
+            catalog.failures.len()
+        ),
+        Err(error) => eprintln!("dsh: native models=failed: {error}"),
     }
 }
 

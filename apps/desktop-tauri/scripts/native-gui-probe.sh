@@ -143,6 +143,14 @@ elif grep -F 'dsh: native plugins=' "$err" >/dev/null; then
 else
   echo "RESULT native-plugins=FAIL"
 fi
+wait_for 'dsh: native models=' 40 || true
+if grep -F 'dsh: native models=' "$err" | grep -q 'failed'; then
+  echo "RESULT native-models=FAIL"
+elif grep -F 'dsh: native models=' "$err" >/dev/null; then
+  echo "RESULT native-models=OK"
+else
+  echo "RESULT native-models=FAIL"
+fi
 
 # Let the session list settle before measuring steady-state memory.
 sleep 3
