@@ -1,7 +1,7 @@
 //! Native Host sidecar discovery and launch-token handling.
 
-use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -49,6 +49,8 @@ pub struct Host {
     launch_url: Option<String>,
     host_url: Option<String>,
     error: Option<String>,
+    child: Option<Child>,
+    stdin: Option<ChildStdin>,
 }
 
 impl Host {
@@ -59,50 +61,111 @@ impl Host {
                 launch_url: None,
                 host_url: None,
                 error: None,
+                child: None,
+                stdin: None,
             };
         };
-        let result = (|| -> Result<String, String> {
-            let mut child = Command::new(&config.binary)
-                .args(&config.args)
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .map_err(|error| format!("Host spawn failed: {error}"))?;
-            let stdout = child.stdout.take().ok_or("Host stdout unavailable")?;
-            let stderr = child.stderr.take().ok_or("Host stderr unavailable")?;
-            let (tx, rx) = mpsc::channel();
-            std::thread::spawn(move || {
-                let tx_stderr = tx.clone();
-                std::thread::spawn(move || {
-                    for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                        if let Some(url) = find_launch_url(&line) {
-                            let _ = tx_stderr.send(url);
-                            return;
-                        }
-                    }
-                });
-                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                    if let Some(url) = find_launch_url(&line) {
-                        let _ = tx.send(url);
-                        return;
-                    }
+        let mut child = match Command::new(&config.binary)
+            .args(&config.args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) => return Self::failed(format!("Host spawn failed: {error}")),
+        };
+        let Some(stdout) = child.stdout.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Self::failed("Host stdout unavailable".to_owned());
+        };
+        let Some(stderr) = child.stderr.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Self::failed("Host stderr unavailable".to_owned());
+        };
+        let Some(stdin) = child.stdin.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Self::failed("Host stdin unavailable".to_owned());
+        };
+        let (tx, rx) = mpsc::channel();
+        let tx_stderr = tx.clone();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                if let Some(url) = find_launch_url(&line) {
+                    let _ = tx_stderr.send(url);
                 }
-            });
-            rx.recv_timeout(READY_TIMEOUT)
-                .map_err(|error| format!("Host did not become ready: {error}"))
-        })();
-        match result {
+            }
+        });
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if let Some(url) = find_launch_url(&line) {
+                    let _ = tx.send(url);
+                }
+            }
+        });
+        match rx.recv_timeout(READY_TIMEOUT) {
             Ok(url) => Self {
                 host_url: Some(base_url(&url)),
                 launch_url: Some(url),
                 error: None,
+                child: Some(child),
+                stdin: Some(stdin),
             },
-            Err(error) => Self {
-                launch_url: None,
-                host_url: None,
-                error: Some(error),
-            },
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                Self::failed(format!("Host did not become ready: {error}"))
+            }
+        }
+    }
+
+    fn failed(error: String) -> Self {
+        Self {
+            launch_url: None,
+            host_url: None,
+            error: Some(error),
+            child: None,
+            stdin: None,
+        }
+    }
+
+    fn shutdown(&mut self) {
+        if let Some(mut stdin) = self.stdin.take() {
+            if let Err(error) = stdin
+                .write_all(b"@@DSH@@{\"type\":\"shutdown\"}\n")
+                .and_then(|()| stdin.flush())
+            {
+                eprintln!("Host shutdown request failed: {error}");
+            }
+        }
+        if let Some(mut child) = self.child.take() {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => return,
+                    Ok(None) if std::time::Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(25));
+                    }
+                    Ok(None) => {
+                        if let Err(error) = child.kill() {
+                            eprintln!("Host forced shutdown failed: {error}");
+                        }
+                        if let Err(error) = child.wait() {
+                            eprintln!("Host wait failed: {error}");
+                        }
+                        return;
+                    }
+                    Err(error) => {
+                        eprintln!("Host status check failed: {error}");
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return;
+                    }
+                }
+            }
         }
     }
 
@@ -114,6 +177,12 @@ impl Host {
     }
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
+    }
+}
+
+impl Drop for Host {
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
