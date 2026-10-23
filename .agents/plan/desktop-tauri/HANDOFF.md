@@ -127,6 +127,7 @@ Sau grill với chủ dự án, lane **chuyển hẳn** sang ứng dụng native
 - **Transcript**: snapshot + event sống → message/tool/approval/job + draft streaming, trần 2000 row/256 KiB.
 - **Feedback**: 👍/👎 cho assistant message theo `messageId`, list hiện có khi mở session, lưu qua `messageFeedback/put`.
 - **Settings ghi bằng mutate** (xoá field, bảo vệ secret slot) và **bật/tắt plugin/bundle** trong tab Plugins.
+- **Office preview** (Host `officeToPdf/render` → pdftoppm → image), **Marketplace** tab (search + install), **feedback** 👍/👎.
 - **Native AppImage**: `DSH_DESKTOP_SHELL=native bash apps/desktop-tauri/scripts/pack-appimage.sh linux-x64` (87,6 MB), `appimage-probe.sh` PASS (AppRun contract + Host boot, headless); release lane vẫn đóng gói Tauri và chưa ký native.
 - **Skills tab** (list theo session), **Deliverables panel** (link mở preview), **transcript card** cho todo/goal/plan + reasoning.
 - **Question card**: `ask_user_question` hiện card chọn đáp án (một/nhiều + free text), gửi qua waterfall `$events`; trước đó app delegate mọi event lạ nên câu hỏi thật bị `NO_PROVIDER`.

@@ -24,6 +24,7 @@ use dsh_client_core::{
     plugins::{BundleInfo, ChangeResult, ManagedPlugin, PluginInventorySnapshot, PluginsClient},
     schedules::{ScheduleDeleteRequest, ScheduleListRequest, SchedulesClient},
     skills::{SkillListResponse, SkillsClient},
+    marketplace::MarketplaceClient,
     message_feedback::{MessageFeedbackClient, MessageFeedbackItem, MessageFeedbackPutRequest},
     remote_events::{RemoteEvent, RemoteEventError, RemoteEventOutcome, RemoteEvents},
     remote_stream::RemoteStreamMux,
@@ -49,6 +50,7 @@ use dsh_client_core::{
     transport::HttpTransport,
     upload::{FileUploadClient, FileUploadValue},
     user_questions::{AskUserQuestionAnswer, AskUserQuestionAnswerItem, PendingQuestion},
+    office_to_pdf::OfficeToPdfClient,
     workspace_files::{
         WorkspaceByteRange, WorkspaceFileRange, WorkspaceFileScope, WorkspaceFilesClient,
     },
@@ -877,6 +879,13 @@ struct DesktopApp {
     pending_approvals: Vec<PendingApproval>,
     pending_questions: Vec<QuestionCard>,
     deliverables: Vec<DeliverableFile>,
+    market_indexes: Vec<serde_json::Value>,
+    market_results: Vec<serde_json::Value>,
+    market_url: Option<String>,
+    market_query: String,
+    market_receiver: Option<mpsc::Receiver<Result<serde_json::Value, Error>>>,
+    market_status: Option<String>,
+    market_loading: bool,
     feedback_items: Vec<MessageFeedbackItem>,
     feedback_receiver: Option<mpsc::Receiver<Result<Vec<MessageFeedbackItem>, Error>>>,
     feedback_put_receiver: Option<mpsc::Receiver<Result<MessageFeedbackItem, Error>>>,
@@ -899,6 +908,7 @@ struct DesktopApp {
     show_document: bool,
     show_plugins: bool,
     show_skills: bool,
+    show_market: bool,
     skills: Option<SkillListResponse>,
     skills_receiver: Option<mpsc::Receiver<Result<SkillListResponse, Error>>>,
     skills_loading: bool,
@@ -991,6 +1001,13 @@ impl DesktopApp {
             pending_approvals: Vec::new(),
             pending_questions: Vec::new(),
             deliverables: Vec::new(),
+            market_indexes: Vec::new(),
+            market_results: Vec::new(),
+            market_url: None,
+            market_query: String::new(),
+            market_receiver: None,
+            market_status: None,
+            market_loading: false,
             feedback_items: Vec::new(),
             feedback_receiver: None,
             feedback_put_receiver: None,
@@ -1013,6 +1030,7 @@ impl DesktopApp {
             show_document: false,
             show_plugins: false,
             show_skills: false,
+            show_market: false,
             skills: None,
             skills_receiver: None,
             skills_loading: false,
@@ -1292,6 +1310,86 @@ impl DesktopApp {
         self.feedback_status = None;
     }
 
+    fn refresh_market_indexes(&mut self) {
+        if self.market_loading {
+            return;
+        }
+        let Some(transport) = self.transport.clone() else {
+            self.market_status = Some("Connect to load marketplace".to_owned());
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(MarketplaceClient::new(&transport).list_indexes());
+        });
+        self.market_receiver = Some(receiver);
+        self.market_loading = true;
+        self.market_status = None;
+    }
+
+    fn search_market(&mut self) {
+        if self.market_loading {
+            return;
+        }
+        let Some(transport) = self.transport.clone() else {
+            self.market_status = Some("Connect to search".to_owned());
+            return;
+        };
+        let Some(url) = self.market_url.clone() else {
+            self.market_status = Some("No market index configured".to_owned());
+            return;
+        };
+        let query = self.market_query.clone();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(MarketplaceClient::new(&transport).search(&url, &query));
+        });
+        self.market_receiver = Some(receiver);
+        self.market_loading = true;
+        self.market_status = None;
+    }
+
+    fn install_market_entry(&mut self, spec: String) {
+        if self.market_loading {
+            return;
+        }
+        let Some(transport) = self.transport.clone() else {
+            self.market_status = Some("Connect to install".to_owned());
+            return;
+        };
+        let status_spec = spec.clone();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let client = MarketplaceClient::new(&transport);
+            let result = (|| -> Result<String, Error> {
+                let inspect = client.inspect(&spec)?;
+                let status = inspect.get("status").and_then(serde_json::Value::as_str).unwrap_or("");
+                if status != "accepted" {
+                    return Err(Error::Remote {
+                        code: "inspect-rejected".into(),
+                        message: format!("inspect status: {status}"),
+                        details: serde_json::Map::new(),
+                    });
+                }
+                let install = client.install_bundle(&spec)?;
+                let request_id = install
+                    .get("requestId")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| Error::InvalidEnvelope("missing requestId"))?;
+                let waited = client.wait_for_install(request_id)?;
+                let application = waited
+                    .get("application")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("unknown");
+                Ok(format!("{spec} -> {application}"))
+            })();
+            let _ = sender.send(result.map(serde_json::Value::String));
+        });
+        self.market_receiver = Some(receiver);
+        self.market_loading = true;
+        self.market_status = Some(format!("Installing {status_spec}…"));
+    }
+
     fn refresh_skills(&mut self) {
         if self.skills_loading {
             return;
@@ -1397,6 +1495,80 @@ impl DesktopApp {
         self.preview_receiver = Some(receiver);
         self.preview_loading = true;
         self.preview_error = None;
+    }
+
+    fn read_office_document(&mut self) {
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.preview_error = Some("Select a connected session before reading a file.".into());
+            return;
+        };
+        let path = self.preview_path.trim().to_owned();
+        if path.is_empty() {
+            self.preview_error = Some("Enter a Host file path.".into());
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let scope = WorkspaceFileScope { session_id };
+            let result = OfficeToPdfClient::new(&transport)
+                .render(scope, path.clone(), "foreground")
+                .map_err(|error| error.to_string())
+                .and_then(|preview| {
+                    let directory = std::env::temp_dir().join("dsh-office-preview");
+                    std::fs::create_dir_all(&directory)
+                        .map_err(|error| error.to_string())?;
+                    let pdf_path = directory.join("document.pdf");
+                    std::fs::write(&pdf_path, &preview.pdf)
+                        .map_err(|error| error.to_string())?;
+                    let prefix = directory.join("page");
+                    let output = std::process::Command::new("pdftoppm")
+                        .args([
+                            "-png",
+                            "-r",
+                            "110",
+                            "-f",
+                            "1",
+                            "-l",
+                            "1",
+                            pdf_path.to_str().unwrap_or_default(),
+                            prefix.to_str().unwrap_or_default(),
+                        ])
+                        .output()
+                        .map_err(|error| error.to_string())?;
+                    if !output.status.success() {
+                        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+                    }
+                    let png_path = format!("{}-1.png", prefix.display());
+                    let bytes = std::fs::read(&png_path).map_err(|error| error.to_string())?;
+                    let image = image::load_from_memory(&bytes).map_err(|error| error.to_string())?;
+                    let rgba = image.to_rgba8();
+                    let (width, height) = rgba.dimensions();
+                    let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
+                    let mut document_name = name;
+                    if !preview.missing_fonts.is_empty() {
+                        document_name = format!("{document_name} (missing fonts: {})", preview.missing_fonts.join(", "));
+                    }
+                    Ok(PreviewDocument::Image(ImageDocument {
+                        name: document_name,
+                        host_path: path,
+                        size: [width as usize, height as usize],
+                        rgba: rgba.into_raw(),
+                    }))
+                });
+            let _ = sender.send(result);
+        });
+        self.preview_receiver = Some(receiver);
+        self.preview_loading = true;
+        self.preview_error = None;
+    }
+
+    fn is_office_path(path: &str) -> bool {
+        matches!(
+            path.rsplit('.').next().map(str::to_lowercase).as_deref(),
+            Some("doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx")
+        )
     }
 
     fn load_session(&mut self, session_id: String) {
@@ -2200,6 +2372,52 @@ impl eframe::App for DesktopApp {
                 }
             }
         }
+        if let Some(receiver) = &self.market_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(value)) => {
+                    if let Some(text) = value.as_str() {
+                        self.market_status = Some(text.to_owned());
+                        self.refresh_plugins();
+                    } else if value.get("entries").is_some() {
+                        self.market_results = value
+                            .get("entries")
+                            .and_then(serde_json::Value::as_array)
+                            .cloned()
+                            .unwrap_or_default();
+                        self.market_status = Some(format!("{} result(s)", self.market_results.len()));
+                    } else if value.get("url").is_some() || value.is_array() {
+                        let indexes = if value.is_array() {
+                            value.as_array().cloned().unwrap_or_default()
+                        } else {
+                            vec![value.clone()]
+                        };
+                        self.market_indexes = indexes;
+                        self.market_url = self
+                            .market_indexes
+                            .first()
+                            .and_then(|index| index.get("url"))
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_owned);
+                        self.market_status = Some(format!("{} index(es)", self.market_indexes.len()));
+                    }
+                    self.market_loading = false;
+                    self.market_receiver = None;
+                }
+                Ok(Err(error)) => {
+                    self.market_status = Some(format!("Marketplace failed: {error}"));
+                    self.market_loading = false;
+                    self.market_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.market_status = Some("Marketplace worker stopped unexpectedly".into());
+                    self.market_loading = false;
+                    self.market_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30));
+                }
+            }
+        }
         if let Some(receiver) = &self.skills_receiver {
             match receiver.try_recv() {
                 Ok(Ok(skills)) => {
@@ -2367,6 +2585,7 @@ impl eframe::App for DesktopApp {
                 self.show_document = false;
                 self.show_plugins = false;
                 self.show_skills = false;
+                self.show_market = false;
             }
             if ui
                 .selectable_label(self.show_settings, "Settings")
@@ -2408,6 +2627,19 @@ impl eframe::App for DesktopApp {
                 self.show_plugins = false;
                 if self.skills.is_none() {
                     self.refresh_skills();
+                }
+            }
+            if ui
+                .selectable_label(self.show_market, "Marketplace")
+                .clicked()
+            {
+                self.show_market = true;
+                self.show_settings = false;
+                self.show_document = false;
+                self.show_plugins = false;
+                self.show_skills = false;
+                if self.market_indexes.is_empty() {
+                    self.refresh_market_indexes();
                 }
             }
             ui.heading("Sessions");
@@ -2668,12 +2900,16 @@ impl eframe::App for DesktopApp {
                             }
                         }
                         if let Some(path) = preview {
-                            self.preview_path = path;
+                            self.preview_path = path.clone();
                             self.show_document = true;
                             self.show_settings = false;
                             self.show_plugins = false;
                             self.show_skills = false;
-                            self.read_document();
+                            if Self::is_office_path(&path) {
+                                self.read_office_document();
+                            } else {
+                                self.read_document();
+                            }
                         }
                     });
             });
@@ -2835,6 +3071,74 @@ impl eframe::App for DesktopApp {
                 if let Some(error) = &self.page_error {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
                 }
+            } else if self.show_market {
+                ui.horizontal(|ui| {
+                    ui.heading("Marketplace");
+                    if ui
+                        .add_enabled(!self.market_loading, egui::Button::new("Refresh indexes"))
+                        .clicked()
+                    {
+                        self.refresh_market_indexes();
+                    }
+                    if self.market_loading {
+                        ui.spinner();
+                    }
+                });
+                if let Some(status) = &self.market_status {
+                    ui.label(status);
+                }
+                ui.horizontal(|ui| {
+                    ui.add(egui::TextEdit::singleline(&mut self.market_query).hint_text("Search text").desired_width(240.0));
+                    if ui.add_enabled(!self.market_loading, egui::Button::new("Search")).clicked() {
+                        self.search_market();
+                    }
+                });
+                if self.market_indexes.is_empty() && !self.market_loading {
+                    ui.label("No market indexes configured.");
+                }
+                let mut install_spec = None;
+                if !self.market_results.is_empty() {
+                    egui::ScrollArea::vertical()
+                        .id_salt("market-results")
+                        .max_height(420.0)
+                        .show(ui, |ui| {
+                            for entry in &self.market_results {
+                                let name = entry
+                                    .get("name")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or("plugin");
+                                ui.horizontal(|ui| {
+                                    ui.label(name);
+                                    let default_spec = entry
+                                        .get("versions")
+                                        .and_then(serde_json::Value::as_array)
+                                        .and_then(|versions| versions.first())
+                                        .and_then(|version| version.get("install"))
+                                        .and_then(|install| install.get("spec"))
+                                        .and_then(serde_json::Value::as_str)
+                                        .map(str::to_owned);
+                                    if let Some(spec) = default_spec {
+                                        if ui
+                                            .add_enabled(
+                                                !self.market_loading,
+                                                egui::Button::new("Install").small(),
+                                            )
+                                            .clicked()
+                                        {
+                                            install_spec = Some(spec);
+                                        }
+                                    }
+                                });
+                                if let Some(description) = entry.get("description").and_then(serde_json::Value::as_str) {
+                                    ui.small(description);
+                                }
+                                ui.separator();
+                            }
+                        });
+                }
+                if let Some(spec) = install_spec {
+                    self.install_market_entry(spec);
+                }
             } else if self.show_skills {
                 ui.horizontal(|ui| {
                     ui.heading("Skills");
@@ -2906,7 +3210,18 @@ impl eframe::App for DesktopApp {
                         .add_enabled(!self.preview_loading, egui::Button::new("Preview"))
                         .clicked()
                     {
-                        self.read_document();
+                        if Self::is_office_path(&self.preview_path) {
+                            self.read_office_document();
+                        } else {
+                            self.read_document();
+                        }
+                    }
+                    if Self::is_office_path(&self.preview_path)
+                        && ui
+                            .add_enabled(!self.preview_loading, egui::Button::new("Render Office preview"))
+                            .clicked()
+                    {
+                        self.read_office_document();
                     }
                 });
                 if self.preview_image.is_some() {

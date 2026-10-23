@@ -27,7 +27,7 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 - ✓ Schedules (`list`, `catalog`, `history`, `delete`, `update`) — M6; per-Session list with delete in egui
 - ✓ Workspace files (`read`, `readBytes`, `stat`, `list`) — unary and multipart bytes transport
 - ◐ Settings UI — namespace/schema/redacted values, optimistic draft saved as path mutations (set/unset, sorted, secret slots guarded); no live Host write probe yet
-- ◐ Plugin management view — inventory, per-entry enable/disable for patch-controlled rows, bundle enable/disable, and agent presets; install, remove, and marketplace pending. Writes use `pluginManager/*` outside the inventory list; no live Host write probe yet
+- ◐ Plugin management view — inventory, per-entry enable/disable for patch-controlled rows, bundle enable/disable, marketplace search and install, and agent presets; no live Host write probe yet
 - ✓ Workspace, session-control, job, account, remote-access, file-watch, and user-question streams — typed clients over the shared mux; probe verifies workspace/follow, session/control, account/watch, remoteAccess/follow, account/watchExpiry, job/list, and workspaceFiles/changes on a real Host (attachWait still needs a live question; everything else reports a frame)
 
 ## App shell
@@ -40,7 +40,7 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 - ◐ AppImage — `pack-appimage.sh` packs either shell; `DSH_DESKTOP_SHELL=native` produced a native AppImage (87.6 MB) whose AppRun env contract, profile seeding, and packaged Host boot pass `appimage-probe.sh`; not wired into the release lane and not signed
 
 ## Open parity gaps
-- ◐ Document preview — text page (500 lines, literal selectable) and decoded image preview (PNG/JPEG/GIF/WebP/BMP/ICO up to 16 MiB and 8192 px per side); office preview and Host probe pending
+- ◐ Document preview — text page, decoded image preview, and Office preview via the Host converter plus local pdftoppm (first page); no Host probe yet
 - ✓ Deliverables view — `deliverables/presented` files collect into a panel whose links open the document preview
 - ✓ Human interaction — question cards answer `ask_user_question` through the `$events` waterfall (options, multi-select, free text, skip); `userQuestions/answer` transports continued questions; `scripts/approval-probe.sh allow` proves the live round trip. `userQuestions/attachWait` yields no frames because Desktop composes the blocking legacy tool, not the timed one
 - ✓ Jobs panel — session job list (`job/list`) with per-job output follow (`job/follow`); the approval probe starts a background job and reads its output through `job/follow` on a real Host
