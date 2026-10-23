@@ -21,7 +21,7 @@ use dsh_client_core::{
         ModelCatalog, ModelCatalogModel, ModelClient, ModelSelection, SelectModelRequest,
         SelectModelResponse,
     },
-    plugins::{PluginInventorySnapshot, PluginsClient},
+    plugins::{BundleInfo, ChangeResult, ManagedPlugin, PluginInventorySnapshot, PluginsClient},
     schedules::{ScheduleDeleteRequest, ScheduleListRequest, SchedulesClient},
     skills::{SkillListResponse, SkillsClient},
     remote_events::{RemoteEvent, RemoteEventError, RemoteEventOutcome, RemoteEvents},
@@ -37,7 +37,7 @@ use dsh_client_core::{
         SessionsClient,
     },
     settings::{
-        SettingsClient, SettingsDescribeValue, SettingsNamespaceView, SettingsUpdateRequest,
+        SettingsClient, SettingsDescribeValue, SettingsNamespaceView,
     },
     workspace_files::WorkspaceByteReadOptions,
     terminal::{
@@ -64,6 +64,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{Icon, TrayIconBuilder, TrayIconEvent};
+
+enum PluginAction {
+    SetPlugin { id: String, enabled: bool },
+    SetBundle { name: String, enabled: bool },
+}
 
 enum ApprovalCommand {
     Answer(PendingApproval, ApprovalDecision),
@@ -901,7 +906,13 @@ struct DesktopApp {
     plugins_snapshot: Option<PluginInventorySnapshot>,
     plugins_loading: bool,
     plugins_error: Option<String>,
-    plugins_receiver: Option<mpsc::Receiver<Result<PluginInventorySnapshot, Error>>>,
+    plugins_receiver: Option<
+        mpsc::Receiver<Result<(PluginInventorySnapshot, Vec<BundleInfo>, Vec<ManagedPlugin>), Error>>,
+    >,
+    plugin_bundles: Vec<BundleInfo>,
+    managed_plugins: Vec<ManagedPlugin>,
+    plugin_write_receiver: Option<mpsc::Receiver<Result<ChangeResult, Error>>>,
+    plugin_write_status: Option<String>,
     terminal: TerminalPanel,
     schedules: Vec<serde_json::Value>,
     schedules_session: Option<String>,
@@ -1006,6 +1017,10 @@ impl DesktopApp {
             plugins_loading: false,
             plugins_error: None,
             plugins_receiver: None,
+            plugin_bundles: Vec::new(),
+            managed_plugins: Vec::new(),
+            plugin_write_receiver: None,
+            plugin_write_status: None,
             terminal: TerminalPanel::default(),
             schedules: Vec::new(),
             schedules_session: None,
@@ -1207,7 +1222,14 @@ impl DesktopApp {
         };
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
-            let _ = sender.send(PluginsClient::new(&transport).list());
+            let client = PluginsClient::new(&transport);
+            let result = client
+                .list()
+                .map(|snapshot| (snapshot, client.list_bundles(), client.list_plugins()))
+                .map(|(snapshot, bundles, plugins)| {
+                    (snapshot, bundles.unwrap_or_default(), plugins.unwrap_or_default())
+                });
+            let _ = sender.send(result);
         });
         self.plugins_receiver = Some(receiver);
         self.plugins_loading = true;
@@ -1216,6 +1238,29 @@ impl DesktopApp {
 
     fn record_deliverables(&mut self, event: &dsh_client_core::follow::SessionWireEvent) {
         record_deliverables(&mut self.deliverables, event);
+    }
+
+    fn write_plugin(&mut self, action: PluginAction) {
+        if self.plugin_write_receiver.is_some() {
+            return;
+        }
+        let Some(transport) = self.transport.clone() else {
+            self.plugins_error = Some("Connect to change plugins".to_owned());
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let client = PluginsClient::new(&transport);
+            let result = match action {
+                PluginAction::SetPlugin { id, enabled } => client.set_plugin_enabled(&id, enabled),
+                PluginAction::SetBundle { name, enabled } => {
+                    client.set_bundle_enabled(&name, enabled)
+                }
+            };
+            let _ = sender.send(result);
+        });
+        self.plugin_write_receiver = Some(receiver);
+        self.plugin_write_status = Some("Applying plugin change…".to_owned());
     }
 
     fn refresh_skills(&mut self) {
@@ -1256,7 +1301,7 @@ impl DesktopApp {
         self.settings_error = None;
     }
 
-    fn update_settings(&mut self, request: SettingsUpdateRequest) {
+    fn mutate_settings(&mut self, request: dsh_client_core::settings::SettingsMutateRequest) {
         if self.settings_loading || self.settings_update_receiver.is_some() {
             return;
         }
@@ -1268,7 +1313,7 @@ impl DesktopApp {
         };
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
-            let _ = sender.send(SettingsClient::new(&transport).update(request));
+            let _ = sender.send(SettingsClient::new(&transport).mutate(request));
         });
         self.settings_update_receiver = Some(receiver);
     }
@@ -2028,8 +2073,10 @@ impl eframe::App for DesktopApp {
         }
         if let Some(receiver) = &self.plugins_receiver {
             match receiver.try_recv() {
-                Ok(Ok(snapshot)) => {
+                Ok(Ok((snapshot, bundles, plugins))) => {
                     self.plugins_snapshot = Some(snapshot);
+                    self.plugin_bundles = bundles;
+                    self.managed_plugins = plugins;
                     self.plugins_loading = false;
                     self.plugins_error = None;
                     self.plugins_receiver = None;
@@ -2043,6 +2090,36 @@ impl eframe::App for DesktopApp {
                     self.plugins_loading = false;
                     self.plugins_error = Some("Plugin inventory worker stopped unexpectedly".into());
                     self.plugins_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30));
+                }
+            }
+        }
+        if let Some(receiver) = &self.plugin_write_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(result)) => {
+                    let warning = result
+                        .warnings
+                        .first()
+                        .map(|warning| format!(" ({warning})"))
+                        .unwrap_or_default();
+                    self.plugin_write_status = Some(format!(
+                        "{} · {}{warning}",
+                        result.target, result.application
+                    ));
+                    self.plugin_write_receiver = None;
+                    if result.changed {
+                        self.refresh_plugins();
+                    }
+                }
+                Ok(Err(error)) => {
+                    self.plugins_error = Some(format!("Plugin change failed: {error}"));
+                    self.plugin_write_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.plugins_error = Some("Plugin change worker stopped unexpectedly".into());
+                    self.plugin_write_receiver = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     ctx.request_repaint_after(std::time::Duration::from_millis(30));
@@ -2548,7 +2625,7 @@ impl eframe::App for DesktopApp {
                 );
                 match action {
                     Some(SettingsAction::Refresh) => self.refresh_settings(),
-                    Some(SettingsAction::Update(request)) => self.update_settings(request),
+                    Some(SettingsAction::Mutate(request)) => self.mutate_settings(request),
                     None => {}
                 }
             } else if self.show_plugins {
@@ -2567,13 +2644,18 @@ impl eframe::App for DesktopApp {
                 if let Some(error) = &self.plugins_error {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
                 }
+                if let Some(status) = &self.plugin_write_status {
+                    ui.label(status);
+                }
+                let busy = self.plugin_write_receiver.is_some();
+                let mut plugin_action = None;
                 if let Some(snapshot) = &self.plugins_snapshot {
                     if snapshot.management_available == Some(false) {
                         ui.label("Plugin management is unavailable for this Host.");
                     }
                     egui::ScrollArea::vertical()
                         .id_salt("plugin-inventory")
-                        .max_height(360.0)
+                        .max_height(420.0)
                         .show(ui, |ui| {
                             if snapshot.entries.is_empty() {
                                 ui.label("No configured plugins.");
@@ -2584,10 +2666,82 @@ impl eframe::App for DesktopApp {
                                     |phase| format!("{phase:?}").to_lowercase(),
                                 );
                                 let state = if entry.enabled { "enabled" } else { "disabled" };
-                                ui.label(format!(
-                                    "{} · {state} · {phase}",
-                                    entry.module_name
-                                ));
+                                ui.horizontal(|ui| {
+                                    ui.label(format!(
+                                        "{} · {state} · {phase}",
+                                        entry.module_name
+                                    ));
+                                    let managed = self
+                                        .managed_plugins
+                                        .iter()
+                                        .find(|plugin| plugin.entry_id == entry.entry_id);
+                                    match managed {
+                                        Some(plugin) if plugin.patch_id.is_some() => {
+                                            let label = if entry.enabled {
+                                                "Disable"
+                                            } else {
+                                                "Enable"
+                                            };
+                                            if ui
+                                                .add_enabled(
+                                                    !busy,
+                                                    egui::Button::new(label).small(),
+                                                )
+                                                .clicked()
+                                            {
+                                                plugin_action = Some(
+                                                    PluginAction::SetPlugin {
+                                                        id: entry.entry_id.clone(),
+                                                        enabled: !entry.enabled,
+                                                    },
+                                                );
+                                            }
+                                        }
+                                        Some(plugin) => {
+                                            if let Some(reason) = &plugin.read_only_reason {
+                                                ui.small(format!("read-only: {reason}"));
+                                            }
+                                        }
+                                        None => {}
+                                    }
+                                });
+                            }
+                            if !self.plugin_bundles.is_empty() {
+                                ui.separator();
+                                ui.heading("Bundles");
+                                for bundle in &self.plugin_bundles {
+                                    ui.horizontal(|ui| {
+                                        let state = if bundle.enabled {
+                                            "enabled"
+                                        } else {
+                                            "disabled"
+                                        };
+                                        ui.label(format!(
+                                            "{} · {state} · {}",
+                                            bundle.name, bundle.availability
+                                        ));
+                                        let label = if bundle.enabled {
+                                            "Disable"
+                                        } else {
+                                            "Enable"
+                                        };
+                                        if ui
+                                            .add_enabled(
+                                                !busy,
+                                                egui::Button::new(label).small(),
+                                            )
+                                            .clicked()
+                                        {
+                                            plugin_action = Some(PluginAction::SetBundle {
+                                                name: bundle.name.clone(),
+                                                enabled: !bundle.enabled,
+                                            });
+                                        }
+                                    });
+                                    if let Some(description) = &bundle.description {
+                                        ui.small(description);
+                                    }
+                                }
                             }
                             if let Some(presets) = &snapshot.agent_presets {
                                 ui.separator();
@@ -2600,6 +2754,9 @@ impl eframe::App for DesktopApp {
                         });
                 } else if !self.plugins_loading {
                     ui.label("Open this tab to load the plugin inventory.");
+                }
+                if let Some(action) = plugin_action {
+                    self.write_plugin(action);
                 }
                 if let Some(error) = &self.page_error {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);

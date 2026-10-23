@@ -26,8 +26,8 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 - ✓ Skills list — `skills/list` in a native tab: name, description, when-to-use, model-invocability, and skill path for the selected session
 - ✓ Schedules (`list`, `catalog`, `history`, `delete`, `update`) — M6; per-Session list with delete in egui
 - ✓ Workspace files (`read`, `readBytes`, `stat`, `list`) — unary and multipart bytes transport
-- ◐ Settings UI — namespace/schema/redacted values; optimistic user-override patch editor wired, replace/mutate and live Host probe pending
-- ◐ Plugin inventory view — module name, enablement, fiber phase, and agent presets; read-only (management mutations and marketplace pending)
+- ◐ Settings UI — namespace/schema/redacted values, optimistic draft saved as path mutations (set/unset, sorted, secret slots guarded); no live Host write probe yet
+- ◐ Plugin management view — inventory, per-entry enable/disable for patch-controlled rows, bundle enable/disable, and agent presets; install, remove, and marketplace pending. Writes use `pluginManager/*` outside the inventory list; no live Host write probe yet
 - ✓ Workspace, session-control, job, account, remote-access, file-watch, and user-question streams — typed clients over the shared mux; probe verifies workspace/follow, session/control, account/watch, remoteAccess/follow, account/watchExpiry, job/list, and workspaceFiles/changes on a real Host (attachWait still needs a live question; everything else reports a frame)
 
 ## App shell

@@ -1,14 +1,14 @@
 //! Transport-independent viewer and optimistic editor for Host-redacted settings.
 
 use dsh_client_core::settings::{
-    SettingsDescribeValue, SettingsNamespaceView, SettingsUpdateRequest,
+    SettingsDescribeValue, SettingsMutateRequest, SettingsNamespaceView, SettingsPathOp,
 };
 use eframe::egui;
 
 /// An explicit user action; the caller performs HTTP outside rendering.
 pub enum SettingsAction {
     Refresh,
-    Update(SettingsUpdateRequest),
+    Mutate(SettingsMutateRequest),
 }
 
 #[derive(Debug)]
@@ -34,7 +34,7 @@ impl SettingsEditor {
         })
     }
 
-    fn request(&self) -> Result<SettingsUpdateRequest, String> {
+    fn request(&self) -> Result<SettingsMutateRequest, String> {
         if self.blocked {
             return Err("Refresh settings and discard this draft before editing again.".into());
         }
@@ -53,52 +53,90 @@ impl SettingsEditor {
             .user
             .as_ref()
             .and_then(serde_json::Value::as_object);
-        if self
-            .original
-            .user
-            .as_ref()
-            .is_some_and(|original| removes_object_fields(original, &value))
-        {
-            return Err("Removing fields is not supported by this patch editor.".into());
-        }
-        let mut patch = serde_json::Map::new();
-        for (key, value) in edited {
-            if original.and_then(|original| original.get(key)) == Some(value) {
-                continue;
-            }
-            // Never restate redacted secrets, including a secret nested in an array/object.
-            if self
-                .original
-                .secrets
-                .iter()
-                .any(|secret| secret.path.is_empty() || secret.path.first() == Some(key))
-            {
-                return Err(
-                    "Fields containing secret slots cannot be changed in this editor.".into(),
-                );
-            }
-            patch.insert(key.clone(), value.clone());
-        }
-        if patch.is_empty() {
+        let mut ops = Vec::new();
+        diff_section(
+            original,
+            edited,
+            &self.original.secrets,
+            &mut Vec::new(),
+            &mut ops,
+        )?;
+        ops.sort_by(|left, right| path_of(left).cmp(path_of(right)));
+        if ops.is_empty() {
             return Err("No user override changes to save.".into());
         }
-        Ok(SettingsUpdateRequest {
+        Ok(SettingsMutateRequest {
             ns: self.original.ns.clone(),
-            patch,
+            ops,
             expected_revision: Some(self.original.revision),
         })
     }
 }
 
-fn removes_object_fields(original: &serde_json::Value, edited: &serde_json::Value) -> bool {
-    match (original.as_object(), edited.as_object()) {
-        (Some(original), Some(edited)) => original.iter().any(|(key, value)| {
-            edited
-                .get(key)
-                .is_none_or(|edited| removes_object_fields(value, edited))
-        }),
-        _ => false,
+fn path_of(op: &SettingsPathOp) -> &[String] {
+    match op {
+        SettingsPathOp::Set { path, .. } | SettingsPathOp::Unset { path } => path,
     }
+}
+
+/// Emits one path operation per changed leaf, preserving redacted secret slots.
+fn diff_section(
+    original: Option<&serde_json::Map<String, serde_json::Value>>,
+    edited: &serde_json::Map<String, serde_json::Value>,
+    secrets: &[dsh_client_core::settings::SettingsSecretView],
+    prefix: &mut Vec<String>,
+    ops: &mut Vec<SettingsPathOp>,
+) -> Result<(), String> {
+    let secret_below = |path: &[String]| {
+        secrets
+            .iter()
+            .any(|secret| secret.path.len() > path.len() && secret.path.starts_with(path))
+    };
+    for (key, value) in edited {
+        if original.and_then(|original| original.get(key)) == Some(value) {
+            continue;
+        }
+        prefix.push(key.clone());
+        let is_secret = secrets.iter().any(|secret| secret.path == *prefix);
+        if is_secret {
+            return Err("Fields containing secret slots cannot be changed in this editor.".into());
+        }
+        match (original.and_then(|original| original.get(key)), value.as_object()) {
+            (Some(previous), Some(nested)) if previous.is_object() => {
+                diff_section(
+                    previous.as_object(),
+                    nested,
+                    secrets,
+                    prefix,
+                    ops,
+                )?;
+            }
+            (_, _) if secret_below(prefix) => {
+                return Err(
+                    "Replacing a section that contains secret slots is unavailable; edit individual fields."
+                        .into(),
+                );
+            }
+            _ => ops.push(SettingsPathOp::Set {
+                path: prefix.clone(),
+                value: value.clone(),
+            }),
+        }
+        prefix.pop();
+    }
+    if let Some(original) = original {
+        for key in original.keys() {
+            if edited.contains_key(key) {
+                continue;
+            }
+            prefix.push(key.clone());
+            ops.push(SettingsPathOp::Unset {
+                path: prefix.clone(),
+            });
+            prefix.pop();
+        }
+    }
+    Ok(())
 }
 
 /// Local selection, formatting preference, and a draft captured at one revision.
@@ -227,19 +265,32 @@ impl SettingsPanel {
                                         }
                                     }
                                 } else if self.editor.as_ref().is_some_and(|editor| editor.original.ns == namespace.ns) {
-                                    ui.label("User overrides only. Changed fields are merged; removing fields is unsupported. Fields containing secret slots cannot be changed.");
+                                    ui.label("User overrides only. Changed fields become path operations, removed fields are unset, and fields containing secret slots cannot be changed.");
                                     let Some(editor) = self.editor.as_mut() else {
                                         return;
                                     };
                                     ui.label(format!("Draft revision: {}", editor.original.revision));
                                     ui.add_enabled(!saving, egui::TextEdit::multiline(&mut editor.text).code_editor().desired_rows(12).desired_width(f32::INFINITY));
-                                    if ui.add_enabled(!loading && error.is_none() && !saving && !editor.blocked, egui::Button::new("Save user patch")).clicked() {
-                                        match editor.request() {
-                                            Ok(request) => action = Some(SettingsAction::Update(request)),
-                                            Err(message) => self.edit_message = Some(message),
+                                    let mut next_message = None;
+                                    let mut discard = false;
+                                    ui.horizontal(|ui| {
+                                        if ui.add_enabled(!loading && error.is_none() && !saving && !editor.blocked, egui::Button::new("Save settings")).clicked() {
+                                            match editor.request() {
+                                                Ok(request) => action = Some(SettingsAction::Mutate(request)),
+                                                Err(message) => next_message = Some(message),
+                                            }
                                         }
+                                        if ui.add_enabled(!saving, egui::Button::new("Reset to defaults")).clicked() {
+                                            editor.text = "{}".into();
+                                        }
+                                        if ui.add_enabled(!saving, egui::Button::new("Discard draft")).clicked() {
+                                            discard = true;
+                                        }
+                                    });
+                                    if let Some(message) = next_message {
+                                        self.edit_message = Some(message);
                                     }
-                                    if ui.add_enabled(!saving, egui::Button::new("Discard draft")).clicked() {
+                                    if discard {
                                         self.editor = None;
                                         self.edit_message = None;
                                     }
@@ -264,7 +315,7 @@ impl SettingsPanel {
             self.edit_message = Some(error);
         } else {
             self.editor = None;
-            self.edit_message = Some("User patch saved.".into());
+            self.edit_message = Some("Settings saved.".into());
         }
     }
 
@@ -372,8 +423,8 @@ mod tests {
         assert_eq!(request.ns, "demo");
         assert_eq!(request.expected_revision, Some(1));
         assert_eq!(
-            serde_json::Value::Object(request.patch),
-            serde_json::json!({"enabled":true})
+            serde_json::to_value(&request.ops).unwrap(),
+            serde_json::json!([{"op":"set","path":["enabled"],"value":true}])
         );
     }
 
@@ -393,13 +444,26 @@ mod tests {
             "[]",
             "null",
             "42",
-            "{}",
-            r#"{"x":1,"auth":{"token":"new"}}"#,
-            r#"{"x":1,"auth":{"other":true}}"#,
+            r#"{"auth":{"token":"new"}}"#,
         ] {
             editor.text = text.into();
             assert!(editor.request().is_err(), "{text}");
         }
+        editor.text = r#"{"x":1,"auth":{"other":true}}"#.into();
+        let cleared = editor.request().unwrap();
+        assert_eq!(
+            serde_json::to_value(&cleared.ops).unwrap(),
+            serde_json::json!([
+                {"op":"set","path":["auth","other"],"value":true},
+                {"op":"unset","path":["auth","token"]}
+            ])
+        );
+        editor.text = "{}".into();
+        let removed = editor.request().unwrap();
+        assert_eq!(
+            serde_json::to_value(&removed.ops).unwrap(),
+            serde_json::json!([{"op":"unset","path":["auth"]},{"op":"unset","path":["x"]}])
+        );
         ns.user = Some(serde_json::json!([]));
         assert!(SettingsEditor::new(&ns).is_err());
     }
@@ -424,16 +488,18 @@ mod tests {
     }
 
     #[test]
-    fn object_field_removal_is_rejected_but_arrays_can_be_replaced() {
+    fn object_field_removal_becomes_an_unset_operation() {
         let mut ns = namespace("demo");
         ns.user = Some(serde_json::json!({"nested":{"a":1,"b":2},"items":[1,2]}));
         let mut editor = SettingsEditor::new(&ns).unwrap();
-        editor.text = r#"{"nested":{"a":1},"items":[1]}"#.into();
-        assert!(editor.request().is_err());
-        editor.text = r#"{"nested":{"a":1,"b":2},"items":[1]}"#.into();
+        editor.text = r#"{"nested":{"a":1},"items":[2,1]}"#.into();
+        let request = editor.request().unwrap();
         assert_eq!(
-            serde_json::Value::Object(editor.request().unwrap().patch),
-            serde_json::json!({"items":[1]})
+            serde_json::to_value(&request.ops).unwrap(),
+            serde_json::json!([
+                {"op":"set","path":["items"],"value":[2,1]},
+                {"op":"unset","path":["nested","b"]}
+            ])
         );
     }
 
