@@ -2810,13 +2810,20 @@ impl eframe::App for DesktopApp {
                 ui.label("Connect to enable sessions");
             }
             if busy {
-                ui.spinner();
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Loading sessions…");
+                });
             }
             if !self.sessions_status.is_empty() {
                 ui.small(&self.sessions_status);
             }
             if let Some(error) = &self.sessions_error {
                 ui.colored_label(egui::Color32::LIGHT_RED, error);
+                if ui.button("Retry").clicked() {
+                    self.session_query.clear();
+                    self.refresh_sessions();
+                }
             }
             ui.add_enabled_ui(!busy, |ui| {
                 let mut selected = None;
