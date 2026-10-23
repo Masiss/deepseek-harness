@@ -11,7 +11,7 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 - ✓ Chat cancel API (`session/cancel`) — transport only; UI cancellation pending
 - ✓ Follow stream (`session/follow`) — shared authenticated mux with reconnect
 - ◐ Permission approval — `$events` mux + correlated allow-once/reject API; egui approval buttons wired; `$events=ready` proven on a real Host, a decision round-trip still needs a live tool call
-- ◐ Model selection (`session/modelCatalog`, `session/selectModel`) — composer picker groups providers/models, shows the catalog default, and reports selection failures; `initializeDefaultModel` transport only
+- ◐ Model selection (`session/modelCatalog`, `session/selectModel`) — composer picker groups providers/models, shows the catalog default, selects the model's default effort, and offers its reasoning efforts; `initializeDefaultModel` transport only
 - ◐ Session management (`search`, `create`, `rename`, `fork`) — native controls wired; no live Host probe
 
 ## Tools & terminal

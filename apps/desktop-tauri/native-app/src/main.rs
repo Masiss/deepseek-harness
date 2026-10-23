@@ -14,7 +14,10 @@ use dsh_client_core::{
     approvals::{ApprovalDecision, PendingApproval},
     chat::{AcceptedResponse, ChatClient, PromptContentPart, PromptMode, PromptRequest},
     follow::{self, FollowFrame, FollowRequest},
-    models::{ModelCatalog, ModelClient, ModelSelection, SelectModelRequest, SelectModelResponse},
+    models::{
+        ModelCatalog, ModelCatalogModel, ModelClient, ModelSelection, SelectModelRequest,
+        SelectModelResponse,
+    },
     plugins::{PluginInventorySnapshot, PluginsClient},
     schedules::{ScheduleDeleteRequest, ScheduleListRequest, SchedulesClient},
     remote_events::{RemoteEvent, RemoteEventError, RemoteEvents},
@@ -2511,7 +2514,12 @@ impl eframe::App for DesktopApp {
                                         let selection = ModelSelection {
                                             provider: group.id.clone(),
                                             model: model.id.clone(),
-                                            reasoning_effort: None,
+                                            reasoning_effort: model
+                                                .reasoning
+                                                .as_ref()
+                                                .and_then(|reasoning| {
+                                                    reasoning.default_effort.clone()
+                                                }),
                                         };
                                         let current = self
                                             .model_selection
@@ -2541,6 +2549,43 @@ impl eframe::App for DesktopApp {
                         .clicked()
                     {
                         self.refresh_models();
+                    }
+                    let selected_model = match (&self.model_catalog, &self.model_selection) {
+                        (Some(catalog), Some(selection)) => {
+                            catalog_model(catalog, selection).cloned()
+                        }
+                        _ => None,
+                    };
+                    if let (Some(selection), Some(reasoning)) = (
+                        self.model_selection.clone(),
+                        selected_model.and_then(|model| model.reasoning),
+                    ) {
+                        let current = selection
+                            .reasoning_effort
+                            .clone()
+                            .or_else(|| reasoning.default_effort.clone())
+                            .unwrap_or_else(|| "default".to_owned());
+                        let mut next_effort = None;
+                        egui::ComboBox::from_id_salt("model-effort")
+                            .selected_text(format!("Effort: {current}"))
+                            .show_ui(ui, |ui| {
+                                for effort in &reasoning.efforts {
+                                    if ui
+                                        .selectable_label(current == effort.id, &effort.name)
+                                        .on_hover_text(
+                                            effort.description.as_deref().unwrap_or_default(),
+                                        )
+                                        .clicked()
+                                    {
+                                        next_effort = Some(effort.id.clone());
+                                    }
+                                }
+                            });
+                        if let Some(effort) = next_effort {
+                            let mut next = selection;
+                            next.reasoning_effort = Some(effort);
+                            self.select_model(next);
+                        }
                     }
                 });
                 if let Some(error) = &self.model_error {
@@ -2642,6 +2687,19 @@ impl eframe::App for DesktopApp {
             }
         });
     }
+}
+
+/// Finds the catalog model named by a selection.
+fn catalog_model<'a>(
+    catalog: &'a ModelCatalog,
+    selection: &ModelSelection,
+) -> Option<&'a ModelCatalogModel> {
+    catalog
+        .groups
+        .iter()
+        .filter(|group| group.id == selection.provider)
+        .flat_map(|group| group.models.iter())
+        .find(|model| model.id == selection.model)
 }
 
 /// Current Unix time in milliseconds.
@@ -3071,5 +3129,67 @@ mod session_label_tests {
         assert_eq!(relative_time(1_760_000_000 - 120, now), "2m ago");
         // Clock skew stays "just now" instead of underflowing.
         assert_eq!(relative_time(now + 60_000, now), "just now");
+    }
+}
+
+#[cfg(test)]
+mod model_catalog_tests {
+    use super::catalog_model;
+    use dsh_client_core::models::{
+        ModelCatalog, ModelCatalogModel, ModelProviderGroup, ModelSelection,
+    };
+
+    fn catalog() -> ModelCatalog {
+        ModelCatalog {
+            default: ModelSelection {
+                provider: "deepseek".into(),
+                model: "chat".into(),
+                reasoning_effort: None,
+            },
+            routable_providers: vec!["deepseek".into()],
+            groups: vec![
+                ModelProviderGroup {
+                    id: "deepseek".into(),
+                    name: "DeepSeek".into(),
+                    models: vec![ModelCatalogModel {
+                        id: "chat".into(),
+                        name: "Chat".into(),
+                        description: None,
+                        reasoning: None,
+                    }],
+                },
+                ModelProviderGroup {
+                    id: "other".into(),
+                    name: "Other".into(),
+                    models: vec![ModelCatalogModel {
+                        id: "chat".into(),
+                        name: "Other Chat".into(),
+                        description: None,
+                        reasoning: None,
+                    }],
+                },
+            ],
+            failures: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn matches_the_model_within_the_selected_provider() {
+        let catalog = catalog();
+        let selection = ModelSelection {
+            provider: "other".into(),
+            model: "chat".into(),
+            reasoning_effort: None,
+        };
+        assert_eq!(
+            catalog_model(&catalog, &selection).map(|model| model.name.as_str()),
+            Some("Other Chat")
+        );
+        let missing = ModelSelection {
+            provider: "other".into(),
+            model: "absent".into(),
+            reasoning_effort: None,
+        };
+        assert!(catalog_model(&catalog, &missing).is_none());
     }
 }
