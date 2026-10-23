@@ -42,7 +42,7 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 ## Open parity gaps
 - ◐ Document preview — text page (500 lines, literal selectable) and decoded image preview (PNG/JPEG/GIF/WebP/BMP/ICO up to 16 MiB and 8192 px per side); office preview and Host probe pending
 - ☐ Deliverables view
-- ◐ Human interaction — live `ask_user_question` answered through the `$events` waterfall (`scripts/approval-probe.sh allow`), and `userQuestions/answer` transport for continued questions; no question card UI yet. `userQuestions/attachWait` yields no frames because Desktop composes the blocking legacy tool, not the timed one
+- ✓ Human interaction — question cards answer `ask_user_question` through the `$events` waterfall (options, multi-select, free text, skip); `userQuestions/answer` transports continued questions; `scripts/approval-probe.sh allow` proves the live round trip. `userQuestions/attachWait` yields no frames because Desktop composes the blocking legacy tool, not the timed one
 - ✓ Jobs panel — session job list (`job/list`) with per-job output follow (`job/follow`); the approval probe starts a background job and reads its output through `job/follow` on a real Host
 - ☐ Goals, todo, plan panels
 - ✓ Remote Event `$events` waterfall transport and approval outcomes; projections/control stream UI pending

@@ -98,6 +98,21 @@ pub struct RemoteEventInvocation {
     cancelled: Arc<AtomicBool>,
 }
 
+#[cfg(test)]
+impl RemoteEventInvocation {
+    /// Builds an invocation without a Host for projection tests.
+    pub(crate) fn for_test(event: &str, request: Map<String, Value>) -> Self {
+        Self {
+            client_id: RemoteEventClientId("test-client".into()),
+            event_id: RemoteEventId("test-event".into()),
+            agent_id: RemoteEventAgentId("test-agent".into()),
+            event: event.into(),
+            request,
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
 impl RemoteEventInvocation {
     /// True after Host cancellation, stream closure, or client disposal.
     pub fn is_cancelled(&self) -> bool {

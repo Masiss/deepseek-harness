@@ -3,6 +3,7 @@
 mod dialog;
 mod document_preview;
 mod host;
+mod question_card;
 mod settings_panel;
 mod terminal_ansi;
 mod transcript;
@@ -45,7 +46,7 @@ use dsh_client_core::{
     },
     transport::HttpTransport,
     upload::{FileUploadClient, FileUploadValue},
-    user_questions::{AskUserQuestionAnswer, AskUserQuestionAnswerItem},
+    user_questions::{AskUserQuestionAnswer, AskUserQuestionAnswerItem, PendingQuestion},
     workspace_files::{
         WorkspaceByteRange, WorkspaceFileRange, WorkspaceFileScope, WorkspaceFilesClient,
     },
@@ -54,6 +55,7 @@ use dsh_client_core::{
 use eframe::egui;
 use fs2::FileExt;
 use host::Host;
+use question_card::{QuestionAction, QuestionCard};
 use settings_panel::{SettingsAction, SettingsPanel};
 use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
@@ -65,6 +67,7 @@ use tray_icon::{Icon, TrayIconBuilder, TrayIconEvent};
 enum ApprovalCommand {
     Answer(PendingApproval, ApprovalDecision),
     Delegate(dsh_client_core::remote_events::RemoteEventInvocation),
+    AnswerQuestion(PendingQuestion, AskUserQuestionAnswer),
 }
 
 const TERMINAL_VISIBLE_BYTES: usize = 128 * 1024;
@@ -858,6 +861,7 @@ struct DesktopApp {
     approval_events_receiver: Option<mpsc::Receiver<Result<RemoteEvent, RemoteEventError>>>,
     approval_commands: Option<mpsc::Sender<ApprovalCommand>>,
     pending_approvals: Vec<PendingApproval>,
+    pending_questions: Vec<QuestionCard>,
     settings_panel: SettingsPanel,
     settings_description: Option<SettingsDescribeValue>,
     settings_loading: bool,
@@ -955,6 +959,7 @@ impl DesktopApp {
             approval_events_receiver: None,
             approval_commands: None,
             pending_approvals: Vec::new(),
+            pending_questions: Vec::new(),
             settings_panel: SettingsPanel::default(),
             settings_description: None,
             settings_loading: false,
@@ -1044,6 +1049,9 @@ impl DesktopApp {
                             &invocation,
                             dsh_client_core::remote_events::RemoteEventOutcome::Next,
                         ),
+                        ApprovalCommand::AnswerQuestion(pending, answer) => {
+                            pending.answer(&events, answer)
+                        }
                     };
                     if let Err(error) = result {
                         let _ = event_sender.send(Err(error));
@@ -1069,6 +1077,7 @@ impl DesktopApp {
         self.approval_events_receiver = Some(event_receiver);
         self.approval_commands = Some(command_sender);
         self.pending_approvals.clear();
+        self.pending_questions.clear();
     }
 
     fn refresh_sessions(&mut self) {
@@ -2049,6 +2058,15 @@ impl eframe::App for DesktopApp {
                                 self.page_error = Some(format!("Invalid approval request: {error}"))
                             }
                         }
+                    } else if invocation.event == "user-questions/request" {
+                        match PendingQuestion::from_invocation(invocation) {
+                            Ok(pending) => self
+                                .pending_questions
+                                .push(QuestionCard::new(pending)),
+                            Err(error) => {
+                                self.page_error = Some(format!("Invalid question request: {error}"))
+                            }
+                        }
                     } else if let Some(commands) = &self.approval_commands {
                         let _ = commands.send(ApprovalCommand::Delegate(invocation));
                     }
@@ -2056,6 +2074,10 @@ impl eframe::App for DesktopApp {
                 Ok(Ok(RemoteEvent::Cancel { event_id })) => {
                     self.pending_approvals
                         .retain(|pending| pending.invocation.event_id != event_id);
+                    self.pending_questions.retain(|card| {
+                        card.pending()
+                            .is_some_and(|pending| pending.invocation.event_id != event_id)
+                    });
                 }
                 Ok(Ok(RemoteEvent::Emit { .. })) => {}
                 Ok(Err(error)) => {
@@ -2063,12 +2085,14 @@ impl eframe::App for DesktopApp {
                     self.approval_events_receiver = None;
                     self.approval_commands = None;
                     self.pending_approvals.clear();
+                    self.pending_questions.clear();
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.status = "Permission event stream closed".to_owned();
                     self.approval_events_receiver = None;
                     self.approval_commands = None;
                     self.pending_approvals.clear();
+                    self.pending_questions.clear();
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     ctx.request_repaint_after(std::time::Duration::from_millis(30));
@@ -2696,6 +2720,26 @@ impl eframe::App for DesktopApp {
                     self.chat_loading,
                     self.assistant_streaming,
                 );
+                if let Some(card) = self.pending_questions.first_mut() {
+                    let action = card.render(ui);
+                    if let Some(action) = action {
+                        if let Some(commands) = &self.approval_commands {
+                            if let Some(pending) = card.pending().cloned() {
+                                let command = match action {
+                                    QuestionAction::Answer => ApprovalCommand::AnswerQuestion(
+                                        pending,
+                                        card.answer(),
+                                    ),
+                                    QuestionAction::Skip => {
+                                        ApprovalCommand::AnswerQuestion(pending, card.skip())
+                                    }
+                                };
+                                let _ = commands.send(command);
+                                self.pending_questions.remove(0);
+                            }
+                        }
+                    }
+                }
                 if let Some(pending) = self.pending_approvals.first().cloned() {
                     ui.separator();
                     ui.heading(format!("Permission: {}", pending.request.tool_name));
