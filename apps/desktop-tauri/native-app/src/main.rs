@@ -2875,6 +2875,26 @@ impl eframe::App for DesktopApp {
                             }
                         }
                     });
+                // Keyboard navigation in session list
+                if ui.input(|i| i.key_pressed(egui::Key::ArrowDown) || i.key_pressed(egui::Key::ArrowUp)) {
+                    let direction = if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) { 1 } else { -1 };
+                    let sessions = if self.session_search.is_some() {
+                        self.session_search.as_ref().map(|r| r.items.iter().map(|i| i.session_id.clone()).collect::<Vec<_>>()).unwrap_or_default()
+                    } else {
+                        self.sessions.iter().map(|s| s.session_id.clone()).collect()
+                    };
+                    if !sessions.is_empty() {
+                        let current_idx = self.selected_session.as_ref()
+                            .and_then(|id| sessions.iter().position(|s| s == id))
+                            .unwrap_or(0);
+                        let new_idx = if direction > 0 {
+                            (current_idx + 1).min(sessions.len() - 1)
+                        } else {
+                            current_idx.saturating_sub(1)
+                        };
+                        selected = Some(sessions[new_idx].clone());
+                    }
+                }
                 if let Some(session_id) = selected {
                     self.load_session(session_id);
                 }
@@ -3098,8 +3118,10 @@ impl eframe::App for DesktopApp {
                     None => {}
                 }
             } else if self.show_plugins {
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.heading("Plugins");
+                    ui.add_space(8.0);
                     if ui
                         .add_enabled(!self.plugins_loading, egui::Button::new("Refresh"))
                         .clicked()
@@ -3110,6 +3132,7 @@ impl eframe::App for DesktopApp {
                         ui.spinner();
                     }
                 });
+                ui.add_space(4.0);
                 if let Some(error) = &self.plugins_error {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
                 }
@@ -3231,8 +3254,10 @@ impl eframe::App for DesktopApp {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
                 }
             } else if self.show_market {
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.heading("Marketplace");
+                    ui.add_space(8.0);
                     if ui
                         .add_enabled(!self.market_loading, egui::Button::new("Refresh indexes"))
                         .clicked()
@@ -3243,6 +3268,7 @@ impl eframe::App for DesktopApp {
                         ui.spinner();
                     }
                 });
+                ui.add_space(4.0);
                 if let Some(status) = &self.market_status {
                     ui.label(status);
                 }
@@ -3299,8 +3325,10 @@ impl eframe::App for DesktopApp {
                     self.install_market_entry(spec);
                 }
             } else if self.show_skills {
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.heading("Skills");
+                    ui.add_space(8.0);
                     if ui
                         .add_enabled(!self.skills_loading, egui::Button::new("Refresh"))
                         .clicked()
@@ -3311,6 +3339,7 @@ impl eframe::App for DesktopApp {
                         ui.spinner();
                     }
                 });
+                ui.add_space(4.0);
                 if self.selected_session.is_none() {
                     ui.label("Select a session to list the skills its composer can invoke.");
                 }
