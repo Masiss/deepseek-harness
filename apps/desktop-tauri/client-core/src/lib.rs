@@ -9,6 +9,7 @@ pub mod binary_response;
 pub mod chat;
 pub mod envelope;
 pub mod follow;
+pub mod message_feedback;
 pub mod models;
 pub mod plugins;
 pub mod remote_events;

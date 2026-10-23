@@ -36,6 +36,7 @@ pub struct TranscriptRow {
     pub kind: RowKind,
     pub title: String,
     pub text: String,
+    pub message_id: Option<String>,
 }
 
 /// Bounded transcript built from durable events.
@@ -103,6 +104,7 @@ fn project(event: &SessionWireEvent) -> Vec<TranscriptRow> {
                 "Plan mode off".to_owned()
             },
             text: String::new(),
+            message_id: None,
         }],
         "user/message" => {
             let source = event
@@ -121,6 +123,7 @@ fn project(event: &SessionWireEvent) -> Vec<TranscriptRow> {
                 kind: RowKind::User,
                 title: title.to_owned(),
                 text: content_text(event.data.get("content")),
+                message_id: None,
             }]
         }
         "assistant/message" => {
@@ -167,6 +170,7 @@ fn project(event: &SessionWireEvent) -> Vec<TranscriptRow> {
                     kind: RowKind::Reasoning,
                     title: "Reasoning".to_owned(),
                     text: reasoning.join("\n"),
+                    message_id: None,
                 });
             }
             if !text.is_empty() || !tools.is_empty() {
@@ -182,6 +186,12 @@ fn project(event: &SessionWireEvent) -> Vec<TranscriptRow> {
                     kind: RowKind::Assistant,
                     title: "Assistant".to_owned(),
                     text: body,
+                    message_id: event
+                        .data
+                        .get("message")
+                        .and_then(|message| message.get("id"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
                 });
             }
             rows
@@ -201,6 +211,7 @@ fn project(event: &SessionWireEvent) -> Vec<TranscriptRow> {
                     "Tool result".to_owned()
                 },
                 text: content_text(message.get("content")),
+                message_id: None,
             }]
         }
         "approval/asked" => {
@@ -219,6 +230,7 @@ fn project(event: &SessionWireEvent) -> Vec<TranscriptRow> {
                 kind: RowKind::Approval,
                 title: format!("Permission requested: {tool}"),
                 text: reason.to_owned(),
+                message_id: None,
             }]
         }
         "approval/decided" => {
@@ -232,6 +244,7 @@ fn project(event: &SessionWireEvent) -> Vec<TranscriptRow> {
                 kind: RowKind::Approval,
                 title: format!("Permission {outcome}"),
                 text: String::new(),
+                message_id: None,
             }]
         }
         "job/registered" => {
@@ -245,6 +258,7 @@ fn project(event: &SessionWireEvent) -> Vec<TranscriptRow> {
                 kind: RowKind::Job,
                 title: "Job started".to_owned(),
                 text: label.to_owned(),
+                message_id: None,
             }]
         }
         "job/settled" => {
@@ -263,6 +277,7 @@ fn project(event: &SessionWireEvent) -> Vec<TranscriptRow> {
                 kind: RowKind::Job,
                 title: format!("Job {status}"),
                 text: detail.to_owned(),
+                message_id: None,
             }]
         }
         _ => return Vec::new(),
@@ -304,6 +319,7 @@ fn todo_row(event: &SessionWireEvent) -> TranscriptRow {
         kind: RowKind::Todo,
         title: "Todo list".to_owned(),
         text,
+        message_id: None,
     }
 }
 
@@ -330,6 +346,7 @@ fn deliverables_row(event: &SessionWireEvent) -> TranscriptRow {
         kind: RowKind::Deliverable,
         title: "Deliverables".to_owned(),
         text,
+        message_id: None,
     }
 }
 
@@ -340,6 +357,7 @@ fn goal_row(event: &SessionWireEvent) -> TranscriptRow {
             kind: RowKind::Goal,
             title: "Goal cleared".to_owned(),
             text: String::new(),
+            message_id: None,
         };
     }
     let goal = event.data.get("goal");
@@ -356,6 +374,7 @@ fn goal_row(event: &SessionWireEvent) -> TranscriptRow {
         kind: RowKind::Goal,
         title: format!("Goal · {phase}"),
         text: objective.to_owned(),
+        message_id: None,
     }
 }
 

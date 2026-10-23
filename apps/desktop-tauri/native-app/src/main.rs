@@ -24,6 +24,7 @@ use dsh_client_core::{
     plugins::{BundleInfo, ChangeResult, ManagedPlugin, PluginInventorySnapshot, PluginsClient},
     schedules::{ScheduleDeleteRequest, ScheduleListRequest, SchedulesClient},
     skills::{SkillListResponse, SkillsClient},
+    message_feedback::{MessageFeedbackClient, MessageFeedbackItem, MessageFeedbackPutRequest},
     remote_events::{RemoteEvent, RemoteEventError, RemoteEventOutcome, RemoteEvents},
     remote_stream::RemoteStreamMux,
     streams::{self, JobFollowFrame, JobView},
@@ -876,6 +877,10 @@ struct DesktopApp {
     pending_approvals: Vec<PendingApproval>,
     pending_questions: Vec<QuestionCard>,
     deliverables: Vec<DeliverableFile>,
+    feedback_items: Vec<MessageFeedbackItem>,
+    feedback_receiver: Option<mpsc::Receiver<Result<Vec<MessageFeedbackItem>, Error>>>,
+    feedback_put_receiver: Option<mpsc::Receiver<Result<MessageFeedbackItem, Error>>>,
+    feedback_status: Option<String>,
     settings_panel: SettingsPanel,
     settings_description: Option<SettingsDescribeValue>,
     settings_loading: bool,
@@ -986,6 +991,10 @@ impl DesktopApp {
             pending_approvals: Vec::new(),
             pending_questions: Vec::new(),
             deliverables: Vec::new(),
+            feedback_items: Vec::new(),
+            feedback_receiver: None,
+            feedback_put_receiver: None,
+            feedback_status: None,
             settings_panel: SettingsPanel::default(),
             settings_description: None,
             settings_loading: false,
@@ -1263,6 +1272,26 @@ impl DesktopApp {
         self.plugin_write_status = Some("Applying plugin change…".to_owned());
     }
 
+    fn refresh_feedback(&mut self) {
+        if self.feedback_receiver.is_some() {
+            return;
+        }
+        let Some(transport) = self.transport.clone() else {
+            self.feedback_status = Some("Connect to load feedback".to_owned());
+            return;
+        };
+        let Some(session) = self.selected_session.clone() else {
+            self.feedback_items.clear();
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(MessageFeedbackClient::new(&transport).list(session));
+        });
+        self.feedback_receiver = Some(receiver);
+        self.feedback_status = None;
+    }
+
     fn refresh_skills(&mut self) {
         if self.skills_loading {
             return;
@@ -1401,6 +1430,8 @@ impl DesktopApp {
         self.assistant_streaming = false;
         self.assistant_draft.clear();
         self.deliverables.clear();
+        self.feedback_items.clear();
+        self.refresh_feedback();
         self.preview_document = None;
         self.preview_error = None;
         self.show_document = false;
@@ -2120,6 +2151,49 @@ impl eframe::App for DesktopApp {
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.plugins_error = Some("Plugin change worker stopped unexpectedly".into());
                     self.plugin_write_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30));
+                }
+            }
+        }
+        if let Some(receiver) = &self.feedback_put_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(item)) => {
+                    if let Some(existing) = self.feedback_items.iter_mut().find(|x| x.message_id == item.message_id) {
+                        *existing = item;
+                    } else {
+                        self.feedback_items.push(item);
+                    }
+                    self.feedback_put_receiver = None;
+                    self.feedback_status = Some("Feedback saved.".to_owned());
+                }
+                Ok(Err(error)) => {
+                    self.feedback_status = Some(format!("Feedback failed: {error}"));
+                    self.feedback_put_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.feedback_status = Some("Feedback worker stopped unexpectedly".into());
+                    self.feedback_put_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30));
+                }
+            }
+        }
+        if let Some(receiver) = &self.feedback_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(items)) => {
+                    self.feedback_items = items;
+                    self.feedback_receiver = None;
+                }
+                Ok(Err(error)) => {
+                    self.feedback_status = Some(format!("Feedback load failed: {error}"));
+                    self.feedback_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.feedback_status = Some("Feedback worker stopped unexpectedly".into());
+                    self.feedback_receiver = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     ctx.request_repaint_after(std::time::Duration::from_millis(30));
@@ -3055,13 +3129,49 @@ impl eframe::App for DesktopApp {
                         self.cancel_turn();
                     }
                 });
+                let mut feedback_actions = Vec::new();
+                if let Some(status) = &self.feedback_status {
+                    ui.label(status);
+                }
+                let feedback: std::collections::BTreeMap<String, String> = self
+                    .feedback_items
+                    .iter()
+                    .map(|item| (item.message_id.clone(), item.rating.clone()))
+                    .collect();
                 render_transcript(
                     ui,
                     &self.transcript,
                     &self.assistant_draft,
+                    &feedback,
                     self.chat_loading,
                     self.assistant_streaming,
+                    &mut feedback_actions,
                 );
+                for action in feedback_actions {
+                    let if_version = self
+                        .feedback_items
+                        .iter()
+                        .find(|item| item.message_id == action.0)
+                        .map(|item| item.version.clone());
+                    let rating = action.1.clone();
+                    let request = MessageFeedbackPutRequest {
+                        session_id: self.selected_session.clone().unwrap_or_default(),
+                        message_id: action.0,
+                        rating: rating.clone(),
+                        note: None,
+                        category: None,
+                        if_version,
+                    };
+                    let Some(transport) = self.transport.clone() else { continue };
+                    let (sender, receiver) = mpsc::channel();
+                    std::thread::spawn(move || {
+                        let _ = sender.send(
+                            MessageFeedbackClient::new(&transport).put(request),
+                        );
+                    });
+                    self.feedback_put_receiver = Some(receiver);
+                    self.feedback_status = Some(format!("Rating {}…", rating));
+                }
                 if let Some(card) = self.pending_questions.first_mut() {
                     let action = card.render(ui);
                     if let Some(action) = action {
@@ -3194,8 +3304,10 @@ fn render_transcript(
     ui: &mut egui::Ui,
     transcript: &Transcript,
     draft: &str,
+    feedback: &std::collections::BTreeMap<String, String>,
     loading: bool,
     streaming: bool,
+    feedback_actions: &mut Vec<(String, String)>,
 ) {
     if loading || streaming {
         ui.horizontal(|ui| {
@@ -3245,6 +3357,21 @@ fn render_transcript(
                         _ => text,
                     };
                     ui.add(egui::Label::new(text).wrap().selectable(true));
+                }
+                if row.kind == RowKind::Assistant {
+                    if let Some(message_id) = &row.message_id {
+                        ui.horizontal(|ui| {
+                            if let Some(rating) = feedback.get(message_id) {
+                                ui.label(format!("Feedback: {rating}"));
+                            }
+                            if ui.small_button("👍").clicked() {
+                                feedback_actions.push((message_id.clone(), "positive".into()));
+                            }
+                            if ui.small_button("👎").clicked() {
+                                feedback_actions.push((message_id.clone(), "negative".into()));
+                            }
+                        });
+                    }
                 }
                 ui.separator();
             }
@@ -4244,7 +4371,7 @@ mod transcript_render_tests {
                 egui::vec2(640.0, 480.0),
             )),
         );
-        render_transcript(&mut ui, transcript, "", false, false);
+        render_transcript(&mut ui, transcript, "", &std::collections::BTreeMap::new(), false, false, &mut Vec::new());
         assert!(ui.min_rect().is_finite());
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
@@ -4285,7 +4412,7 @@ mod transcript_render_tests {
                 egui::vec2(640.0, 480.0),
             )),
         );
-        render_transcript(&mut ui, &Transcript::default(), "partial answer", false, true);
+        render_transcript(&mut ui, &Transcript::default(), "partial answer", &std::collections::BTreeMap::new(), false, true, &mut Vec::new());
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         let mut texts = Vec::new();
