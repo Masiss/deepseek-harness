@@ -2818,6 +2818,11 @@ impl eframe::App for DesktopApp {
             if !self.sessions_status.is_empty() {
                 ui.small(&self.sessions_status);
             }
+            if self.sessions.is_empty() && self.session_search.is_none() && !busy && connected {
+                ui.add_space(8.0);
+                ui.label("No sessions yet.");
+                ui.small("Create one to start chatting.");
+            }
             if let Some(error) = &self.sessions_error {
                 ui.colored_label(egui::Color32::LIGHT_RED, error);
                 if ui.button("Retry").clicked() {
