@@ -1852,7 +1852,7 @@ impl DesktopApp {
                         },
                         max_messages: Some(1),
                         turn_window: None,
-                        assistant_stream: Some(false),
+                        assistant_stream: false,
                     },
                 )?;
                 let frame = stream.next().ok_or(Error::InvalidEnvelope(
@@ -2589,7 +2589,7 @@ impl DesktopApp {
                 },
                 max_messages: Some(200),
                 turn_window: None,
-                assistant_stream: Some(true),
+                assistant_stream: true,
             };
             match follow::follow(&streams, request) {
                 Ok(stream) => {
@@ -4571,9 +4571,14 @@ impl eframe::App for DesktopApp {
                 let text_edit = ui.add_enabled(
                     !self.chat_loading,
                     egui::TextEdit::multiline(&mut self.chat_text)
+                        .id_salt("composer")
                         .hint_text("Message (Ctrl+Enter to send)")
                         .desired_rows(3),
                 );
+                if self.focus_composer && !self.chat_loading {
+                    text_edit.request_focus();
+                    self.focus_composer = false;
+                }
                 if composer_input::submit_requested(
                     text_edit.has_focus(),
                     ui.input(|input| input.key_pressed(egui::Key::Enter)),
@@ -4894,6 +4899,46 @@ fn decode_preview_image(
         size: [rgba.width() as usize, rgba.height() as usize],
         rgba: rgba.into_raw(),
     }))
+}
+
+/// Adds the system fonts that cover scripts the bundled faces lack.
+///
+/// egui ships Latin-only faces, so Vietnamese precomposed letters and other
+/// scripts render as missing-glyph boxes. The fallbacks are appended, so the
+/// bundled faces still shape everything they cover.
+fn install_font_fallbacks(context: &egui::Context) {
+    const PROPORTIONAL: [&str; 4] = [
+        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    ];
+    const MONOSPACE: [&str; 4] = [
+        "/usr/share/fonts/liberation/LiberationMono-Regular.ttf",
+        "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
+        "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
+    ];
+    let mut fonts = egui::FontDefinitions::default();
+    for (family, candidates) in [
+        (egui::FontFamily::Proportional, PROPORTIONAL),
+        (egui::FontFamily::Monospace, MONOSPACE),
+    ] {
+        for path in candidates {
+            let Ok(bytes) = std::fs::read(path) else {
+                continue;
+            };
+            let name = format!("system-{}", path.rsplit('/').next().unwrap_or("font"));
+            fonts
+                .font_data
+                .insert(name.clone(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
+            if let Some(chain) = fonts.families.get_mut(&family) {
+                chain.push(name);
+            }
+            break;
+        }
+    }
+    context.set_fonts(fonts);
 }
 
 /// Model the probe requests: the DeepSeek API-key route when it exists, else the catalog default.
@@ -5364,7 +5409,7 @@ fn probe_snapshot(mux: &RemoteStreamMux, session: &str) -> Option<follow::Snapsh
         },
         max_messages: Some(200),
         turn_window: None,
-        assistant_stream: None,
+        assistant_stream: false,
     };
     let stream = follow::follow(mux, request).ok()?;
     for frame in stream {
@@ -5749,7 +5794,8 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "DeepSeek Harness",
         options,
-        Box::new(move |_creation_context| {
+        Box::new(move |creation_context| {
+            install_font_fallbacks(&creation_context.egui_ctx);
             Ok(Box::new(DesktopApp::new(
                 app_quitting,
                 app_show,
@@ -6117,5 +6163,46 @@ mod transcript_render_tests {
         let (_, rect) = render(&transcript);
         assert!(rect.height() <= 480.0, "transcript UI overflowed: {rect:?}");
         assert_eq!(transcript.rows().len(), 1000);
+    }
+}
+
+#[cfg(test)]
+mod composer_identity {
+    use super::*;
+
+    /// The composer keeps one id while the transcript above it changes size, so a
+    /// focused buffer also receives typed text on later frames.
+    #[test]
+    fn composer_focus_survives_a_changing_transcript() {
+        let context = egui::Context::default();
+        let mut text = String::new();
+        let mut ids = Vec::new();
+        for (rows, typed) in [(1_usize, None), (4, Some("hi"))] {
+            let mut input = egui::RawInput::default();
+            if let Some(typed) = typed {
+                input.events.push(egui::Event::Text(typed.to_owned()));
+            }
+            let mut output = context.run_ui(input, |context| {
+                egui::CentralPanel::default().show(context, |ui| {
+                    for _ in 0..rows {
+                        ui.label("transcript row");
+                    }
+                    let response = ui.add(
+                        egui::TextEdit::multiline(&mut text)
+                            .id_salt("composer")
+                            .hint_text("Message (Ctrl+Enter to send)")
+                            .desired_rows(3),
+                    );
+                    ids.push(response.id);
+                    if typed.is_some() {
+                        assert!(response.has_focus(), "the composer lost focus");
+                    }
+                });
+            });
+            output.textures_delta.clear();
+            context.memory_mut(|memory| memory.request_focus(ids[0]));
+        }
+        assert_eq!(ids[0], ids[1]);
+        assert_eq!(text, "hi");
     }
 }

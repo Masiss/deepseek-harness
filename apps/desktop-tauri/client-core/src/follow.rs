@@ -23,8 +23,10 @@ pub struct FollowRequest {
     pub max_messages: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_window: Option<TurnWindow>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub assistant_stream: Option<bool>,
+    /// Request process-local assistant frames; the Host accepts only `true`,
+    /// so `false` is omitted rather than sent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub assistant_stream: bool,
 }
 
 /// Minimum history window requested from the Host.
@@ -268,8 +270,20 @@ mod tests {
                 min_messages: 2,
                 min_turns: 1,
             }),
-            assistant_stream: Some(true),
+            assistant_stream: true,
         }
+    }
+
+    #[test]
+    fn omits_an_assistant_stream_request_the_host_would_reject() {
+        let mut quiet = request();
+        quiet.assistant_stream = false;
+        let encoded = serde_json::to_value(&quiet).unwrap();
+        assert!(encoded.get("assistantStream").is_none(), "{encoded}");
+        assert_eq!(
+            serde_json::to_value(request()).unwrap()["assistantStream"],
+            serde_json::json!(true)
+        );
     }
 
     #[test]
