@@ -1,18 +1,30 @@
 #!/usr/bin/env node
-// Minimal DeepSeek Messages provider used by the approval probe.
+// Minimal DeepSeek Messages provider used by the live probes.
 //
-// First assistant turn requests a bash call that widens the sandbox, so the
-// Host must ask the user; after the tool result arrives the second turn ends
-// with plain text. The server prints `MOCK_MODEL_URL=<origin>` on stdout so the
-// probe can point DEEPSEEK_BASE_URL at it, and logs each turn to stderr.
+// Default mode drives the approval journey: the first assistant turn requests a
+// bash call that widens the sandbox, so the Host must ask the user; after the
+// tool result arrives the second turn ends with plain text.
+//
+// `DSH_MOCK_MODEL_MODE=plain` answers every turn with plain text instead, which
+// is all a completed-turn journey (session fork, transcript) needs. Plain mode
+// takes its text from `DSH_MOCK_MODEL_TEXT` and does not require a marker.
+//
+// The server prints `MOCK_MODEL_URL=<origin>` on stdout so the probe can point
+// DEEPSEEK_BASE_URL at it, and logs each turn to stderr.
 
 import { createServer } from 'node:http'
 
+const MODE = process.env.DSH_MOCK_MODEL_MODE ?? 'approval'
+if (MODE !== 'approval' && MODE !== 'plain' && MODE !== 'timed') {
+  console.error(`mock-model-server: unknown DSH_MOCK_MODEL_MODE=${MODE}`)
+  process.exit(2)
+}
 const MARKER = process.env.DSH_APPROVAL_PROBE_MARKER
-if (typeof MARKER !== 'string' || MARKER.length === 0) {
+if (MODE === 'approval' && (typeof MARKER !== 'string' || MARKER.length === 0)) {
   console.error('mock-model-server: DSH_APPROVAL_PROBE_MARKER is required')
   process.exit(2)
 }
+const PLAIN_TEXT = process.env.DSH_MOCK_MODEL_TEXT ?? 'Approval probe complete.'
 
 function frame(event) {
   return `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`
@@ -107,13 +119,14 @@ function jobTurn() {
   ].join('')
 }
 
-function questionTurn() {
+function questionTurn(timed = false) {
   const input = {
     questions: [{
       id: 'probe',
       question: 'Continue the approval probe?',
       options: [{ label: 'Yes' }, { label: 'No' }],
     }],
+    ...(timed ? { timeout: 2 } : {}),
   }
   return [
     frame({
@@ -174,7 +187,7 @@ function textTurn() {
     frame({
       type: 'content_block_delta',
       index: 0,
-      delta: { type: 'text_delta', text: 'Approval probe complete.' },
+      delta: { type: 'text_delta', text: PLAIN_TEXT },
     }),
     frame({ type: 'content_block_stop', index: 0 }),
     frame({
@@ -211,7 +224,9 @@ const server = createServer((request, response) => {
       return
     }
     const results = toolResults(body.messages)
-    const turn = results === 0 ? 'approval' : results === 1 ? 'job' : results === 2 ? 'question' : 'text'
+    const turn = MODE === 'plain' ? 'text'
+      : MODE === 'timed' ? (results === 0 ? 'timed-question' : 'text')
+      : results === 0 ? 'approval' : results === 1 ? 'job' : results === 2 ? 'question' : 'text'
     console.error(`mock-model-server: turn=${turn} results=${results} messages=${body.messages?.length ?? 0}`)
     response.writeHead(200, {
       'content-type': 'text/event-stream',
@@ -220,6 +235,7 @@ const server = createServer((request, response) => {
     })
     response.end(
       turn === 'approval' ? toolTurn()
+      : turn === 'timed-question' ? questionTurn(true)
       : turn === 'job' ? jobTurn()
       : turn === 'question' ? questionTurn()
       : textTurn(),

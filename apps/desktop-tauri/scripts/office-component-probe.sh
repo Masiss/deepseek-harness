@@ -113,6 +113,13 @@ stop_host() {
   kill -KILL -- "-$pgid" 2>/dev/null
 }
 
+rpc() {
+  local method=$1 args=$2
+  curl -s -m 300 -b "$work/cookies" -H 'content-type: application/json' \
+    -X POST "$base/api/$method" \
+    -d "{\"type\":\"client-request\",\"rpcId\":\"office-$RANDOM\",\"method\":\"$method\",\"payload\":{\"args\":$args}}"
+}
+
 # --- first run: component absent, install on request ----------------------
 start_host || { kill "$server" 2>/dev/null; exit 1; }
 echo "status_initial=$(curl -s -m 20 -b "$work/cookies" -H 'content-type: application/json' -X POST "$base/__dsh-desktop/components-status" -d null)"
@@ -131,6 +138,70 @@ stop_host
 # --- second run: the installed component composes Office ------------------
 start_host || { kill "$server" 2>/dev/null; exit 1; }
 echo "status_restarted=$(curl -s -m 20 -b "$work/cookies" -H 'content-type: application/json' -X POST "$base/__dsh-desktop/components-status" -d null)"
+
+# A Session is the workspace scope the Host authorizes an Office path against,
+# so the conversion journey creates one whose cwd holds the document.
+mkdir -p "$work/workspace"
+session=$(rpc session/create "{\"request\":{\"cwd\":\"$work/workspace\"}}" \
+  | "$root/runtime/bin/node" -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const v=JSON.parse(s).result?.value;process.stdout.write(v?.sessionId??"")})')
+echo "render_session=${session:-none}"
+"$python" -c 'import docx, sys; d = docx.Document(); d.add_paragraph("packaged office probe"); d.save(sys.argv[1])' \
+  "$work/workspace/probe.docx" 2>/dev/null
+if [ -n "$session" ] && [ -f "$work/workspace/probe.docx" ]; then
+  # A binary RPC answer is multipart/form-data: text `metadata` holds the
+  # server-response envelope and the document bytes ride as a file part.
+  curl -s -m 300 -b "$work/cookies" -H 'content-type: application/json' \
+    -X POST "$base/api/officeToPdf/render" \
+    -d "{\"type\":\"client-request\",\"rpcId\":\"office-render\",\"method\":\"officeToPdf/render\",\"payload\":{\"args\":{\"workspaceFileScopeId\":\"$session\",\"path\":\"probe.docx\",\"priority\":\"foreground\"}}}" \
+    -o "$work/render.bin" -D "$work/render.hdr"
+  "$root/runtime/bin/node" -e '
+    const fs = require("node:fs")
+    const [headerFile, bodyFile] = process.argv.slice(1)
+    const header = fs.readFileSync(headerFile, "utf8").split(/\r?\n/)
+      .find(line => line.toLowerCase().startsWith("content-type:")) ?? ""
+    const boundary = /boundary=(?:"([^"]+)"|([^;]+))/.exec(header)
+    if (boundary === null) {
+      console.log(`RESULT office-render=FAIL reason=not-multipart header=${header.slice(0, 80)}`)
+      process.exit(0)
+    }
+    const marker = Buffer.from(`--${boundary[1] ?? boundary[2]}`)
+    const body = fs.readFileSync(bodyFile)
+    const parts = []
+    let offset = body.indexOf(marker)
+    while (offset !== -1) {
+      const start = offset + marker.length
+      if (body.subarray(start, start + 2).toString() === "--") break
+      const next = body.indexOf(marker, start)
+      if (next === -1) break
+      const raw = body.subarray(start + 2, next - 2)
+      const split = raw.indexOf("\r\n\r\n")
+      parts.push({
+        headers: raw.subarray(0, split).toString("utf8"),
+        body: raw.subarray(split + 4),
+      })
+      offset = next
+    }
+    const metadata = parts.find(part => /name="metadata"/.test(part.headers))
+    if (metadata === undefined) {
+      console.log("RESULT office-render=FAIL reason=no-metadata")
+      process.exit(0)
+    }
+    const envelope = JSON.parse(metadata.body.toString("utf8"))
+    if (envelope.result?.ok !== true) {
+      console.log(`RESULT office-render=FAIL error=${JSON.stringify(envelope.result?.error ?? null).slice(0, 200)}`)
+      process.exit(0)
+    }
+    const file = parts.find(part => part !== metadata && part.body.subarray(0, 5).toString("latin1") === "%PDF-")
+    const missing = (envelope.result.value?.missingFonts ?? []).length
+    if (file === undefined) {
+      console.log(`RESULT office-render=FAIL reason=no-pdf-part parts=${parts.length}`)
+      process.exit(0)
+    }
+    console.log(`RESULT office-render=OK bytes=${file.body.length} missing_fonts=${missing}`)
+  ' "$work/render.hdr" "$work/render.bin"
+else
+  echo "RESULT office-render=SKIP reason=no-session-or-document"
+fi
 stop_host
 kill "$server" 2>/dev/null
 echo "RESULT done=1"
