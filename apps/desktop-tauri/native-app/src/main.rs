@@ -41,7 +41,7 @@ use dsh_client_core::{
     schedules::{ScheduleDeleteRequest, ScheduleListRequest, SchedulesClient},
     session::{
         SessionAddress, SessionAddressKind, SessionPage, SessionPageRequest, SessionSummary,
-        SessionTurnWindow, SessionViewer, ToolCallStatus, MAX_SAFE_SEQUENCE,
+        SessionTurnWindow, SessionViewer, MAX_SAFE_SEQUENCE,
     },
     sessions::{
         CreateSessionRequest, ForkSessionRequest, RenameSessionRequest, SessionSearchResponse,
@@ -904,6 +904,9 @@ fn setup_tray() -> Option<(
     }
 }
 
+/// Follow backlog plus history page a Session load resolves to.
+type PageLoad = (i64, SessionPage, Vec<dsh_client_core::follow::EventFrame>);
+
 enum SessionOperation {
     List,
     Search(String),
@@ -952,7 +955,7 @@ struct DesktopApp {
     page_loading: bool,
     page_before_seq: Option<i64>,
     page_error: Option<String>,
-    page_receiver: Option<mpsc::Receiver<Result<(i64, SessionPage), Error>>>,
+    page_receiver: Option<mpsc::Receiver<Result<PageLoad, Error>>>,
     page_through_seq: Option<i64>,
     chat_text: String,
     focus_composer: bool,
@@ -1953,9 +1956,12 @@ impl DesktopApp {
                     ));
                 };
                 let through_seq = snapshot.cursor;
+                // The snapshot is the newest backlog; the page holds older
+                // history. Both project into the same transcript.
+                let live = snapshot.records;
                 drop(stream);
                 let page = SessionViewer::new(&transport).page(&session_id, through_seq)?;
-                Ok((through_seq, page))
+                Ok((through_seq, page, live))
             })();
             let _ = sender.send(result);
         });
@@ -2007,7 +2013,7 @@ impl DesktopApp {
         std::thread::spawn(move || {
             let result = SessionViewer::new(&transport)
                 .page_request(request)
-                .map(|page| (through_seq, page));
+                .map(|page| (through_seq, page, Vec::new()));
             let _ = sender.send(result);
         });
         self.page_receiver = Some(receiver);
@@ -3074,8 +3080,9 @@ impl DesktopApp {
         }
         if let Some(receiver) = &self.page_receiver {
             match receiver.try_recv() {
-                Ok(Ok((through_seq, page))) => {
+                Ok(Ok((through_seq, page, live))) => {
                     self.page_through_seq = Some(through_seq);
+                    self.transcript.apply_snapshot(&live);
                     let before_seq = self.page_before_seq.take();
                     self.session_page = Some(match (before_seq, self.session_page.take()) {
                         (Some(before_seq), Some(current)) => {
@@ -3094,6 +3101,21 @@ impl DesktopApp {
                         }
                         _ => page,
                     });
+                    // History and live events share one projection: the page
+                    // records merge in sequence order and duplicates are dropped.
+                    let history: Vec<_> = self
+                        .session_page
+                        .as_ref()
+                        .map(|page| {
+                            page.records
+                                .iter()
+                                .map(|record| {
+                                    dsh_client_core::follow::SessionWireEvent::from(&record.event)
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    self.transcript.merge(history.iter());
                     self.page_loading = false;
                     self.page_error = None;
                     self.page_receiver = None;
@@ -4611,51 +4633,8 @@ impl DesktopApp {
                 ui.label(&self.status);
             } else {
                 ui.heading(self.selected_session.as_deref().unwrap_or("Session"));
-                if self.page_loading && self.session_page.is_none() {
+                if self.page_loading && self.transcript.is_empty() {
                     ui.label("Loading session…");
-                } else if let Some(page) = &self.session_page {
-                    if let Some(error) = &self.page_error {
-                        ui.colored_label(egui::Color32::LIGHT_RED, error);
-                    }
-                    if page.records.is_empty() {
-                        ui.label("This session has no events");
-                    } else {
-                        let calls = SessionViewer::tool_calls(page);
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            for record in &page.records {
-                                let event = &record.event;
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.strong(format!("{}", event.seq));
-                                    ui.label(&event.event_type);
-                                    ui.label(event_text(&event.data));
-                                });
-                                ui.separator();
-                            }
-                            if !calls.is_empty() {
-                                ui.heading("Tool calls");
-                                for call in calls {
-                                    ui.label(format!(
-                                        "{} — {} ({})",
-                                        call.name,
-                                        call.call_id,
-                                        match call.status {
-                                            ToolCallStatus::Pending => "pending",
-                                            ToolCallStatus::Succeeded => "succeeded",
-                                            ToolCallStatus::Failed => "failed",
-                                            ToolCallStatus::Unknown => "unknown",
-                                        }
-                                    ));
-                                }
-                            }
-                        });
-                        if page.has_more {
-                            if self.page_loading {
-                                ui.label("Loading older events…");
-                            } else if ui.button("Load older events").clicked() {
-                                self.load_older_session_page();
-                            }
-                        }
-                    }
                 } else if let Some(error) = &self.page_error {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
                     if ui.button("Retry session load").clicked() {
@@ -4663,8 +4642,16 @@ impl DesktopApp {
                             self.load_session(session_id);
                         }
                     }
-                } else {
-                    ui.label("Select a session to view its events");
+                } else if self.transcript.is_empty() {
+                    ui.label("This session has no events");
+                } else if self.session_page.as_ref().is_some_and(|page| page.has_more) {
+                    if self.page_loading {
+                        ui.label("Loading older events…");
+                    } else if ui.button("Load older events").clicked() {
+                        self.load_older_session_page();
+                    }
+                } else if self.page_loading {
+                    ui.label("Loading older events…");
                 }
                 ui.separator();
                 ui.heading("Chat");

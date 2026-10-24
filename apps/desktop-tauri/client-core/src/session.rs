@@ -73,6 +73,21 @@ pub struct SessionEvent {
     pub surface_op: Option<Value>,
 }
 
+impl From<&SessionEvent> for crate::follow::SessionWireEvent {
+    /// Projects a history record into the durable-event view the follow stream delivers.
+    fn from(event: &SessionEvent) -> Self {
+        Self {
+            event_type: event.event_type.clone(),
+            seq: event.seq,
+            time: event.time,
+            data: event.data.clone(),
+            ignorable: event.ignorable,
+            source_event_seqs: event.source_event_seqs.clone(),
+            surface_op: event.surface_op.clone(),
+        }
+    }
+}
+
 /// A page record containing one durable event.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionEventEntry {

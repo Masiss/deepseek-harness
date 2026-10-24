@@ -337,6 +337,7 @@ cargo test --locked --offline --manifest-path apps/desktop-tauri/native-app/Carg
 - Test hiện có: luồng semantic (New Session → chọn session → gõ → Send → payload prompt đúng → event follow hiện lên → Allow once phát `ApprovalCommand::Answer`), layout 3 viewport + report JSON ở `target/dsh-kittest/layout.json`, 3 snapshot vỏ rỗng ở `tests/snapshots/`.
 - Snapshot chỉ là baseline chống hồi quy; **chất lượng thị giác vẫn chờ review độc lập**. IME, tray, drag & drop, hành vi cửa sổ vẫn do probe Weston cô lập lo.
 - Cập nhật baseline: `UPDATE_SNAPSHOTS=1 cargo test ... ui_harness`, rồi xem lại ảnh trước khi commit.
+- Lịch sử Session: `session/page` và `session/follow` cùng đổ vào `Transcript::merge` (sort theo `seq`, mỗi event project một lần, trang cũ chèn lên trước, snapshot cửa sổ không xoá lịch sử cũ). Danh sách event thô (seq/type/text) đã bỏ để chỉ còn một renderer; nút "Load older events" chuyển lên đầu khung chat. Test: mở session cũ (kèm tool events), snapshot chen lúc load, chuyển session, 2.100 event (cắt còn 2.000), phân trang 120 event; ordering của live stream được test riêng ở tầng wire frame (`live_follow_frames_project_in_wire_order`), không dựa vào replay của loopback.
 
 ## 8. Tài liệu lane
 `.agents/plan/desktop-tauri/PLAN.md` (kế hoạch + bảng finding F01–F13) · `MEMORY.md` (quyết định D1–D39, số đo M1–M25, bẫy B1–B52) · `AGENTS.md` (luật lệ của lane) · `probes/` (probe cũ) — cập nhật cả hai file đầu khi có quyết định mới.

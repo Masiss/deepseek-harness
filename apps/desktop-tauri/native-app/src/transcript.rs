@@ -6,6 +6,7 @@
 
 use dsh_client_core::follow::SessionWireEvent;
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 /// Most rows kept in memory; older rows are dropped first.
 pub const MAX_ROWS: usize = 2_000;
@@ -40,53 +41,90 @@ pub struct TranscriptRow {
 }
 
 /// Bounded transcript built from durable events.
+///
+/// History pages and live follow frames project through the same function, so a
+/// Session renders one ordered, deduplicated log regardless of where each event
+/// came from.
 #[derive(Debug, Default)]
 pub struct Transcript {
     rows: Vec<TranscriptRow>,
-    last_seq: i64,
+    applied: BTreeSet<i64>,
     bytes: usize,
 }
 
 impl Transcript {
-    /// Drops every row; used when a new snapshot replaces the projection.
+    /// Drops every row; used when the viewer switches sessions.
     pub fn reset(&mut self) {
         self.rows.clear();
-        self.last_seq = i64::MIN;
+        self.applied.clear();
         self.bytes = 0;
     }
 
-    /// Applies one durable event, ignoring events already applied.
-    pub fn apply(&mut self, event: &SessionWireEvent) {
-        if event.seq <= self.last_seq {
+    /// Merges durable events in sequence order, ignoring any already projected.
+    ///
+    /// A windowed `session/follow` snapshot, an older history page, and a live
+    /// event can arrive in any order; rows stay sorted by `seq` and each event
+    /// contributes once.
+    ///
+    /// @param events - Durable events from any source.
+    pub fn merge<'a>(&mut self, events: impl IntoIterator<Item = &'a SessionWireEvent>) {
+        let mut incoming: Vec<&SessionWireEvent> = events
+            .into_iter()
+            .filter(|event| !self.applied.contains(&event.seq))
+            .collect();
+        if incoming.is_empty() {
             return;
         }
-        self.last_seq = event.seq;
-        for row in project(event) {
-            self.bytes += row.text.len();
-            self.rows.push(row);
-            while self.rows.len() > MAX_ROWS || self.bytes > MAX_BYTES {
-                let dropped = self.rows.remove(0);
-                self.bytes -= dropped.text.len();
+        incoming.sort_by_key(|event| event.seq);
+        for event in incoming {
+            // The same sequence can repeat inside one batch (a snapshot edge
+            // plus a live frame); project it once.
+            if !self.applied.insert(event.seq) {
+                continue;
+            }
+            let at = self.rows.partition_point(|row| row.seq < event.seq);
+            for (offset, row) in project(event).into_iter().enumerate() {
+                self.bytes += row.text.len();
+                self.rows.insert(at + offset, row);
             }
         }
+        self.trim();
     }
 
-    /// Applies a snapshot's records in order.
+    /// Applies one durable event.
+    pub fn apply(&mut self, event: &SessionWireEvent) {
+        self.merge(std::iter::once(event));
+    }
+
+    /// Applies a snapshot's records without discarding older retained history.
     pub fn apply_snapshot(&mut self, records: &[dsh_client_core::follow::EventFrame]) {
-        self.reset();
-        for record in records {
-            self.apply(&record.event);
-        }
+        self.merge(records.iter().map(|record| &record.event));
     }
 
-    /// Retained rows.
+    /// Retained rows, oldest first.
     pub fn rows(&self) -> &[TranscriptRow] {
         &self.rows
+    }
+
+    /// Sequence of the oldest retained event, if any.
+    pub fn oldest_seq(&self) -> Option<i64> {
+        self.rows.first().map(|row| row.seq)
     }
 
     /// True before any row was projected.
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty()
+    }
+
+    /// Enforces the row and byte budgets from the oldest row.
+    fn trim(&mut self) {
+        while self.rows.len() > MAX_ROWS || self.bytes > MAX_BYTES {
+            let dropped = self.rows.remove(0);
+            self.bytes -= dropped.text.len();
+        }
+        if let Some(oldest) = self.oldest_seq() {
+            self.applied = self.applied.split_off(&oldest);
+        }
     }
 }
 
@@ -451,6 +489,145 @@ fn truncate(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn message(seq: i64, text: &str) -> SessionWireEvent {
+        event(
+            seq,
+            "user/message",
+            serde_json::json!({"content": [{"type": "text", "text": text}]}),
+        )
+    }
+
+    fn frame(seq: i64, text: &str) -> dsh_client_core::follow::EventFrame {
+        dsh_client_core::follow::EventFrame {
+            frame_type: String::new(),
+            event: message(seq, text),
+        }
+    }
+
+    #[test]
+    fn merge_orders_events_from_any_source_and_drops_duplicates() {
+        let mut transcript = Transcript::default();
+        transcript.merge([
+            &message(3, "third"),
+            &message(1, "first"),
+            &message(3, "third"),
+        ]);
+        assert_eq!(
+            transcript
+                .rows()
+                .iter()
+                .map(|row| row.seq)
+                .collect::<Vec<_>>(),
+            [1, 3]
+        );
+        // A history page can land after a newer live event.
+        transcript.merge([&message(2, "second")]);
+        assert_eq!(
+            transcript
+                .rows()
+                .iter()
+                .map(|row| row.seq)
+                .collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        assert_eq!(
+            transcript
+                .rows()
+                .iter()
+                .map(|row| row.text.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second", "third"]
+        );
+    }
+
+    #[test]
+    fn windowed_snapshot_keeps_older_history() {
+        let mut transcript = Transcript::default();
+        let history: Vec<_> = (1..=5).map(|seq| message(seq, "history")).collect();
+        transcript.merge(&history);
+        // `session/follow` snapshots carry a bounded window, not the whole log.
+        transcript.apply_snapshot(&[frame(4, "history"), frame(5, "history"), frame(6, "live")]);
+        assert_eq!(
+            transcript
+                .rows()
+                .iter()
+                .map(|row| row.seq)
+                .collect::<Vec<_>>(),
+            [1, 2, 3, 4, 5, 6]
+        );
+    }
+
+    #[test]
+    fn older_page_prepends_in_sequence_order() {
+        let mut transcript = Transcript::default();
+        let newer: Vec<_> = (101..=110).map(|seq| message(seq, "newer")).collect();
+        let older: Vec<_> = (1..=100).map(|seq| message(seq, "older")).collect();
+        transcript.merge(&newer);
+        transcript.merge(&older);
+        let seqs: Vec<_> = transcript.rows().iter().map(|row| row.seq).collect();
+        assert_eq!(seqs.first(), Some(&1));
+        assert_eq!(seqs.last(), Some(&110));
+        assert!(seqs.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(seqs.len(), 110);
+    }
+
+    #[test]
+    fn row_budget_keeps_the_newest_rows_and_their_dedupe_set() {
+        let mut transcript = Transcript::default();
+        let events: Vec<_> = (1..=MAX_ROWS as i64 + 100)
+            .map(|seq| message(seq, "row"))
+            .collect();
+        transcript.merge(&events);
+        assert_eq!(transcript.rows().len(), MAX_ROWS);
+        assert_eq!(transcript.oldest_seq(), Some(101));
+        assert_eq!(
+            transcript.rows().last().map(|row| row.seq),
+            Some(MAX_ROWS as i64 + 100)
+        );
+        // Replaying a dropped event must neither duplicate nor reorder rows.
+        let before = transcript.rows().len();
+        transcript.merge([&events[0]]);
+        assert_eq!(transcript.rows().len(), before);
+    }
+
+    #[test]
+    fn live_follow_frames_project_in_wire_order() {
+        // These are the frames `session/follow` delivers: a snapshot, then events.
+        let snapshot: dsh_client_core::follow::FollowFrame =
+            serde_json::from_value(serde_json::json!({
+                "type": "snapshot",
+                "header": {"version": 1, "id": "s", "createdAt": 0, "isSeeded": false},
+                "cursor": 2,
+                "records": [frame(1, "first"), frame(2, "second")],
+                "hasMore": false,
+                "projections": {},
+            }))
+            .unwrap();
+        let live: dsh_client_core::follow::FollowFrame = serde_json::from_value(
+            serde_json::json!({"type": "event", "event": frame(3, "third").event}),
+        )
+        .unwrap();
+
+        let mut transcript = Transcript::default();
+        let dsh_client_core::follow::FollowFrame::Snapshot(snapshot) = snapshot else {
+            panic!("expected a snapshot frame");
+        };
+        transcript.apply_snapshot(&snapshot.records);
+        let dsh_client_core::follow::FollowFrame::Event(live) = live else {
+            panic!("expected an event frame");
+        };
+        transcript.apply(&live.event);
+        transcript.apply(&live.event);
+        assert_eq!(
+            transcript
+                .rows()
+                .iter()
+                .map(|row| row.text.as_str())
+                .collect::<Vec<_>>(),
+            ["first", "second", "third"]
+        );
+    }
 
     fn event(seq: i64, event_type: &str, data: Value) -> SessionWireEvent {
         SessionWireEvent {

@@ -12,7 +12,9 @@ use dsh_client_core::remote_stream::RemoteStreamMux;
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::net::TcpListener;
+use std::sync::atomic::AtomicUsize;
 
 /// One RPC the interface issued, as the fixture Host received it.
 #[derive(Debug, Clone)]
@@ -28,6 +30,10 @@ struct FixtureHost {
     requests: Arc<Mutex<Vec<FixtureRequest>>>,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+    /// Durable events per Session, oldest first.
+    pages: Arc<Mutex<BTreeMap<String, Vec<Value>>>>,
+    /// Most events one `session/page` reply carries.
+    page_limit: Arc<AtomicUsize>,
 }
 
 impl FixtureHost {
@@ -42,6 +48,10 @@ impl FixtureHost {
         );
         let requests = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
+        let pages = Arc::new(Mutex::new(BTreeMap::new()));
+        let worker_pages = Arc::clone(&pages);
+        let page_limit = Arc::new(AtomicUsize::new(PAGE_LIMIT));
+        let worker_limit = Arc::clone(&page_limit);
         let worker_requests = Arc::clone(&requests);
         let worker_stop = Arc::clone(&stop);
         let thread = std::thread::spawn(move || {
@@ -51,7 +61,14 @@ impl FixtureHost {
                 match listener.accept() {
                     Ok((stream, _)) => match read_request(&stream) {
                         Some(request) => {
-                            let reply = response_value(&request.method, &mut created);
+                            let page_snapshot = worker_pages.lock().expect("fixture pages").clone();
+                            let reply = response_value(
+                                &request.method,
+                                &request.payload,
+                                &mut created,
+                                &page_snapshot,
+                                worker_limit.load(Ordering::Acquire),
+                            );
                             let rpc_id = request.rpc_id.clone();
                             worker_requests
                                 .lock()
@@ -73,7 +90,32 @@ impl FixtureHost {
             requests,
             stop,
             thread: Some(thread),
+            pages,
+            page_limit,
         }
+    }
+
+    /// Sets how many events one page reply carries.
+    fn set_page_limit(&self, limit: usize) {
+        self.page_limit.store(limit, Ordering::Release);
+    }
+
+    /// Publishes one Session's durable history.
+    fn set_page(&self, session_id: &str, records: Vec<Value>) {
+        self.pages
+            .lock()
+            .expect("fixture pages")
+            .insert(session_id.to_owned(), records);
+    }
+
+    /// Session ids the fixture lists, in order.
+    fn session_ids(&self) -> Vec<String> {
+        self.pages
+            .lock()
+            .expect("fixture pages")
+            .keys()
+            .cloned()
+            .collect()
     }
 
     /// Waits until the interface has issued `method`, then returns its payload.
@@ -165,28 +207,21 @@ fn send_response(mut stream: std::net::TcpStream, rpc_id: &str, value: Value) {
     let _ = stream.write_all(&body);
 }
 
+/// Most events one page returns, matching the viewer's window.
+const PAGE_LIMIT: usize = 50;
+
 /// Deterministic wire reply for one method; unknown methods return `null`.
-fn response_value(method: &str, created: &mut Vec<String>) -> Value {
+fn response_value(
+    method: &str,
+    payload: &Value,
+    created: &mut Vec<String>,
+    pages: &BTreeMap<String, Vec<Value>>,
+    page_limit: usize,
+) -> Value {
     match method {
         "session/list" => {
-            let mut items = vec![serde_json::json!({
-                "agentAvailable": true,
-                "sessionId": "fixture-session",
-                "updatedAt": 0,
-                "running": false,
-                "blank": false,
-                "projections": {"title": "Fixture session"},
-            })];
-            items.extend(created.iter().map(|id| {
-                serde_json::json!({
-                    "agentAvailable": true,
-                    "sessionId": id,
-                    "updatedAt": 0,
-                    "running": false,
-                    "blank": false,
-                    "projections": {"title": "Created session"},
-                })
-            }));
+            let mut items: Vec<Value> = pages.keys().map(|id| session_item(id, None)).collect();
+            items.extend(created.iter().map(|id| session_item(id, Some(()))));
             serde_json::json!({"items": items})
         }
         "session/create" => {
@@ -196,13 +231,38 @@ fn response_value(method: &str, created: &mut Vec<String>) -> Value {
                 "agentPreset": null,
             })
         }
+        "session/page" => {
+            let request = payload
+                .get("request")
+                .or_else(|| payload.get("args").and_then(|args| args.get("request")));
+            let session_id = request
+                .and_then(|request| request.get("address"))
+                .and_then(|address| address.get("sessionId"))
+                .and_then(Value::as_str)
+                .unwrap_or("fixture-session");
+            let before = request
+                .and_then(|request| request.get("beforeSeq"))
+                .and_then(Value::as_i64);
+            let all = pages.get(session_id).cloned().unwrap_or_default();
+            let mut visible: Vec<Value> = match before {
+                Some(before) => all
+                    .iter()
+                    .filter(|event| event["seq"].as_i64().unwrap_or_default() < before)
+                    .cloned()
+                    .collect(),
+                None => all.clone(),
+            };
+            let has_more = visible.len() > page_limit;
+            if has_more {
+                visible = visible.split_off(visible.len() - page_limit);
+            }
+            let records: Vec<Value> = visible
+                .into_iter()
+                .map(|event| serde_json::json!({"type": "event", "event": event}))
+                .collect();
+            serde_json::json!({"records": records, "hasMore": has_more})
+        }
         "session/prompt" => serde_json::json!({"accepted": true}),
-        "session/page" => serde_json::json!({
-            "records": [
-                {"type": "event", "event": user_record(1, "Xin chào từ fixture")},
-            ],
-            "hasMore": false,
-        }),
         "model/catalog" => serde_json::json!({
             "default": {"provider": "fixture", "model": "fixture-model"},
             "routableProviders": ["fixture"],
@@ -217,10 +277,28 @@ fn response_value(method: &str, created: &mut Vec<String>) -> Value {
     }
 }
 
+/// One listed Session row; projection titles keep the identity visible in tests.
+fn session_item(session_id: &str, created: Option<()>) -> Value {
+    let title = if created.is_some() {
+        "Created session"
+    } else {
+        session_id
+    };
+    serde_json::json!({
+        "agentAvailable": true,
+        "sessionId": session_id,
+        "updatedAt": 0,
+        "running": false,
+        "blank": false,
+        "projections": {"title": title},
+    })
+}
+
 /// Builds the shipped app against the fixture Host and mux with deterministic state.
 ///
 /// @returns The app plus the sender that feeds its fixture Remote Stream mux.
-fn fixture(url: &str) -> (DesktopApp, mpsc::Sender<Value>) {
+fn fixture(host: &FixtureHost) -> (DesktopApp, mpsc::Sender<Value>) {
+    let url = &host.url;
     let directory = std::env::temp_dir().join(format!("dsh-kittest-{}", std::process::id()));
     std::fs::create_dir_all(&directory).expect("fixture preferences directory");
     let mut app = DesktopApp::new(ShellServices {
@@ -238,18 +316,22 @@ fn fixture(url: &str) -> (DesktopApp, mpsc::Sender<Value>) {
     app.auto_connect = false;
     // Skip the fontconfig scan: the harness asserts layout, not installed fonts.
     app.font_catalog_snapshot = Some(fonts::FontCatalog::default());
-    app.sessions = vec![SessionSummary {
-        agent_available: true,
-        format_status: None,
-        session_id: "fixture-session".to_owned(),
-        updated_at: 0,
-        running: false,
-        blank: false,
-        parent_session_id: None,
-        origin: None,
-        cwd: None,
-        projections: Some(serde_json::json!({"title": "Fixture session"})),
-    }];
+    app.sessions = host
+        .session_ids()
+        .into_iter()
+        .map(|session_id| SessionSummary {
+            agent_available: true,
+            format_status: None,
+            projections: Some(serde_json::json!({"title": session_id})),
+            updated_at: 0,
+            running: false,
+            blank: false,
+            parent_session_id: None,
+            origin: None,
+            cwd: None,
+            session_id,
+        })
+        .collect();
     app.session_title = "Fixture session".to_owned();
     app.model_selection = Some(ModelSelection {
         provider: "fixture".to_owned(),
@@ -279,6 +361,50 @@ fn assistant_record(seq: i64, text: &str) -> Value {
     })
 }
 
+fn tool_call_record(seq: i64, name: &str, arguments: &str) -> Value {
+    serde_json::json!({
+        "type": "assistant/message",
+        "seq": seq,
+        "time": 0,
+        "data": {"content": [{
+            "type": "tool-call",
+            "name": name,
+            "callId": format!("call-{seq}"),
+            "arguments": arguments,
+        }]},
+    })
+}
+
+fn tool_result_record(seq: i64, text: &str) -> Value {
+    serde_json::json!({
+        "type": "tool/result",
+        "seq": seq,
+        "time": 0,
+        "data": {"message": {"isError": false, "content": [{"type": "text", "text": text}]}},
+    })
+}
+
+/// A snapshot carrying backlog records, as `session/follow` sends first.
+fn snapshot_with(records: Vec<Value>) -> Value {
+    let frames: Vec<Value> = records
+        .into_iter()
+        .map(|event| serde_json::json!({"type": "event", "event": event}))
+        .collect();
+    serde_json::json!({
+        "type": "snapshot",
+        "header": {
+            "version": 1,
+            "id": "fixture-session",
+            "createdAt": 0,
+            "isSeeded": false,
+        },
+        "cursor": 0,
+        "records": frames,
+        "hasMore": false,
+        "projections": {},
+    })
+}
+
 /// An empty `session/follow` snapshot, which a follow stream sends first.
 fn snapshot_frame() -> Value {
     serde_json::json!({
@@ -302,6 +428,24 @@ fn assistant_frame(seq: i64, text: &str) -> Value {
         "type": "event",
         "event": assistant_record(seq, text),
     })
+}
+
+/// Opens a Session through the sidebar and lets its load snapshot through.
+fn open_session(
+    harness: &mut Harness<'_, DesktopApp>,
+    frames: &mpsc::Sender<Value>,
+    label: &str,
+    backlog: Vec<Value>,
+    expected_rows: usize,
+) {
+    harness.get_by_label_contains(label).click();
+    harness.run_steps(2);
+    // Send unconditionally: the load stream may already have its snapshot from
+    // the mux, and a duplicate merge changes nothing.
+    frames.send(snapshot_with(backlog)).expect("load snapshot");
+    pump(harness, "history renders", |app| {
+        app.transcript.rows().len() >= expected_rows
+    });
 }
 
 /// Runs frames until `condition` holds, so worker threads can settle.
@@ -342,7 +486,11 @@ fn harness(app: DesktopApp, width: f32, height: f32) -> Harness<'static, Desktop
 #[test]
 fn semantic_create_compose_send_and_decide() {
     let host = FixtureHost::start();
-    let (mut app, frames) = fixture(&host.url);
+    host.set_page(
+        "fixture-session",
+        vec![user_record(1, "Xin chào từ fixture")],
+    );
+    let (mut app, frames) = fixture(&host);
     let (command_sender, command_receiver) = mpsc::channel();
     app.approval_commands = Some(command_sender);
     let (approval_sender, approval_receiver) = mpsc::channel();
@@ -352,7 +500,7 @@ fn semantic_create_compose_send_and_decide() {
     harness.run_steps(5);
 
     // Selecting the fixture Session opens its follow stream and loads the page.
-    harness.get_by_label_contains("Fixture session").click();
+    harness.get_by_label_contains("fixture-session").click();
     harness.run_steps(3);
     // The follow stream opens during load; feed it only once it exists.
     pump(&mut harness, "the Session page starts loading", |app| {
@@ -459,12 +607,160 @@ fn semantic_create_compose_send_and_decide() {
 }
 
 #[test]
+fn opening_an_old_session_projects_history_into_the_transcript() {
+    let host = FixtureHost::start();
+    host.set_page(
+        "old-session",
+        vec![
+            user_record(1, "Câu hỏi cũ"),
+            tool_call_record(2, "shell", "{\"command\":\"ls\"}"),
+            tool_result_record(3, "ls output"),
+            assistant_record(4, "Câu trả lời cũ"),
+        ],
+    );
+    let (app, frames) = fixture(&host);
+    let mut harness = harness(app, 1280.0, 860.0);
+    harness.run_steps(5);
+
+    open_session(&mut harness, &frames, "old-session", Vec::new(), 4);
+
+    let rows = harness.state().transcript.rows();
+    assert_eq!(
+        rows.iter().map(|row| row.seq).collect::<Vec<_>>(),
+        [1, 2, 3, 4]
+    );
+    assert!(rows.iter().any(|row| row.kind == RowKind::User));
+    assert!(rows.iter().any(|row| row.kind == RowKind::Assistant));
+    assert!(rows
+        .iter()
+        .any(|row| row.kind == RowKind::ToolResult && row.text.contains("ls output")));
+    // The history is on screen through the same renderer live events use.
+    assert!(harness.query_by_label_contains("Câu trả lời cũ").is_some());
+    assert!(harness.query_by_label_contains("ls output").is_some());
+}
+
+#[test]
+fn a_stream_snapshot_during_load_merges_in_sequence_order() {
+    let host = FixtureHost::start();
+    host.set_page(
+        "interleaved",
+        vec![user_record(1, "một"), assistant_record(3, "ba")],
+    );
+    let (app, frames) = fixture(&host);
+    let mut harness = harness(app, 1280.0, 860.0);
+    harness.run_steps(5);
+
+    // The follow snapshot arrives while the history page is in flight and
+    // carries events the page does not (2 and 4), so both sources must merge
+    // into one ordered log.
+    open_session(
+        &mut harness,
+        &frames,
+        "interleaved",
+        vec![user_record(2, "hai"), assistant_record(4, "bốn")],
+        4,
+    );
+
+    let rows = harness.state().transcript.rows();
+    assert_eq!(
+        rows.iter().map(|row| row.seq).collect::<Vec<_>>(),
+        [1, 2, 3, 4]
+    );
+    assert_eq!(
+        rows.iter().map(|row| row.text.as_str()).collect::<Vec<_>>(),
+        ["một", "hai", "ba", "bốn"]
+    );
+}
+
+#[test]
+fn switching_sessions_replaces_the_transcript() {
+    let host = FixtureHost::start();
+    host.set_page(
+        "session-a",
+        vec![user_record(1, "A một"), assistant_record(2, "A hai")],
+    );
+    host.set_page(
+        "session-b",
+        vec![user_record(10, "B một"), assistant_record(11, "B hai")],
+    );
+    let (app, frames) = fixture(&host);
+    let mut harness = harness(app, 1280.0, 860.0);
+    harness.run_steps(5);
+
+    open_session(&mut harness, &frames, "session-a", Vec::new(), 2);
+    assert!(harness.query_by_label_contains("A hai").is_some());
+
+    open_session(&mut harness, &frames, "session-b", Vec::new(), 2);
+    let rows = harness.state().transcript.rows();
+    assert_eq!(rows.iter().map(|row| row.seq).collect::<Vec<_>>(), [10, 11]);
+    assert!(harness.query_by_label_contains("B hai").is_some());
+    assert!(harness.query_by_label_contains("A hai").is_none());
+}
+
+#[test]
+fn long_history_keeps_the_newest_rows_in_order() {
+    let host = FixtureHost::start();
+    host.set_page_limit(5_000);
+    host.set_page(
+        "long-session",
+        (1..=2_100)
+            .map(|seq| user_record(seq, &format!("row {seq}")))
+            .collect(),
+    );
+    let (app, frames) = fixture(&host);
+    let mut harness = harness(app, 1280.0, 860.0);
+    harness.run_steps(5);
+
+    open_session(&mut harness, &frames, "long-session", Vec::new(), 2_000);
+
+    let rows = harness.state().transcript.rows();
+    assert_eq!(rows.len(), crate::transcript::MAX_ROWS);
+    assert_eq!(rows.first().map(|row| row.seq), Some(101));
+    assert_eq!(rows.last().map(|row| row.seq), Some(2_100));
+    assert!(rows.windows(2).all(|pair| pair[0].seq < pair[1].seq));
+}
+
+#[test]
+fn pagination_prepends_older_history_without_duplicates() {
+    let host = FixtureHost::start();
+    host.set_page(
+        "paged-session",
+        (1..=120)
+            .map(|seq| user_record(seq, &format!("row {seq}")))
+            .collect(),
+    );
+    let (app, frames) = fixture(&host);
+    let mut harness = harness(app, 1280.0, 860.0);
+    harness.run_steps(5);
+
+    open_session(&mut harness, &frames, "paged-session", Vec::new(), 50);
+    assert_eq!(
+        harness.state().transcript.oldest_seq(),
+        Some(71),
+        "the first page carries the newest window"
+    );
+
+    for expected_rows in [100_usize, 120] {
+        harness.get_by_label("Load older events").click();
+        harness.run_steps(3);
+        pump(&mut harness, "older history merges", |app| {
+            app.transcript.rows().len() == expected_rows
+        });
+    }
+    let rows = harness.state().transcript.rows();
+    assert_eq!(rows.first().map(|row| row.seq), Some(1));
+    assert_eq!(rows.last().map(|row| row.seq), Some(120));
+    assert!(rows.windows(2).all(|pair| pair[0].seq < pair[1].seq));
+}
+
+#[test]
 fn layout_stays_inside_three_viewports() {
     let host = FixtureHost::start();
     let mut report = serde_json::Map::new();
     let mut viewports = Vec::new();
     for (width, height) in [(1280.0_f32, 860.0_f32), (1440.0, 900.0), (1920.0, 1080.0)] {
-        let (mut app, _frames) = fixture(&host.url);
+        host.set_page("fixture-session", vec![user_record(1, "layout")]);
+        let (mut app, _frames) = fixture(&host);
         app.selected_session = Some("fixture-session".to_owned());
         let mut harness = harness(app, width, height);
         harness.run_ok();
@@ -513,7 +809,8 @@ fn layout_stays_inside_three_viewports() {
 /// snapshot results in a single owner.
 fn snapshot_empty_shell(width: f32, height: f32, name: &str) {
     let host = FixtureHost::start();
-    let (mut app, _frames) = fixture(&host.url);
+    host.set_page("fixture-session", Vec::new());
+    let (mut app, _frames) = fixture(&host);
     app.sessions.clear();
     app.selected_session = None;
     app.transcript = Transcript::default();
