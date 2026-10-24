@@ -3,6 +3,7 @@
 mod composer_input;
 mod dialog;
 mod document_preview;
+mod fonts;
 mod host;
 mod layout;
 mod question_card;
@@ -960,6 +961,9 @@ struct DesktopApp {
     feedback_status: Option<String>,
     settings_panel: SettingsPanel,
     ui_preferences_path: PathBuf,
+    font_catalog: fonts::SharedCatalog,
+    font_catalog_snapshot: Option<fonts::FontCatalog>,
+    applied_fonts: Option<ui_preferences::FontSettings>,
     ui_preferences: UiPreferences,
     applied_ui_preferences: Option<UiPreferences>,
     ui_preferences_panel: UiPreferencesPanel,
@@ -1122,6 +1126,9 @@ impl DesktopApp {
             ui_preferences_path,
             ui_preferences,
             applied_ui_preferences: None,
+            font_catalog: fonts::shared_catalog(),
+            font_catalog_snapshot: None,
+            applied_fonts: None,
             ui_preferences_panel,
             settings_description: None,
             settings_loading: false,
@@ -1394,6 +1401,24 @@ impl DesktopApp {
     fn apply_ui_preferences(&mut self, ctx: &egui::Context) {
         ui_preferences::apply(ctx, &self.ui_preferences);
         self.applied_ui_preferences = Some(self.ui_preferences.clone());
+        self.apply_fonts(ctx);
+    }
+
+    /// Rebuilds the egui font stack once the installed-family scan is ready.
+    ///
+    /// The scan runs off the first frame, so startup applies the bundled faces
+    /// and this installs the chosen families as soon as the catalog arrives.
+    fn apply_fonts(&mut self, ctx: &egui::Context) {
+        let Some(catalog) = self.font_catalog_snapshot.clone() else {
+            return;
+        };
+        if self.applied_fonts.as_ref() == Some(&self.ui_preferences.fonts) {
+            return;
+        }
+        for warning in fonts::install(ctx, &self.ui_preferences.fonts, &catalog) {
+            eprintln!("dsh: {warning}");
+        }
+        self.applied_fonts = Some(self.ui_preferences.fonts.clone());
     }
 
     fn refresh_models(&mut self) {
@@ -3505,6 +3530,14 @@ impl eframe::App for DesktopApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if self.font_catalog_snapshot.is_none() {
+            self.font_catalog_snapshot = fonts::catalog_snapshot(&self.font_catalog);
+            if self.font_catalog_snapshot.is_none() {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(200));
+            }
+            self.apply_fonts(ui.ctx());
+        }
         if self.applied_ui_preferences.as_ref() != Some(&self.ui_preferences) {
             self.apply_ui_preferences(ui.ctx());
         }
@@ -4061,7 +4094,11 @@ impl eframe::App for DesktopApp {
                 return;
             }
             if self.show_settings {
-                if let Some(action) = self.ui_preferences_panel.ui(ui, &self.ui_preferences_path) {
+                if let Some(action) = self.ui_preferences_panel.ui(
+                    ui,
+                    &self.ui_preferences_path,
+                    self.font_catalog_snapshot.as_ref(),
+                ) {
                     self.handle_ui_preferences_action(action, ui.ctx());
                 }
                 ui.separator();
@@ -4899,46 +4936,6 @@ fn decode_preview_image(
         size: [rgba.width() as usize, rgba.height() as usize],
         rgba: rgba.into_raw(),
     }))
-}
-
-/// Adds the system fonts that cover scripts the bundled faces lack.
-///
-/// egui ships Latin-only faces, so Vietnamese precomposed letters and other
-/// scripts render as missing-glyph boxes. The fallbacks are appended, so the
-/// bundled faces still shape everything they cover.
-fn install_font_fallbacks(context: &egui::Context) {
-    const PROPORTIONAL: [&str; 4] = [
-        "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
-        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
-        "/usr/share/fonts/TTF/DejaVuSans.ttf",
-        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-    ];
-    const MONOSPACE: [&str; 4] = [
-        "/usr/share/fonts/liberation/LiberationMono-Regular.ttf",
-        "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
-        "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-        "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
-    ];
-    let mut fonts = egui::FontDefinitions::default();
-    for (family, candidates) in [
-        (egui::FontFamily::Proportional, PROPORTIONAL),
-        (egui::FontFamily::Monospace, MONOSPACE),
-    ] {
-        for path in candidates {
-            let Ok(bytes) = std::fs::read(path) else {
-                continue;
-            };
-            let name = format!("system-{}", path.rsplit('/').next().unwrap_or("font"));
-            fonts
-                .font_data
-                .insert(name.clone(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
-            if let Some(chain) = fonts.families.get_mut(&family) {
-                chain.push(name);
-            }
-            break;
-        }
-    }
-    context.set_fonts(fonts);
 }
 
 /// Model the probe requests: the DeepSeek API-key route when it exists, else the catalog default.
@@ -5794,8 +5791,7 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "DeepSeek Harness",
         options,
-        Box::new(move |creation_context| {
-            install_font_fallbacks(&creation_context.egui_ctx);
+        Box::new(move |_creation_context| {
             Ok(Box::new(DesktopApp::new(
                 app_quitting,
                 app_show,
