@@ -31,7 +31,7 @@ host_package="$tree/dsh/node_modules/@deepseek-ai/dsh-desktop-host/package.json"
 for required in "$bin" "$mock" "$node" "$tree/bin/desktop-host" \
   "$tree/runtime/primary-runtime/dependencies/node/bin/node" \
   "$tree/runtime/primary-runtime/dependencies/pnpm/bin/pnpm.mjs" "$host_package" \
-  "$tree/project/package.json" "$tree/project/cordis.yml"; do
+  "$tree/project/package.json"; do
   [ -e "$required" ] || { echo "native-journey-probe: missing input: $required" >&2; exit 1; }
 done
 [ -x "$bin" ] || { echo "native-journey-probe: not executable: $bin" >&2; exit 1; }
