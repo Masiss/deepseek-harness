@@ -50,6 +50,7 @@ pub struct Transcript {
     rows: Vec<TranscriptRow>,
     applied: BTreeSet<i64>,
     bytes: usize,
+    has_cjk: bool,
 }
 
 impl Transcript {
@@ -58,6 +59,7 @@ impl Transcript {
         self.rows.clear();
         self.applied.clear();
         self.bytes = 0;
+        self.has_cjk = false;
     }
 
     /// Merges durable events in sequence order, ignoring any already projected.
@@ -85,6 +87,7 @@ impl Transcript {
             let at = self.rows.partition_point(|row| row.seq < event.seq);
             for (offset, row) in project(event).into_iter().enumerate() {
                 self.bytes += row.text.len();
+                self.has_cjk |= crate::fonts::contains_cjk(&row.text);
                 self.rows.insert(at + offset, row);
             }
         }
@@ -109,6 +112,11 @@ impl Transcript {
     /// Sequence of the oldest retained event, if any.
     pub fn oldest_seq(&self) -> Option<i64> {
         self.rows.first().map(|row| row.seq)
+    }
+
+    /// Whether any projected row needed a CJK face.
+    pub fn has_cjk(&self) -> bool {
+        self.has_cjk
     }
 
     /// True before any row was projected.
@@ -503,6 +511,15 @@ mod tests {
             frame_type: String::new(),
             event: message(seq, text),
         }
+    }
+
+    #[test]
+    fn records_when_projected_text_needs_a_cjk_face() {
+        let mut transcript = Transcript::default();
+        transcript.merge([&message(1, "việt nam")]);
+        assert!(!transcript.has_cjk());
+        transcript.merge([&message(2, "中文")]);
+        assert!(transcript.has_cjk());
     }
 
     #[test]

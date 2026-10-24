@@ -951,7 +951,7 @@ struct DesktopApp {
     streams: Option<RemoteStreamMux>,
     sessions: Vec<SessionSummary>,
     selected_session: Option<String>,
-    session_page: Option<SessionPage>,
+    page_has_more: bool,
     page_loading: bool,
     page_before_seq: Option<i64>,
     page_error: Option<String>,
@@ -991,6 +991,7 @@ struct DesktopApp {
     font_catalog: fonts::SharedCatalog,
     font_catalog_snapshot: Option<fonts::FontCatalog>,
     applied_fonts: Option<ui_preferences::FontSettings>,
+    applied_cjk: Option<bool>,
     ui_preferences: UiPreferences,
     applied_ui_preferences: Option<UiPreferences>,
     ui_preferences_panel: UiPreferencesPanel,
@@ -1133,7 +1134,7 @@ impl DesktopApp {
             streams: None,
             sessions: Vec::new(),
             selected_session: None,
-            session_page: None,
+            page_has_more: false,
             page_loading: false,
             page_before_seq: None,
             page_error: None,
@@ -1175,6 +1176,7 @@ impl DesktopApp {
             font_catalog: fonts::shared_catalog(),
             font_catalog_snapshot: None,
             applied_fonts: None,
+            applied_cjk: None,
             ui_preferences_panel,
             settings_description: None,
             settings_loading: false,
@@ -1474,17 +1476,36 @@ impl DesktopApp {
         )
     }
 
+    /// Whether the interface currently needs a CJK fallback face.
+    fn cjk_required(&self) -> bool {
+        self.transcript.has_cjk()
+            || fonts::contains_cjk(&self.chat_text)
+            || fonts::contains_cjk(&self.session_title)
+            || self.sessions.iter().any(|session| {
+                session
+                    .projections
+                    .as_ref()
+                    .and_then(|projections| projections.get("title"))
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(fonts::contains_cjk)
+            })
+    }
+
     fn apply_fonts(&mut self, ctx: &egui::Context) {
         let Some(catalog) = self.font_catalog_snapshot.clone() else {
             return;
         };
-        if self.applied_fonts.as_ref() == Some(&self.ui_preferences.fonts) {
+        let include_cjk = self.cjk_required();
+        if self.applied_fonts.as_ref() == Some(&self.ui_preferences.fonts)
+            && self.applied_cjk == Some(include_cjk)
+        {
             return;
         }
-        for warning in fonts::install(ctx, &self.ui_preferences.fonts, &catalog) {
+        for warning in fonts::install(ctx, &self.ui_preferences.fonts, &catalog, include_cjk) {
             eprintln!("dsh: {warning}");
         }
         self.applied_fonts = Some(self.ui_preferences.fonts.clone());
+        self.applied_cjk = Some(include_cjk);
     }
 
     fn refresh_models(&mut self) {
@@ -1905,7 +1926,7 @@ impl DesktopApp {
         self.schedule_delete_receiver = None;
         self.start_job_list();
         self.start_schedules();
-        self.session_page = None;
+        self.page_has_more = false;
         self.page_receiver = None;
         self.page_through_seq = None;
         self.page_error = None;
@@ -1979,12 +2000,7 @@ impl DesktopApp {
             self.page_error = Some("Select a Session before loading older events".to_owned());
             return;
         };
-        let Some(before_seq) = self
-            .session_page
-            .as_ref()
-            .and_then(|page| page.records.first())
-            .map(|record| record.event.seq)
-        else {
+        let Some(before_seq) = self.transcript.oldest_seq() else {
             self.page_error = Some("No earlier session events are available".to_owned());
             return;
         };
@@ -2291,28 +2307,25 @@ impl DesktopApp {
         self.render_clear_goal_confirmation(ui.ctx());
         ui.separator();
         ui.heading("Recent tasks and plan changes");
-        let work_events: Vec<_> = self
-            .session_page
-            .as_ref()
-            .into_iter()
-            .flat_map(|page| page.records.iter().rev())
-            .filter(|record| {
+        let work_rows: Vec<_> = self
+            .transcript
+            .rows()
+            .iter()
+            .rev()
+            .filter(|row| {
                 matches!(
-                    record.event.event_type.as_str(),
-                    "todo/write" | "goal/change" | "plan/mode"
+                    row.kind,
+                    RowKind::Todo | RowKind::Goal | RowKind::Notice
                 )
             })
             .take(12)
             .collect();
-        if work_events.is_empty() {
+        if work_rows.is_empty() {
             ui.label("Task and plan updates will appear here when the assistant records them.");
         } else {
-            for record in work_events {
-                ui.strong(format!(
-                    "{} · sequence {}",
-                    record.event.event_type, record.event.seq
-                ));
-                ui.label(event_text(&record.event.data));
+            for row in work_rows {
+                ui.strong(format!("{} · sequence {}", row.title, row.seq));
+                ui.label(&row.text);
                 ui.separator();
             }
         }
@@ -3084,38 +3097,26 @@ impl DesktopApp {
                     self.page_through_seq = Some(through_seq);
                     self.transcript.apply_snapshot(&live);
                     let before_seq = self.page_before_seq.take();
-                    self.session_page = Some(match (before_seq, self.session_page.take()) {
-                        (Some(before_seq), Some(current)) => {
-                            let advanced = page
-                                .records
-                                .first()
-                                .is_some_and(|record| record.event.seq < before_seq);
-                            let mut records = page.records;
-                            records.extend(current.records);
-                            records.sort_by_key(|record| record.event.seq);
-                            records.dedup_by_key(|record| record.event.seq);
-                            SessionPage {
-                                records,
-                                has_more: page.has_more && advanced,
-                            }
-                        }
-                        _ => page,
-                    });
-                    // History and live events share one projection: the page
-                    // records merge in sequence order and duplicates are dropped.
-                    let history: Vec<_> = self
-                        .session_page
-                        .as_ref()
-                        .map(|page| {
-                            page.records
-                                .iter()
-                                .map(|record| {
-                                    dsh_client_core::follow::SessionWireEvent::from(&record.event)
-                                })
-                                .collect()
+                    let oldest_incoming = page.records.first().map(|record| record.event.seq);
+                    let advanced = match (before_seq, oldest_incoming) {
+                        (Some(before_seq), Some(seq)) => seq < before_seq,
+                        (None, _) => true,
+                        (Some(_), None) => false,
+                    };
+                    // History and live events share one projection; the page
+                    // is no longer kept as a second copy of the same events.
+                    let history: Vec<_> = page
+                        .records
+                        .iter()
+                        .map(|record| {
+                            dsh_client_core::follow::SessionWireEvent::from(&record.event)
                         })
-                        .unwrap_or_default();
+                        .collect();
+                    for event in &history {
+                        self.record_deliverables(event);
+                    }
                     self.transcript.merge(history.iter());
+                    self.page_has_more = page.has_more && advanced;
                     self.page_loading = false;
                     self.page_error = None;
                     self.page_receiver = None;
@@ -3722,6 +3723,11 @@ impl DesktopApp {
         }
         if self.applied_ui_preferences.as_ref() != Some(&self.ui_preferences) {
             self.apply_ui_preferences(ui.ctx());
+        }
+        // A CJK character anywhere switches the fallback chain on; dropping the
+        // 19 MiB collection when nothing needs it keeps peak memory down.
+        if self.font_catalog_snapshot.is_some() && self.applied_cjk != Some(self.cjk_required()) {
+            self.apply_fonts(ui.ctx());
         }
         self.handle_shortcuts(ui.ctx());
         let mut nav_rail_width = 0.0;
@@ -4644,7 +4650,7 @@ impl DesktopApp {
                     }
                 } else if self.transcript.is_empty() {
                     ui.label("This session has no events");
-                } else if self.session_page.as_ref().is_some_and(|page| page.has_more) {
+                } else if self.page_has_more {
                     if self.page_loading {
                         ui.label("Loading older events…");
                     } else if ui.button("Load older events").clicked() {
@@ -5903,22 +5909,6 @@ fn settings_write_error(error: &Error) -> String {
         Error::Remote { .. } =>
             "Save failed. Draft retained; refresh settings to confirm remote values and review the schema before editing again. No automatic retry was made.".into(),
         _ => "Save outcome unknown. Draft retained; refresh settings to confirm remote values before discarding the draft and editing again. No automatic retry was made.".into(),
-    }
-}
-
-fn event_text(data: &serde_json::Value) -> String {
-    for key in ["text", "message", "content", "name"] {
-        if let Some(text) = data.get(key).and_then(serde_json::Value::as_str) {
-            return text.to_owned();
-        }
-    }
-    let text = data.to_string();
-    let mut chars = text.chars();
-    let preview: String = chars.by_ref().take(240).collect();
-    if chars.next().is_some() {
-        format!("{preview}…")
-    } else {
-        preview
     }
 }
 

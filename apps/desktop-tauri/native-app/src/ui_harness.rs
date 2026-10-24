@@ -375,6 +375,15 @@ fn tool_call_record(seq: i64, name: &str, arguments: &str) -> Value {
     })
 }
 
+fn deliverable_record(seq: i64, path: &str) -> Value {
+    serde_json::json!({
+        "type": "deliverables/presented",
+        "seq": seq,
+        "time": 0,
+        "data": {"files": [{"path": path, "description": "history report"}]},
+    })
+}
+
 fn tool_result_record(seq: i64, text: &str) -> Value {
     serde_json::json!({
         "type": "tool/result",
@@ -507,8 +516,11 @@ fn semantic_create_compose_send_and_decide() {
         app.page_loading
     });
     frames.send(snapshot_frame()).expect("follow snapshot");
-    pump(&mut harness, "the Session page renders", |app| {
-        app.session_page.is_some()
+    pump(&mut harness, "the Session history renders", |app| {
+        app.transcript
+            .rows()
+            .iter()
+            .any(|row| row.text.contains("Xin chào từ fixture"))
     });
     // History arrives through the same page payload the shipped shell renders.
     assert!(harness
@@ -616,18 +628,19 @@ fn opening_an_old_session_projects_history_into_the_transcript() {
             tool_call_record(2, "shell", "{\"command\":\"ls\"}"),
             tool_result_record(3, "ls output"),
             assistant_record(4, "Câu trả lời cũ"),
+            deliverable_record(5, "reports/history.md"),
         ],
     );
     let (app, frames) = fixture(&host);
     let mut harness = harness(app, 1280.0, 860.0);
     harness.run_steps(5);
 
-    open_session(&mut harness, &frames, "old-session", Vec::new(), 4);
+    open_session(&mut harness, &frames, "old-session", Vec::new(), 5);
 
     let rows = harness.state().transcript.rows();
     assert_eq!(
         rows.iter().map(|row| row.seq).collect::<Vec<_>>(),
-        [1, 2, 3, 4]
+        [1, 2, 3, 4, 5]
     );
     assert!(rows.iter().any(|row| row.kind == RowKind::User));
     assert!(rows.iter().any(|row| row.kind == RowKind::Assistant));
@@ -637,6 +650,14 @@ fn opening_an_old_session_projects_history_into_the_transcript() {
     // The history is on screen through the same renderer live events use.
     assert!(harness.query_by_label_contains("Câu trả lời cũ").is_some());
     assert!(harness.query_by_label_contains("ls output").is_some());
+    // History deliverables reach the panel too, not just live frames.
+    assert_eq!(harness.state().deliverables.len(), 1);
+    assert!(
+        harness
+            .query_all_by_label_contains("reports/history.md")
+            .count()
+            >= 1
+    );
 }
 
 #[test]
