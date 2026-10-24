@@ -267,7 +267,8 @@ impl SettingsPanel {
                                         return;
                                     };
                                     ui.label(format!("Draft revision: {}", editor.original.revision));
-                                    ui.add_enabled(!saving, egui::TextEdit::multiline(&mut editor.text).code_editor().desired_rows(12).desired_width(f32::INFINITY));
+                                    let json_editor = ui.add_enabled(!saving, egui::TextEdit::multiline(&mut editor.text).code_editor().desired_rows(12).desired_width(f32::INFINITY));
+                                    crate::accessible_label(&json_editor, "Host settings JSON");
                                     let mut next_message = None;
                                     let mut discard = false;
                                     ui.horizontal(|ui| {

@@ -71,6 +71,22 @@ pub struct Host {
 }
 
 impl Host {
+    /// A handle with a known launch URL and no child process.
+    ///
+    /// @param launch_url - Authenticated attach URL the shell would have read from the Host.
+    /// @returns A handle whose shutdown has nothing to terminate.
+    #[cfg(test)]
+    pub fn for_test(launch_url: &str) -> Self {
+        Self {
+            launch_url: Some(launch_url.to_owned()),
+            host_url: None,
+            error: None,
+            child: None,
+            stdin: None,
+            events: None,
+        }
+    }
+
     /// Starts the Host and waits briefly for its launch URL.
     pub fn start() -> Self {
         let Some(config) = HostConfig::from_env() else {

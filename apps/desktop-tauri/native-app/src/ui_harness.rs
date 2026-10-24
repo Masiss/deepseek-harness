@@ -24,16 +24,212 @@ struct FixtureRequest {
     payload: Value,
 }
 
+/// Mutable fixture Host state; the worker answers one request at a time.
+struct FixtureState {
+    created: Vec<String>,
+    pages: BTreeMap<String, Vec<Value>>,
+    page_limit: usize,
+    /// One redacted settings namespace, or `None` before a describe.
+    settings: Option<Value>,
+    fail_settings_write: bool,
+    fail_install: bool,
+    /// PDF bytes an Office conversion returns.
+    office_pdf: Option<Vec<u8>>,
+}
+
+impl Default for FixtureState {
+    fn default() -> Self {
+        Self {
+            created: Vec::new(),
+            pages: BTreeMap::new(),
+            page_limit: PAGE_LIMIT,
+            settings: None,
+            fail_settings_write: false,
+            fail_install: false,
+            office_pdf: None,
+        }
+    }
+}
+
+impl FixtureState {
+    /// Deterministic reply for one method, or an RPC error the UI must report.
+    fn reply(&mut self, method: &str, payload: &Value) -> Result<Value, (String, String)> {
+        // The transport wraps call arguments under `args`.
+        let payload = payload.get("args").unwrap_or(payload);
+        match method {
+            "session/list" => {
+                let mut items: Vec<Value> = self
+                    .pages
+                    .keys()
+                    .map(|id| session_item(id, None))
+                    .collect();
+                items.extend(self.created.iter().map(|id| session_item(id, Some(()))));
+                Ok(serde_json::json!({"items": items}))
+            }
+            "session/create" => {
+                self.created.push("fixture-created".to_owned());
+                Ok(serde_json::json!({
+                    "sessionId": "fixture-created",
+                    "agentPreset": null,
+                }))
+            }
+            "session/page" => {
+                let request = payload
+                    .get("request")
+                    .or_else(|| payload.get("args").and_then(|args| args.get("request")));
+                let session_id = request
+                    .and_then(|request| request.get("address"))
+                    .and_then(|address| address.get("sessionId"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("fixture-session");
+                let before = request
+                    .and_then(|request| request.get("beforeSeq"))
+                    .and_then(Value::as_i64);
+                let all = self.pages.get(session_id).cloned().unwrap_or_default();
+                let mut visible: Vec<Value> = match before {
+                    Some(before) => all
+                        .iter()
+                        .filter(|event| event["seq"].as_i64().unwrap_or_default() < before)
+                        .cloned()
+                        .collect(),
+                    None => all.clone(),
+                };
+                let has_more = visible.len() > self.page_limit;
+                if has_more {
+                    visible = visible.split_off(visible.len() - self.page_limit);
+                }
+                let records: Vec<Value> = visible
+                    .into_iter()
+                    .map(|event| serde_json::json!({"type": "event", "event": event}))
+                    .collect();
+                Ok(serde_json::json!({"records": records, "hasMore": has_more}))
+            }
+            "session/prompt" => Ok(serde_json::json!({"accepted": true})),
+            "model/catalog" => Ok(serde_json::json!({
+                "default": {"provider": "fixture", "model": "fixture-model"},
+                "routableProviders": ["fixture"],
+                "groups": [{
+                    "id": "fixture",
+                    "name": "Fixture provider",
+                    "models": [{"id": "fixture-model", "name": "Fixture model"}],
+                }],
+                "failures": [],
+            })),
+            "settings/describe" => Ok(serde_json::json!({
+                "writable": true,
+                "hasDocument": true,
+                "namespaces": self.settings.iter().cloned().collect::<Vec<_>>(),
+            })),
+            "settings/mutate" => {
+                if self.fail_settings_write {
+                    return Err((
+                        "SETTINGS_CONFLICT".to_owned(),
+                        "another writer moved the revision".to_owned(),
+                    ));
+                }
+                let Some(namespace) = self.settings.as_mut() else {
+                    return Err(("SETTINGS_MISSING".to_owned(), "no namespace".to_owned()));
+                };
+                let user = namespace
+                    .get_mut("user")
+                    .map(|user| {
+                        if !user.is_object() {
+                            *user = serde_json::json!({});
+                        }
+                        user
+                    })
+                    .expect("fixture namespace user");
+                for op in payload["ops"].as_array().into_iter().flatten() {
+                    let path: Vec<&str> = op["path"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(Value::as_str)
+                        .collect();
+                    match op["op"].as_str() {
+                        Some("set") => set_path(user, &path, op["value"].clone()),
+                        Some("unset") => unset_path(user, &path),
+                        _ => {}
+                    }
+                }
+                let value = user.clone();
+                namespace["value"] = value;
+                let revision = namespace["revision"].as_u64().unwrap_or(0) + 1;
+                namespace["revision"] = serde_json::json!(revision);
+                Ok(namespace.clone())
+            }
+            "pluginMarket/listIndexes" => Ok(serde_json::json!([{
+                "url": "https://market.fixture/index.json",
+                "name": "Fixture market",
+            }])),
+            "pluginMarket/search" => Ok(serde_json::json!({"entries": [{
+                "name": "fixture-plugin",
+                "description": "Fixture bundle",
+                "versions": [{"version": "1.0.0", "install": {"spec": "fixture-plugin@1.0.0"}}],
+            }]})),
+            "pluginManager/inspect" => Ok(serde_json::json!({"status": "accepted"})),
+            "pluginManager/installBundle" => {
+                if self.fail_install {
+                    return Err((
+                        "PLUGIN_INSTALL_FAILED".to_owned(),
+                        "the fixture refused this install".to_owned(),
+                    ));
+                }
+                Ok(serde_json::json!({"application": "installed"}))
+            }
+            "pluginInventory/list" => Ok(serde_json::json!({"entries": []})),
+            "officeToPdf/render" => Ok(serde_json::json!({
+                "data": self.office_pdf.clone().unwrap_or_default(),
+                "missingFonts": [],
+            })),
+            _ => Ok(Value::Null),
+        }
+    }
+}
+
+/// Writes one path operation into a JSON document.
+fn set_path(target: &mut Value, path: &[&str], value: Value) {
+    let Some((head, rest)) = path.split_first() else {
+        *target = value;
+        return;
+    };
+    if !target.is_object() {
+        *target = serde_json::json!({});
+    }
+    let map = target.as_object_mut().expect("object just ensured");
+    if rest.is_empty() {
+        map.insert((*head).to_owned(), value);
+        return;
+    }
+    set_path(map.entry((*head).to_owned()).or_insert(serde_json::json!({})), rest, value);
+}
+
+/// Removes one path from a JSON document.
+fn unset_path(target: &mut Value, path: &[&str]) {
+    let Some((head, rest)) = path.split_first() else {
+        return;
+    };
+    let Some(map) = target.as_object_mut() else {
+        return;
+    };
+    if rest.is_empty() {
+        map.remove(*head);
+        return;
+    }
+    if let Some(nested) = map.get_mut(*head) {
+        unset_path(nested, rest);
+    }
+}
+
 /// In-process Host that answers the RPCs a windowless test needs.
 struct FixtureHost {
     url: String,
     requests: Arc<Mutex<Vec<FixtureRequest>>>,
+    /// Host attach handshakes the interface attempted.
+    connect_attempts: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
-    /// Durable events per Session, oldest first.
-    pages: Arc<Mutex<BTreeMap<String, Vec<Value>>>>,
-    /// Most events one `session/page` reply carries.
-    page_limit: Arc<AtomicUsize>,
+    state: Arc<Mutex<FixtureState>>,
 }
 
 impl FixtureHost {
@@ -47,75 +243,108 @@ impl FixtureHost {
             listener.local_addr().expect("fixture address")
         );
         let requests = Arc::new(Mutex::new(Vec::new()));
+        let connect_attempts = Arc::new(AtomicUsize::new(0));
         let stop = Arc::new(AtomicBool::new(false));
-        let pages = Arc::new(Mutex::new(BTreeMap::new()));
-        let worker_pages = Arc::clone(&pages);
-        let page_limit = Arc::new(AtomicUsize::new(PAGE_LIMIT));
-        let worker_limit = Arc::clone(&page_limit);
+        let state = Arc::new(Mutex::new(FixtureState::default()));
         let worker_requests = Arc::clone(&requests);
+        let worker_attempts = Arc::clone(&connect_attempts);
+        let worker_state = Arc::clone(&state);
         let worker_stop = Arc::clone(&stop);
         let thread = std::thread::spawn(move || {
-            // A created Session joins later listings, as a real Host would report.
-            let mut created: Vec<String> = Vec::new();
             while !worker_stop.load(Ordering::Acquire) {
-                match listener.accept() {
-                    Ok((stream, _)) => match read_request(&stream) {
-                        Some(request) => {
-                            let page_snapshot = worker_pages.lock().expect("fixture pages").clone();
-                            let reply = response_value(
-                                &request.method,
-                                &request.payload,
-                                &mut created,
-                                &page_snapshot,
-                                worker_limit.load(Ordering::Acquire),
-                            );
-                            let rpc_id = request.rpc_id.clone();
-                            worker_requests
-                                .lock()
-                                .expect("fixture requests")
-                                .push(request);
-                            send_response(stream, &rpc_id, reply);
-                        }
-                        None => drop(stream),
-                    },
+                let (stream, _) = match listener.accept() {
+                    Ok(accepted) => accepted,
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         std::thread::sleep(std::time::Duration::from_millis(5));
+                        continue;
                     }
                     Err(_) => break,
+                };
+                let Some(call) = read_call(&stream) else {
+                    drop(stream);
+                    continue;
+                };
+                if call.head.starts_with("get /connect") {
+                    // A refused attach: the interface must report the failure,
+                    // never claim it reconnected.
+                    worker_attempts.fetch_add(1, Ordering::AcqRel);
+                    send_status(stream, 503);
+                    continue;
                 }
+                let Some(request) = call.rpc else {
+                    drop(stream);
+                    continue;
+                };
+                let rpc_id = request.rpc_id.clone();
+                let reply = {
+                    let mut state = worker_state.lock().expect("fixture state");
+                    state.reply(&request.method, &request.payload)
+                };
+                worker_requests
+                    .lock()
+                    .expect("fixture requests")
+                    .push(request);
+                send_response(stream, &rpc_id, reply);
             }
         });
         Self {
             url,
             requests,
+            connect_attempts,
             stop,
             thread: Some(thread),
-            pages,
-            page_limit,
+            state,
         }
     }
 
     /// Sets how many events one page reply carries.
     fn set_page_limit(&self, limit: usize) {
-        self.page_limit.store(limit, Ordering::Release);
+        self.state.lock().expect("fixture state").page_limit = limit;
     }
 
     /// Publishes one Session's durable history.
     fn set_page(&self, session_id: &str, records: Vec<Value>) {
-        self.pages
+        self.state
             .lock()
-            .expect("fixture pages")
+            .expect("fixture state")
+            .pages
             .insert(session_id.to_owned(), records);
+    }
+
+    /// Publishes the redacted settings namespace `settings/describe` returns.
+    fn set_settings_namespace(&self, namespace: Value) {
+        self.state.lock().expect("fixture state").settings = Some(namespace);
+    }
+
+    /// Makes the next settings write fail with a revision conflict.
+    fn fail_settings_write(&self) {
+        self.state.lock().expect("fixture state").fail_settings_write = true;
+    }
+
+    /// Makes bundle installation fail after inspection succeeds.
+    fn fail_install(&self) {
+        self.state.lock().expect("fixture state").fail_install = true;
+    }
+
+    /// Sets the PDF bytes an Office conversion returns.
+    fn set_office_pdf(&self, pdf: Vec<u8>) {
+        self.state.lock().expect("fixture state").office_pdf = Some(pdf);
     }
 
     /// Session ids the fixture lists, in order.
     fn session_ids(&self) -> Vec<String> {
-        self.pages
+        self.state
             .lock()
-            .expect("fixture pages")
+            .expect("fixture state")
+            .pages
             .keys()
             .cloned()
             .collect()
+    }
+
+    /// Host attach attempts the interface made.
+    fn connect_attempts(&self) -> usize {
+        self.connect_attempts.load(Ordering::Acquire)
     }
 
     /// Waits until the interface has issued `method`, then returns its payload.
@@ -153,7 +382,13 @@ impl Drop for FixtureHost {
     }
 }
 
-fn read_request(stream: &std::net::TcpStream) -> Option<FixtureRequest> {
+/// One HTTP call, with the RPC envelope when the call carried one.
+struct FixtureCall {
+    head: String,
+    rpc: Option<FixtureRequest>,
+}
+
+fn read_call(stream: &std::net::TcpStream) -> Option<FixtureCall> {
     let mut stream = stream;
     use std::io::Read;
     let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
@@ -169,8 +404,8 @@ fn read_request(stream: &std::net::TcpStream) -> Option<FixtureRequest> {
             break position + 4;
         }
     };
-    let headers = String::from_utf8_lossy(&buffer[..header_end]).to_lowercase();
-    let length: usize = headers
+    let head = String::from_utf8_lossy(&buffer[..header_end]).to_lowercase();
+    let length: usize = head
         .lines()
         .find_map(|line| line.strip_prefix("content-length:"))
         .and_then(|value| value.trim().parse().ok())
@@ -183,20 +418,33 @@ fn read_request(stream: &std::net::TcpStream) -> Option<FixtureRequest> {
         buffer.extend_from_slice(&chunk[..read]);
     }
     let body = &buffer[header_end..buffer.len().min(header_end + length)];
-    let envelope: Value = serde_json::from_slice(body).ok()?;
-    Some(FixtureRequest {
-        rpc_id: envelope.get("rpcId")?.as_str()?.to_owned(),
-        method: envelope.get("method")?.as_str()?.to_owned(),
-        payload: envelope.get("payload").cloned().unwrap_or(Value::Null),
-    })
+    let rpc = serde_json::from_slice::<Value>(body).ok().and_then(|envelope| {
+        Some(FixtureRequest {
+            rpc_id: envelope.get("rpcId")?.as_str()?.to_owned(),
+            method: envelope.get("method")?.as_str()?.to_owned(),
+            payload: envelope.get("payload").cloned().unwrap_or(Value::Null),
+        })
+    });
+    Some(FixtureCall { head, rpc })
 }
 
-fn send_response(mut stream: std::net::TcpStream, rpc_id: &str, value: Value) {
+fn send_response(
+    mut stream: std::net::TcpStream,
+    rpc_id: &str,
+    reply: Result<Value, (String, String)>,
+) {
     use std::io::Write;
+    let result = match reply {
+        Ok(value) => serde_json::json!({"ok": true, "value": value}),
+        Err((code, message)) => serde_json::json!({
+            "ok": false,
+            "error": {"code": code, "message": message, "details": {}},
+        }),
+    };
     let envelope = serde_json::json!({
         "type": "server-response",
         "rpcId": rpc_id,
-        "result": {"ok": true, "value": value},
+        "result": result,
     });
     let body = serde_json::to_vec(&envelope).expect("fixture response");
     let _ = write!(
@@ -207,75 +455,19 @@ fn send_response(mut stream: std::net::TcpStream, rpc_id: &str, value: Value) {
     let _ = stream.write_all(&body);
 }
 
+fn send_status(mut stream: std::net::TcpStream, status: u16) {
+    use std::io::Write;
+    let body = b"unavailable";
+    let _ = write!(
+        stream,
+        "HTTP/1.1 {status} Service Unavailable\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+        body.len()
+    );
+    let _ = stream.write_all(body);
+}
+
 /// Most events one page returns, matching the viewer's window.
 const PAGE_LIMIT: usize = 50;
-
-/// Deterministic wire reply for one method; unknown methods return `null`.
-fn response_value(
-    method: &str,
-    payload: &Value,
-    created: &mut Vec<String>,
-    pages: &BTreeMap<String, Vec<Value>>,
-    page_limit: usize,
-) -> Value {
-    match method {
-        "session/list" => {
-            let mut items: Vec<Value> = pages.keys().map(|id| session_item(id, None)).collect();
-            items.extend(created.iter().map(|id| session_item(id, Some(()))));
-            serde_json::json!({"items": items})
-        }
-        "session/create" => {
-            created.push("fixture-created".to_owned());
-            serde_json::json!({
-                "sessionId": "fixture-created",
-                "agentPreset": null,
-            })
-        }
-        "session/page" => {
-            let request = payload
-                .get("request")
-                .or_else(|| payload.get("args").and_then(|args| args.get("request")));
-            let session_id = request
-                .and_then(|request| request.get("address"))
-                .and_then(|address| address.get("sessionId"))
-                .and_then(Value::as_str)
-                .unwrap_or("fixture-session");
-            let before = request
-                .and_then(|request| request.get("beforeSeq"))
-                .and_then(Value::as_i64);
-            let all = pages.get(session_id).cloned().unwrap_or_default();
-            let mut visible: Vec<Value> = match before {
-                Some(before) => all
-                    .iter()
-                    .filter(|event| event["seq"].as_i64().unwrap_or_default() < before)
-                    .cloned()
-                    .collect(),
-                None => all.clone(),
-            };
-            let has_more = visible.len() > page_limit;
-            if has_more {
-                visible = visible.split_off(visible.len() - page_limit);
-            }
-            let records: Vec<Value> = visible
-                .into_iter()
-                .map(|event| serde_json::json!({"type": "event", "event": event}))
-                .collect();
-            serde_json::json!({"records": records, "hasMore": has_more})
-        }
-        "session/prompt" => serde_json::json!({"accepted": true}),
-        "model/catalog" => serde_json::json!({
-            "default": {"provider": "fixture", "model": "fixture-model"},
-            "routableProviders": ["fixture"],
-            "groups": [{
-                "id": "fixture",
-                "name": "Fixture provider",
-                "models": [{"id": "fixture-model", "name": "Fixture model"}],
-            }],
-            "failures": [],
-        }),
-        _ => Value::Null,
-    }
-}
 
 /// One listed Session row; projection titles keep the identity visible in tests.
 fn session_item(session_id: &str, created: Option<()>) -> Value {
@@ -467,12 +659,13 @@ fn pump(
     while !condition(harness.state()) {
         assert!(
             std::time::Instant::now() < deadline,
-            "the interface never reached: {what}; selected={:?} page_loading={} page_error={:?} rows={:?} error={:?}",
+            "the interface never reached: {what}; selected={:?} page_loading={} page_error={:?} rows={:?} error={:?} preview_error={:?}",
             harness.state().selected_session,
             harness.state().page_loading,
             harness.state().page_error,
             harness.state().transcript.rows().iter().map(|row| row.text.clone()).collect::<Vec<_>>(),
             harness.state().sessions_error,
+            harness.state().preview_error,
         );
         harness.step();
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -854,4 +1047,350 @@ fn snapshot_empty_shell_1920() {
 #[test]
 fn snapshot_empty_shell_1440() {
     snapshot_empty_shell(1440.0, 900.0, "shell-1440x900");
+}
+
+/// One redacted settings namespace the fixture Host reports.
+fn settings_namespace() -> Value {
+    serde_json::json!({
+        "autoGenerate": false,
+        "ns": "fixture.ns",
+        "schema": {"type": "object"},
+        "value": {"approval": "ask"},
+        "base": {"approval": "ask"},
+        "user": {"approval": "ask"},
+        "applies": "user",
+        "secrets": [],
+        "revision": 3,
+    })
+}
+
+/// A one-page PDF whose raster size is deterministic at 110 dpi.
+fn minimal_pdf() -> Vec<u8> {
+    br#"%PDF-1.4
+1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj
+2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj
+3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 100]/Contents 4 0 R>>endobj
+4 0 obj<</Length 23>>stream
+0 0 1 RG 10 10 50 50 re f
+endstream
+endobj
+trailer<</Root 1 0 R>>
+%%EOF
+"#
+    .to_vec()
+}
+
+/// Opens Settings, expands the Host section, and waits for its description.
+fn open_host_settings(harness: &mut Harness<'_, DesktopApp>) {
+    harness.get_by_label("Settings").click_accesskit();
+    harness.run_steps(3);
+    harness
+        .get_by_label_contains("Host settings (agent and plugin configuration)")
+        .click_accesskit();
+    pump(harness, "the Host settings load", |app| {
+        app.settings_description.is_some()
+    });
+}
+
+/// Opens the draft editor and replaces its JSON with `text`.
+fn edit_settings_json(harness: &mut Harness<'_, DesktopApp>, text: &str) {
+    harness.get_by_label("Edit user overrides").click_accesskit();
+    harness.run_steps(2);
+    let editor = harness.get_by_label("Host settings JSON");
+    editor.focus();
+    harness.key_combination_modifiers(egui::Modifiers::COMMAND, &[egui::Key::A]);
+    editor.type_text(text);
+    harness.run_steps(3);
+    assert_eq!(
+        harness
+            .get_by_label("Host settings JSON")
+            .value()
+            .as_deref(),
+        Some(text),
+        "the draft editor must hold exactly the replacement text"
+    );
+}
+
+#[test]
+fn settings_write_reaches_the_host_and_reads_back() {
+    let host = FixtureHost::start();
+    host.set_settings_namespace(settings_namespace());
+    let (app, _frames) = fixture(&host);
+    let mut harness = harness(app, 1280.0, 860.0);
+    harness.run_steps(3);
+
+    open_host_settings(&mut harness);
+    assert_eq!(
+        host.wait_for("settings/describe")["args"],
+        serde_json::json!({})
+    );
+
+    // The draft is user overrides only; saving turns the change into a path op.
+    edit_settings_json(&mut harness, r#"{"approval": "never"}"#);
+    harness.get_by_label("Save settings").click_accesskit();
+    harness.run_steps(3);
+    let payload = host.wait_for("settings/mutate")["args"].clone();
+    assert_eq!(payload["ns"], "fixture.ns");
+    assert_eq!(payload["expectedRevision"], 3);
+    assert_eq!(
+        payload["ops"],
+        serde_json::json!([{"op": "set", "path": ["approval"], "value": "never"}])
+    );
+
+    // The read-back is the Host's new revision, not the draft.
+    pump(&mut harness, "the saved settings read back", |app| {
+        app.settings_description
+            .as_ref()
+            .is_some_and(|description| {
+                description.namespaces.first().is_some_and(|ns| ns.revision == 4)
+            })
+    });
+    let description = harness
+        .state()
+        .settings_description
+        .as_ref()
+        .expect("settings description");
+    assert_eq!(
+        description.namespaces[0].user,
+        Some(serde_json::json!({"approval": "never"}))
+    );
+    assert!(harness.query_by_label_contains("\"never\"").is_some());
+    assert!(harness.query_by_label_contains("Settings saved.").is_some());
+    // A successful save closes the draft.
+    assert!(harness.query_by_label("Host settings JSON").is_none());
+}
+
+#[test]
+fn settings_write_conflict_keeps_the_draft_and_reports_it() {
+    let host = FixtureHost::start();
+    host.set_settings_namespace(settings_namespace());
+    host.fail_settings_write();
+    let (app, _frames) = fixture(&host);
+    let mut harness = harness(app, 1280.0, 860.0);
+    harness.run_steps(3);
+
+    open_host_settings(&mut harness);
+    edit_settings_json(&mut harness, r#"{"approval": "never"}"#);
+    harness.get_by_label("Save settings").click_accesskit();
+    harness.run_steps(3);
+    host.wait_for("settings/mutate");
+
+    pump(&mut harness, "the conflict is reported", |app| {
+        app.settings_update_receiver.is_none()
+    });
+    assert!(harness
+        .query_by_label_contains("Settings conflict: another edit changed this namespace.")
+        .is_some());
+    // The Host value did not move, and the draft is still on screen.
+    let description = harness
+        .state()
+        .settings_description
+        .as_ref()
+        .expect("settings description");
+    assert_eq!(description.namespaces[0].revision, 3);
+    assert_eq!(
+        description.namespaces[0].user,
+        Some(serde_json::json!({"approval": "ask"}))
+    );
+    let editor = harness
+        .query_by_label("Host settings JSON")
+        .expect("draft retained");
+    assert!(editor.value().is_some_and(|text| text.contains("never")));
+}
+
+#[test]
+fn marketplace_search_and_install_report_the_host_result() {
+    let host = FixtureHost::start();
+    let (app, _frames) = fixture(&host);
+    let mut harness = harness(app, 1280.0, 860.0);
+    harness.run_steps(3);
+
+    // Opening the tab asks the Host for its configured indexes.
+    harness.get_by_label("Marketplace").click_accesskit();
+    const INDEX: &str = "https://market.fixture/index.json";
+    pump(&mut harness, "market indexes load", |app| {
+        app.market_indexes
+            .iter()
+            .any(|index| index["url"] == INDEX)
+    });
+    assert_eq!(
+        host.wait_for("pluginMarket/listIndexes")["args"],
+        serde_json::json!({})
+    );
+
+    let search = harness.get_by_label("Marketplace search");
+    search.focus();
+    search.type_text("fixture");
+    harness.run_steps(2);
+    harness.get_by_label("Search marketplace").click_accesskit();
+    harness.run_steps(3);
+    let payload = host.wait_for("pluginMarket/search")["args"].clone();
+    assert_eq!(payload["url"], INDEX);
+    assert_eq!(payload["query"]["text"], "fixture");
+    pump(&mut harness, "market results render", |app| {
+        !app.market_results.is_empty()
+    });
+    assert!(harness
+        .query_by_label_contains("fixture-plugin")
+        .is_some());
+
+    // Install inspects the exact spec, then installs it and reports the result.
+    harness.get_by_label("Install").click_accesskit();
+    harness.run_steps(3);
+    let inspect = host.wait_for("pluginManager/inspect")["args"].clone();
+    assert_eq!(inspect["spec"], "fixture-plugin@1.0.0");
+    let install = host.wait_for("pluginManager/installBundle")["args"].clone();
+    assert_eq!(install["spec"], "fixture-plugin@1.0.0");
+    assert_eq!(install["options"], serde_json::json!({}));
+    pump(&mut harness, "the install result renders", |app| {
+        app.market_status
+            .as_deref()
+            .is_some_and(|status| status.contains("-> installed"))
+    });
+    assert!(harness
+        .query_by_label_contains("fixture-plugin@1.0.0 -> installed")
+        .is_some());
+}
+
+#[test]
+fn marketplace_install_failure_is_reported_not_claimed() {
+    let host = FixtureHost::start();
+    host.fail_install();
+    let (app, _frames) = fixture(&host);
+    let mut harness = harness(app, 1280.0, 860.0);
+    harness.run_steps(3);
+
+    harness.get_by_label("Marketplace").click_accesskit();
+    pump(&mut harness, "market indexes load", |app| {
+        !app.market_indexes.is_empty()
+    });
+    harness.get_by_label("Search marketplace").click_accesskit();
+    pump(&mut harness, "market results render", |app| {
+        !app.market_results.is_empty()
+    });
+    harness.get_by_label("Install").click_accesskit();
+    harness.run_steps(3);
+    host.wait_for("pluginManager/inspect");
+    host.wait_for("pluginManager/installBundle");
+
+    pump(&mut harness, "the install failure is reported", |app| {
+        app.market_status
+            .as_deref()
+            .is_some_and(|status| status.starts_with("Marketplace failed:"))
+    });
+    assert!(harness.query_by_label_contains("Marketplace failed:").is_some());
+    assert!(harness
+        .query_by_label_contains("-> installed")
+        .is_none());
+}
+
+#[test]
+fn retry_connection_attempts_a_host_attach_and_stays_disconnected() {
+    let host = FixtureHost::start();
+    let (mut app, _frames) = fixture(&host);
+    // The disconnected state the shell shows after the Host control channel closes.
+    app.transport = None;
+    app.streams = None;
+    app.sessions.clear();
+    app.host = Some(Host::for_test(&format!("{}?token=fixture", host.url)));
+    let mut harness = harness(app, 1280.0, 860.0);
+    harness.run_steps(3);
+
+    assert!(harness.query_by_label("Retry connection").is_some());
+    harness.get_by_label("Retry connection").click_accesskit();
+    pump(&mut harness, "the attach attempt fails", |app| {
+        app.status.starts_with("Authentication failed")
+    });
+    // The click issued a real Host handshake, and a refusal leaves no transport.
+    assert_eq!(host.connect_attempts(), 1);
+    assert!(harness.state().transport.is_none());
+    assert!(harness.query_by_label("Retry connection").is_some());
+
+    // A second click is another attempt rather than a dead control.
+    harness.get_by_label("Retry connection").click_accesskit();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while host.connect_attempts() < 2 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the second attach attempt never happened"
+        );
+        harness.step();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn office_preview_renders_the_converted_pdf() {
+    let host = FixtureHost::start();
+    host.set_page("fixture-session", Vec::new());
+    host.set_office_pdf(minimal_pdf());
+    let (app, frames) = fixture(&host);
+    let mut harness = harness(app, 1280.0, 860.0);
+    harness.run_steps(3);
+    harness.get_by_label_contains("fixture-session").click();
+    harness.run_steps(3);
+    frames.send(snapshot_frame()).expect("session snapshot");
+    pump(&mut harness, "the Session opens", |app| {
+        app.selected_session.as_deref() == Some("fixture-session")
+    });
+
+    harness.get_by_label("Document").click_accesskit();
+    harness.run_steps(2);
+    let path = harness.get_by_label("Document path");
+    path.focus();
+    path.type_text("out/report.docx");
+    harness.run_steps(2);
+    harness.get_by_label("Preview").click_accesskit();
+    harness.run_steps(3);
+
+    let payload = host.wait_for("officeToPdf/render")["args"].clone();
+    assert_eq!(payload["path"], "out/report.docx");
+    assert_eq!(payload["priority"], "foreground");
+    assert_eq!(payload["workspaceFileScopeId"], "fixture-session");
+
+    // The local raster shows the Host-converted PDF, not a placeholder.
+    pump(&mut harness, "the PDF page rasterizes", |app| {
+        app.preview_image.is_some()
+    });
+    let image = harness.state().preview_image.as_ref().expect("preview");
+    assert_eq!(image.size, [306, 153]);
+    assert_eq!(image.name, "report.docx");
+    assert!(harness
+        .query_by_label_contains("Image: report.docx")
+        .is_some());
+    assert!(harness.query_by_label_contains("306 × 153 px").is_some());
+}
+
+#[test]
+fn office_preview_reports_a_conversion_that_is_not_a_pdf() {
+    let host = FixtureHost::start();
+    host.set_page("fixture-session", Vec::new());
+    host.set_office_pdf(b"not a pdf".to_vec());
+    let (app, frames) = fixture(&host);
+    let mut harness = harness(app, 1280.0, 860.0);
+    harness.run_steps(3);
+    harness.get_by_label_contains("fixture-session").click();
+    harness.run_steps(3);
+    frames.send(snapshot_frame()).expect("session snapshot");
+    pump(&mut harness, "the Session opens", |app| {
+        app.selected_session.as_deref() == Some("fixture-session")
+    });
+
+    harness.get_by_label("Document").click_accesskit();
+    harness.run_steps(2);
+    let path = harness.get_by_label("Document path");
+    path.focus();
+    path.type_text("out/broken.docx");
+    harness.run_steps(2);
+    harness.get_by_label("Preview").click_accesskit();
+    harness.run_steps(3);
+    host.wait_for("officeToPdf/render");
+
+    pump(&mut harness, "the raster failure is reported", |app| {
+        app.preview_error.is_some()
+    });
+    assert!(harness.state().preview_image.is_none());
+    assert!(harness
+        .query_by_label_contains("Document read failed:")
+        .is_some());
 }

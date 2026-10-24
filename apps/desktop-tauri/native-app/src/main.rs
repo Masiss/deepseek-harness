@@ -4460,15 +4460,17 @@ impl DesktopApp {
                     ui.label(status);
                 }
                 ui.horizontal(|ui| {
-                    ui.add(
+                    let query = ui.add(
                         egui::TextEdit::singleline(&mut self.market_query)
                             .hint_text("Search text")
                             .desired_width(240.0),
                     );
-                    if ui
-                        .add_enabled(!self.market_loading, egui::Button::new("Search"))
-                        .clicked()
-                    {
+                    accessible_label(&query, "Marketplace search");
+                    let search = ui.add_enabled(!self.market_loading, egui::Button::new("Search"));
+                    // The Sessions panel also has a control named "Search"; the
+                    // marketplace button needs its own accessible name.
+                    accessible_button_label(&search, "Search marketplace");
+                    if search.clicked() {
                         self.search_market();
                     }
                 });
@@ -4584,11 +4586,12 @@ impl DesktopApp {
                 }
             } else if self.show_document {
                 ui.horizontal(|ui| {
-                    ui.add(
+                    let path = ui.add(
                         egui::TextEdit::singleline(&mut self.preview_path)
                             .hint_text("Host file path")
                             .desired_width(360.0),
                     );
+                    accessible_label(&path, "Document path");
                     if ui
                         .add_enabled(!self.preview_loading, egui::Button::new("Preview"))
                         .clicked()
@@ -5110,9 +5113,16 @@ fn decode_preview_image(
 ///
 /// @param response - Response of the widget that needs a name.
 /// @param label - Name the accessibility tree and the test harness read.
-fn accessible_label(response: &egui::Response, label: &str) {
+pub(crate) fn accessible_label(response: &egui::Response, label: &str) {
     response.output_event(egui::output::OutputEvent::ValueChanged(
         egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, response.enabled(), label),
+    ));
+}
+
+/// Replaces a control's accessible name when its visible text is ambiguous.
+fn accessible_button_label(response: &egui::Response, label: &str) {
+    response.output_event(egui::output::OutputEvent::ValueChanged(
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), label),
     ));
 }
 
