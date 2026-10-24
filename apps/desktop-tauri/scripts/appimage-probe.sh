@@ -19,6 +19,10 @@ target=${DSH_DESKTOP_TARGET:-linux-x64}
 tree="$repo/apps/desktop/.desktop-build/targets/$target"
 appimage=${1:-$(ls -t "$tree"/appimage/*.AppImage 2>/dev/null | head -1)}
 [ -n "$appimage" ] && [ -f "$appimage" ] || { echo "RESULT appimage=missing"; exit 1; }
+case "$appimage" in
+  /*) ;;
+  *) appimage="$repo/$appimage" ;;
+esac
 
 work="$tree/appimage/probe"
 # The previous run made its extraction read-only.
@@ -43,6 +47,8 @@ echo "runtime_dir=$DSH_DESKTOP_RUNTIME_DIR"
 echo "project_dir=$DSH_DESKTOP_PROJECT_DIR"
 echo "version=$DSH_DESKTOP_VERSION"
 echo "client_version=$DSH_CLIENT_VERSION"
+echo "update_feed=${DSH_DESKTOP_UPDATE_FEED:-unset}"
+echo "component_feed=${DSH_DESKTOP_COMPONENT_FEED:-unset}"
 echo "project_seeded=$([ -f "$DSH_DESKTOP_PROJECT_DIR/package.json" ] && echo yes || echo no)"
 echo "node_exec=$([ -x "$DSH_DESKTOP_RUNTIME_DIR/../runtime/bin/node" ] && echo yes || echo no)"
 STUB

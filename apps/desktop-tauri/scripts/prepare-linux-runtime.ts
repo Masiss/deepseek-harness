@@ -285,6 +285,24 @@ async function main(): Promise<void> {
     console.error(`linux runtime: Landlock launcher replaced with the Rust build (${String(statSync(installedLauncher).size)} bytes)`)
   }
 
+  // The terminal service loads `node-pty` from its own `createRequire`, and that
+  // require does not consult the launcher's resolve hooks, so the Rust provider
+  // needs a resolvable package rather than a bare specifier mapping. The shim is
+  // a pointer: the provider it re-exports is the payload's own native module.
+  const nodePtyShim = join(paths.dsh, 'node_modules', 'node-pty')
+  rmSync(nodePtyShim, { recursive: true, force: true })
+  mkdirSync(nodePtyShim, { recursive: true })
+  writeFileSync(join(nodePtyShim, 'package.json'), `${JSON.stringify({
+    name: 'node-pty',
+    version: '0.0.0-desktop-shim',
+    main: 'index.js',
+    private: true,
+  }, undefined, 2)}\n`)
+  writeFileSync(
+    join(nodePtyShim, 'index.js'),
+    "// Packaged Desktop payload: the Rust provider replaces node-pty.\nmodule.exports = require('../@deepseek-ai/dsh-desktop-host/native/node-pty.cjs')\n",
+  )
+
   // 4. The profile the Host edits. The Desktop application owns this directory
   // at runtime; preparing it here keeps the tree bootable on its own.
   rmSync(project, { recursive: true, force: true })

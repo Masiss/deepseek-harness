@@ -137,6 +137,9 @@ jobs:
       - name: Test the native client core
         run: cargo test --manifest-path apps/desktop-tauri/client-core/Cargo.toml
 
+      - name: Test the native egui app without a display
+        run: cargo test --manifest-path apps/desktop-tauri/native-app/Cargo.toml
+
       - name: Test the desktop shell
         run: cargo test --manifest-path apps/desktop-tauri/src-tauri/Cargo.toml
 

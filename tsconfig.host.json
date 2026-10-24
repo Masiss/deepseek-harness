@@ -208,6 +208,7 @@
     "apps/desktop/tests/**/*.ts",
     "apps/desktop-host/tests/**/*.ts",
     "apps/desktop-tauri/scripts/**/*.ts",
+    "apps/desktop-tauri/tests/native-release.spec.ts",
     "benchmarks/**/*.ts",
     "packages/*/*/tests/**/*.ts",
     "packages/experimental/cua-macos/native/generate-protocol.ts",

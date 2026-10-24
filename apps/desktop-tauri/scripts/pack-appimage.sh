@@ -29,6 +29,7 @@ tree="$repo/apps/desktop/.desktop-build/targets/$target"
 work="$tree/appimage"
 appdir="$work/DeepSeek-Harness.AppDir"
 version=$(node -p "require('$repo/package.json').version")
+feed_env=$(sh "$repo/apps/desktop-tauri/scripts/appimage-feed-env.sh")
 suffix=""
 [ "$shell" = native ] && suffix=-native
 out="$work/DeepSeek-Harness$suffix-$version-$appimage_arch.AppImage"
@@ -106,6 +107,7 @@ export DSH_DESKTOP_NODE_BIN="\$root/runtime/bin"
 # entry, so both names carry the same release identity.
 export DSH_DESKTOP_VERSION="\${DSH_DESKTOP_VERSION:-$version}"
 export DSH_CLIENT_VERSION="\${DSH_CLIENT_VERSION:-$version}"
+$feed_env
 if [ -n "\${DSH_APPIMAGE_UPDATE_FEED:-}" ]; then
   export DSH_DESKTOP_UPDATE_FEED="\$DSH_APPIMAGE_UPDATE_FEED"
 fi

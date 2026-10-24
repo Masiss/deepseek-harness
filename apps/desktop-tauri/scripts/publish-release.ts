@@ -26,13 +26,14 @@ import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import {
   signedComponentBytes,
-  signedFeedBytes,
   type SignedComponentDocument,
-  type SignedFeedDocument,
 } from '../../desktop-host/src/update/signing.ts'
+import { releaseManifest } from './release-manifest.ts'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
-const target = process.argv[2] ?? 'linux-x64'
+const targetArgument = process.argv[2] ?? 'linux-x64'
+if (targetArgument !== 'linux-x64' && targetArgument !== 'linux-arm64') throw new Error(`publish-release: unsupported target ${targetArgument}`)
+const target: 'linux-x64' | 'linux-arm64' = targetArgument
 const tree = join(repo, 'apps/desktop/.desktop-build/targets', target)
 
 interface Arguments {
@@ -78,21 +79,12 @@ function appImagePath(version: string): string {
 
 /** The update manifest the updater reads, naming this target's artifact. */
 function updateManifest(version: string, appImage: string, releaseBase: string, minimumVersion: string | undefined): string {
-  const artifacts = {
-    [target]: {
-      url: `${releaseBase}/${basename(appImage)}`,
-      sha256: digestOf(appImage),
-      size: statSync(appImage).size,
-    },
-  }
-  const document = {
-    schemaVersion: 2,
-    version,
+  return releaseManifest({
+    artifact: appImage, bytes: readFileSync(appImage), releaseBase, version,
+    target,
     ...(minimumVersion === undefined ? {} : { minimumVersion }),
-    artifacts,
-  }
-  const signature = signFeedDocument(document)
-  return `${JSON.stringify({ ...document, signature }, undefined, 2)}\n`
+    key: signingKey(),
+  })
 }
 
 /** The component manifest the Office installer reads, beside the archives it names. */
@@ -108,25 +100,16 @@ function componentManifest(): string | undefined {
   return `${JSON.stringify({ ...document, signature }, undefined, 2)}\n`
 }
 
-/**
- * Sign the feed document with the release channel's private key.
- *
- * The key is the channel's secret; the client trusts the matching public
- * key, which the Desktop Host pins. A feed that cannot be signed is not
- * published, because a client that verifies signatures would refuse it.
- */
-function signFeedDocument(document: SignedFeedDocument): string {
-  // The bytes come from the client's own canonicalization, so the signer and
-  // the verifier cannot drift apart.
-  return signDocument(signedFeedBytes(document))
-}
-
 /** Sign canonical bytes with the release channel's private key. */
 function signDocument(bytes: Buffer): string {
+  return sign(null, bytes, signingKey()).toString('base64')
+}
+
+/** Load the required channel key without persisting it. */
+function signingKey(): ReturnType<typeof createPrivateKey> {
   const pem = process.env.DSH_RELEASE_SIGNING_KEY ?? ''
   if (pem === '') throw new Error('publish-release: DSH_RELEASE_SIGNING_KEY is missing')
-  const key = createPrivateKey(pem)
-  return sign(null, bytes, key).toString('base64')
+  return createPrivateKey(pem)
 }
 
 /** The artifacts this target contributes to the shared release. */
@@ -174,6 +157,9 @@ const feed = join(tree, 'release-feed')
 spawnSync('mkdir', ['-p', feed], { stdio: 'inherit' })
 const minimumVersion = process.env.DSH_RELEASE_MINIMUM_VERSION
 writeFileSync(join(feed, 'manifest.json'), updateManifest(version, appImage, releaseBase, minimumVersion))
+const nativeImage = nativeAppImagePath(version)
+if (nativeImage === undefined) throw new Error('publish-release: missing native AppImage; run DSH_DESKTOP_SHELL=native pack-appimage.sh first')
+writeFileSync(join(feed, 'manifest-native.json'), updateManifest(version, nativeImage, releaseBase, minimumVersion))
 const components = componentManifest()
 if (components !== undefined) writeFileSync(join(feed, 'components.json'), components)
 
@@ -247,6 +233,7 @@ if (uploadRelease.status !== 0) throw new Error(`publish-release: gh release upl
 const uploadFeed = spawnSync('gh', [
   'release', 'upload', feedTag, '--clobber',
   join(feed, 'manifest.json'),
+  join(feed, 'manifest-native.json'),
   ...(components === undefined ? [] : [join(feed, 'components.json')]),
   ...archives,
 ], { stdio: 'inherit', env })

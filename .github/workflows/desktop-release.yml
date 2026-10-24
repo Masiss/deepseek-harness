@@ -87,6 +87,7 @@ jobs:
             librsvg2-dev \
             patchelf \
             desktop-file-utils \
+            weston \
             rpm
 
       - name: Install the workspace
@@ -123,6 +124,9 @@ jobs:
       - name: Prove both Host entries boot
         run: bash apps/desktop-tauri/scripts/entry-parity-probe.sh "$DSH_DESKTOP_TARGET"
 
+      - name: Prove native Host lease refuses a second writer
+        run: bash apps/desktop-tauri/scripts/native-lease-probe.sh "$DSH_DESKTOP_TARGET"
+
       # The packaged tree is what a user installs, so the release lane drives
       # the journeys and injects the startup/crash/shutdown/offline failures
       # against it instead of trusting the source tree.
@@ -156,12 +160,18 @@ jobs:
 
       - name: Pack the native AppImage
         env:
-          DSH_APPIMAGE_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.FEED_TAG }}/manifest.json
+          DSH_APPIMAGE_UPDATE_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.FEED_TAG }}/manifest-native.json
           DSH_COMPONENT_FEED: https://github.com/${{ github.repository }}/releases/download/${{ env.FEED_TAG }}
         run: DSH_DESKTOP_SHELL=native bash apps/desktop-tauri/scripts/pack-appimage.sh "$DSH_DESKTOP_TARGET"
 
       - name: Verify the native AppImage
         run: bash apps/desktop-tauri/scripts/appimage-probe.sh "$(ls apps/desktop/.desktop-build/targets/$DSH_DESKTOP_TARGET/appimage/DeepSeek-Harness-native-*.AppImage | head -1)"
+
+      # The terminal panel talks to a PTY through the private subprocess
+      # runner, which resolves `node-pty` for itself; this runs the same client
+      # path the panel uses against the packaged tree on a headless compositor.
+      - name: Drive the native terminal journey
+        run: bash apps/desktop-tauri/scripts/native-journey-probe.sh terminal
 
       - name: Pack the Debian package
         env:
