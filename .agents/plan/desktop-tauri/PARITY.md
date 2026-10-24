@@ -32,7 +32,7 @@ Legend: ✓ transport/API available · ◐ native UI partial · ☐ not started
 
 ## App shell
 - ✓ Native egui window (no webview) — M7a
-- ◐ Native layout — egui headless panel geometry tested at 1024×768, 1440×900, 1920×1080, and 1119×1381; debug probe reports measured panel sizes; no independent visual review
+- ◐ Native layout — `egui_kittest` asserts rail/sidebar/central geometry with widget identity at 1280×860, 1440×900, and 1920×1080, writes a machine-readable rect report, and snapshots the empty shell at three viewports; the older egui headless panel probe also covers 1024×768 and 1119×1381. The harness drives the shipped `tick`/`render` against an in-process Host fixture and a loopback Remote Stream mux, so New Session → select → compose → Send → live reply → Allow/Reject are asserted without a window. Screenshot baselines guard regressions only; no independent visual review
 - ✓ Host sidecar launch + cookie auth — M7b
 - ✓ Shared Desktop Host lease — `native-lease-probe.sh` proves a second Host is refused and a new Host takes over after owner death
 - ✓ Single-instance lock — M7c
@@ -68,3 +68,7 @@ The packaged runtime tree and native AppImage are present. L2 passes: Host entry
 Marketplace installation consumes the completed `ChangeResult` returned by `installBundle`; `waitForInstall` is reserved for a live request identifier. `client-core` sends all `session/page` bounds supported by the Host; the packaged journey reads current history, while older-page `beforeSeq` requests have loopback coverage only.
 
 Native updater source builds a separately signed `manifest-native.json`, embeds its URL and the component-feed URL in AppRun, verifies framed Host readiness and restart messages, presents download/install confirmation, and schedules the outer AppImage after the old process exits. The signed Host update flow passes with a generated test key and mock shell; production signing/publication and an update initiated from the native GUI remain open.
+
+## Verification surfaces
+- Windowless UI: `cargo test --manifest-path apps/desktop-tauri/native-app/Cargo.toml ui_harness` — 5 tests drive the real panels through AccessKit (New Session, Session select, composer text, Send prompt payload, live assistant event, Allow once, Reject) plus layout rects and three shell snapshots. The fixture Host answers `session/list`, `session/create`, `session/prompt`, `session/page`, and `model/catalog`; the loopback mux replays frames so a follow stream opened later still receives its snapshot.
+- OS-level GUI probes stay in isolated Weston (`gui-evidence-probe.sh`, `appimage-probe.sh`, native journeys) for IME, tray, drag-and-drop, and window behavior — none of which a windowless harness can prove.

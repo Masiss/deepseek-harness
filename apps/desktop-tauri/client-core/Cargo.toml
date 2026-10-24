@@ -5,6 +5,11 @@ edition = "2021"
 publish = false
 description = "Protocol core for DeepSeek Harness desktop and terminal clients"
 
+[features]
+# Exposes wire-shaped constructors for windowless UI fixtures.
+default = []
+test-fixtures = []
+
 [dependencies]
 futures = "0.3"
 multer = "3"

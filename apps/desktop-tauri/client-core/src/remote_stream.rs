@@ -150,6 +150,58 @@ impl RemoteStreamMux {
         Ok(Self { commands })
     }
 
+    /// Builds a mux whose streams are fed by the caller instead of a socket.
+    ///
+    /// Windowless fixtures push wire frames through the returned sender; every
+    /// open stream receives each frame. Product code never calls this.
+    ///
+    /// @param frames - Receiver of wire frames the fixture produces.
+    /// @returns A mux that opens logical streams without a network socket.
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn loopback(frames: mpsc::Receiver<Value>) -> Self {
+        let (commands, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let mut open: Vec<(String, mpsc::Sender<Result<Value, Error>>)> = Vec::new();
+            // Frames stay available so a stream that opens after the fixture
+            // produced them still receives the snapshot it expects first.
+            let mut history: Vec<Value> = Vec::new();
+            loop {
+                let mut closed = false;
+                loop {
+                    match receiver.try_recv() {
+                        Ok(Command::Open { id, downlink, .. }) => {
+                            for value in &history {
+                                let _ = downlink.send(Ok(value.clone()));
+                            }
+                            open.push((id, downlink));
+                        }
+                        Ok(Command::Cancel { id } | Command::End { id }) => {
+                            open.retain(|(stream, _)| *stream != id);
+                        }
+                        Ok(Command::Item { .. }) => {}
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            closed = true;
+                            break;
+                        }
+                    }
+                }
+                if closed {
+                    break;
+                }
+                match frames.recv_timeout(std::time::Duration::from_millis(2)) {
+                    Ok(value) => {
+                        history.push(value.clone());
+                        open.retain(|(_, downlink)| downlink.send(Ok(value.clone())).is_ok());
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+        });
+        Self { commands }
+    }
+
     /// Opens one logical stream over the shared socket.
     pub fn open(&self, endpoint: &str, args: Value) -> Result<RemoteStream, Error> {
         let id = next_stream_id();

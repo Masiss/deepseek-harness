@@ -58,7 +58,9 @@ use dsh_client_core::{
     },
     transport::HttpTransport,
     upload::{FileUploadClient, FileUploadValue},
-    user_questions::{AskUserQuestionAnswer, AskUserQuestionAnswerItem, PendingQuestion, UserQuestionsClient},
+    user_questions::{
+        AskUserQuestionAnswer, AskUserQuestionAnswerItem, PendingQuestion, UserQuestionsClient,
+    },
     workspace_files::WorkspaceByteReadOptions,
     workspace_files::{
         WorkspaceByteRange, WorkspaceFileRange, WorkspaceFileScope, WorkspaceFilesClient,
@@ -724,11 +726,12 @@ impl TerminalPanel {
         if let Some(environment) = &self.environment {
             let max_input = environment.max_input_bytes as usize;
             let (max_cols, max_rows) = (environment.max_cols, environment.max_rows);
-            ui.add(
+            let command_field = ui.add(
                 egui::TextEdit::multiline(&mut self.text)
                     .desired_rows(2)
                     .hint_text("Exact text to write; include a newline to execute"),
             );
+            accessible_label(&command_field, "Terminal command");
             ui.horizontal_wrapped(|ui| {
                 if ui
                     .add_enabled(
@@ -760,6 +763,9 @@ impl Drop for TerminalPanel {
         }
     }
 }
+
+#[cfg(test)]
+mod ui_harness;
 
 #[cfg(test)]
 mod terminal_panel_tests {
@@ -1063,16 +1069,31 @@ struct DesktopApp {
     auto_connect: bool,
 }
 
+/// Process-level services the shell is handed before it can draw.
+struct ShellServices {
+    quitting: Arc<AtomicBool>,
+    show_requested: Arc<AtomicBool>,
+    hide_requested: Arc<AtomicBool>,
+    hidden: Arc<AtomicBool>,
+    viewport: Arc<Mutex<Option<egui::Context>>>,
+    tray_available: bool,
+    ui_preferences_path: PathBuf,
+    /// Whether to start the Desktop Host; a windowless harness brings its own.
+    spawn_host: bool,
+}
+
 impl DesktopApp {
-    fn new(
-        quitting: Arc<AtomicBool>,
-        show_requested: Arc<AtomicBool>,
-        hide_requested: Arc<AtomicBool>,
-        hidden: Arc<AtomicBool>,
-        viewport: Arc<Mutex<Option<egui::Context>>>,
-        tray_available: bool,
-    ) -> Self {
-        let ui_preferences_path = UiPreferences::config_path();
+    fn new(services: ShellServices) -> Self {
+        let ShellServices {
+            quitting,
+            show_requested,
+            hide_requested,
+            hidden,
+            viewport,
+            tray_available,
+            ui_preferences_path,
+            spawn_host,
+        } = services;
         let (ui_preferences, ui_preferences_load_error) =
             match UiPreferences::load(&ui_preferences_path) {
                 Ok(preferences) => (preferences, None),
@@ -1083,13 +1104,19 @@ impl DesktopApp {
             };
         let ui_preferences_panel =
             UiPreferencesPanel::new(ui_preferences.clone(), ui_preferences_load_error);
-        let (host_sender, host_receiver) = mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = host_sender.send(Host::start());
-        });
+        // A windowless harness supplies its own transport and must not start a Host.
+        let host_receiver = if spawn_host {
+            let (host_sender, host_receiver) = mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = host_sender.send(Host::start());
+            });
+            Some(host_receiver)
+        } else {
+            None
+        };
         Self {
             host: None,
-            host_receiver: Some(host_receiver),
+            host_receiver,
             connect_receiver: None,
             sessions_receiver: None,
             session_query: String::new(),
@@ -1428,9 +1455,10 @@ impl DesktopApp {
     /// Whether no catalog request is running and no provider offers a model.
     fn model_catalog_empty(&self) -> bool {
         self.model_receiver.is_none()
-            && self.model_catalog.as_ref().is_none_or(|catalog| {
-                catalog.groups.iter().all(|group| group.models.is_empty())
-            })
+            && self
+                .model_catalog
+                .as_ref()
+                .is_none_or(|catalog| catalog.groups.iter().all(|group| group.models.is_empty()))
     }
 
     /// Labels the model picker with the chosen model or the reason there is none.
@@ -2818,11 +2846,24 @@ impl DesktopApp {
             }
         }
     }
-
 }
 
 impl eframe::App for DesktopApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.tick(ctx);
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.render(ui);
+    }
+}
+
+impl DesktopApp {
+    /// Drains Host events and worker channels once per frame.
+    ///
+    /// Kept free of `eframe::Frame` so a windowless harness can run the same
+    /// lifecycle the shipped shell runs.
+    fn tick(&mut self, ctx: &egui::Context) {
         if let Ok(mut viewport) = self.viewport.lock() {
             *viewport = Some(ctx.clone());
         }
@@ -3299,10 +3340,9 @@ impl eframe::App for DesktopApp {
                 Err(mpsc::TryRecvError::Empty) => {
                     // A Host without a configured provider can leave this call
                     // unanswered; stop waiting so the picker can say why.
-                    if self
-                        .model_requested_at
-                        .is_some_and(|started| started.elapsed() > std::time::Duration::from_secs(10))
-                    {
+                    if self.model_requested_at.is_some_and(|started| {
+                        started.elapsed() > std::time::Duration::from_secs(10)
+                    }) {
                         self.model_receiver = None;
                         self.model_requested_at = None;
                         self.model_error = Some(
@@ -3645,7 +3685,11 @@ impl eframe::App for DesktopApp {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    /// Draws the whole shell into the frame's root Ui.
+    ///
+    /// The caller owns the window, so a windowless harness renders the same
+    /// panels by owning the `egui::Ui` instead.
+    fn render(&mut self, ui: &mut egui::Ui) {
         if self.font_catalog_snapshot.is_none() {
             self.font_catalog_snapshot = fonts::catalog_snapshot(&self.font_catalog);
             if self.font_catalog_snapshot.is_none() {
@@ -3909,11 +3953,12 @@ impl eframe::App for DesktopApp {
                         }
                     }
                     if let Some(session_id) = self.selected_session.clone() {
-                        ui.add(
+                        let title_field = ui.add(
                             egui::TextEdit::singleline(&mut self.session_title)
                                 .hint_text("New session title")
                                 .desired_width(170.0),
                         );
+                        accessible_label(&title_field, "Session title");
                         ui.horizontal_wrapped(|ui| {
                             if ui
                                 .add_enabled(
@@ -4625,7 +4670,7 @@ impl eframe::App for DesktopApp {
                 ui.heading("Chat");
                 ui.horizontal_wrapped(|ui| {
                     let selected = self.model_picker_label();
-                    egui::ComboBox::from_id_salt("model-selection")
+                    let model_picker = egui::ComboBox::from_id_salt("model-selection")
                         .selected_text(selected)
                         .show_ui(ui, |ui| {
                             let mut next = None;
@@ -4661,6 +4706,7 @@ impl eframe::App for DesktopApp {
                                 self.select_model(selection);
                             }
                         });
+                    accessible_label(&model_picker.response, "Model");
                     if ui
                         .add_enabled(self.model_receiver.is_none(), egui::Button::new("Reload"))
                         .clicked()
@@ -4737,6 +4783,7 @@ impl eframe::App for DesktopApp {
                         .hint_text("Message (Ctrl+Enter to send)")
                         .desired_rows(3),
                 );
+                accessible_label(&text_edit, "Composer");
                 if self.focus_composer && !self.chat_loading {
                     text_edit.request_focus();
                     self.focus_composer = false;
@@ -5061,6 +5108,19 @@ fn decode_preview_image(
         size: [rgba.width() as usize, rgba.height() as usize],
         rgba: rgba.into_raw(),
     }))
+}
+
+/// Gives a widget a stable AccessKit name for windowless UI tests.
+///
+/// `egui::TextEdit` takes no label; it reports its hint text as a placeholder,
+/// so a harness cannot address the field by name without this.
+///
+/// @param response - Response of the widget that needs a name.
+/// @param label - Name the accessibility tree and the test harness read.
+fn accessible_label(response: &egui::Response, label: &str) {
+    response.output_event(egui::output::OutputEvent::ValueChanged(
+        egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, response.enabled(), label),
+    ));
 }
 
 /// Labels the model picker: the chosen model, or why there is nothing to pick.
@@ -5947,14 +6007,16 @@ fn main() -> eframe::Result {
         "DeepSeek Harness",
         options,
         Box::new(move |_creation_context| {
-            Ok(Box::new(DesktopApp::new(
-                app_quitting,
-                app_show,
-                app_hide,
-                app_hidden,
-                app_viewport,
-                app_tray_available,
-            )))
+            Ok(Box::new(DesktopApp::new(ShellServices {
+                quitting: app_quitting,
+                show_requested: app_show,
+                hide_requested: app_hide,
+                hidden: app_hidden,
+                viewport: app_viewport,
+                tray_available: app_tray_available,
+                ui_preferences_path: UiPreferences::config_path(),
+                spawn_host: true,
+            })))
         }),
     )
 }

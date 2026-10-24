@@ -324,5 +324,19 @@ git tag desktop-v0.2.1-rc.4 && git push fork desktop-v0.2.1-rc.4   # kích hoạ
 ```
 Phát hành (làm thay đổi trên `fork`): bump version **mọi package** ⇒ tag `desktop-v<version>` ⇒ lane release tự chạy ⇒ feed mới đã ký.
 
+## 7b. Kiểm thử UI không cửa sổ (`egui_kittest`)
+
+Không dùng toạ độ pixel, không chạm Hyprland: harness dựng **cùng** `DesktopApp::tick`/`render` mà cửa sổ dùng, trong `egui::Context` không có OS window.
+
+```sh
+cargo test --locked --offline --manifest-path apps/desktop-tauri/native-app/Cargo.toml ui_harness
+```
+
+- `src/ui_harness.rs` (chỉ `cfg(test)`): `FixtureHost` là HTTP Host trong tiến trình, trả lời `session/list`, `session/create`, `session/prompt`, `session/page`, `model/catalog` và **ghi lại request** để assert payload; `RemoteStreamMux::loopback` (feature `test-fixtures` của client-core) phát frame follow, replay snapshot cho stream mở muộn.
+- Widget được định danh bằng AccessKit: `harness.get_by_label("New Session")`, `"Composer"`, `"Send"`, `"Allow once"`. `TextEdit` không có tham số label nên `accessible_label()` gắn tên ổn định (Composer, Model, Session title, Terminal command).
+- Test hiện có: luồng semantic (New Session → chọn session → gõ → Send → payload prompt đúng → event follow hiện lên → Allow once phát `ApprovalCommand::Answer`), layout 3 viewport + report JSON ở `target/dsh-kittest/layout.json`, 3 snapshot vỏ rỗng ở `tests/snapshots/`.
+- Snapshot chỉ là baseline chống hồi quy; **chất lượng thị giác vẫn chờ review độc lập**. IME, tray, drag & drop, hành vi cửa sổ vẫn do probe Weston cô lập lo.
+- Cập nhật baseline: `UPDATE_SNAPSHOTS=1 cargo test ... ui_harness`, rồi xem lại ảnh trước khi commit.
+
 ## 8. Tài liệu lane
 `.agents/plan/desktop-tauri/PLAN.md` (kế hoạch + bảng finding F01–F13) · `MEMORY.md` (quyết định D1–D39, số đo M1–M25, bẫy B1–B52) · `AGENTS.md` (luật lệ của lane) · `probes/` (probe cũ) — cập nhật cả hai file đầu khi có quyết định mới.

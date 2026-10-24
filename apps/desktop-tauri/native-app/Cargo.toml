@@ -32,3 +32,9 @@ base64 = "0.22"
 # ring verifies the Ed25519 feed signature before any artifact is trusted.
 ring = "0.17"
 unicode-width = "0.2"
+
+[dev-dependencies]
+# egui_kittest drives the shipped panels through widget identity and AccessKit.
+egui_kittest = { version = "0.36", features = ["snapshot", "wgpu"] }
+# test-fixtures exposes wire-shaped Remote Event constructors for the UI fixture.
+dsh-client-core = { package = "dsh-client-core", path = "../client-core", features = ["test-fixtures"] }

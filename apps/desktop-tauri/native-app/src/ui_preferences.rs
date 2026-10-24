@@ -502,8 +502,7 @@ impl UiPreferences {
 
     /// Parses a complete JSON preferences object and validates its values.
     pub fn parse_json(text: &str) -> Result<Self, UiPreferencesError> {
-        let mut preferences: Self =
-            serde_json::from_str(text).map_err(UiPreferencesError::Json)?;
+        let mut preferences: Self = serde_json::from_str(text).map_err(UiPreferencesError::Json)?;
         if preferences.schema_version == SCHEMA_VERSION_V1 {
             preferences.schema_version = SCHEMA_VERSION;
         }
@@ -699,11 +698,7 @@ fn apply_corner_radius(visuals: &mut egui::Visuals, radius: egui::CornerRadius) 
     }
 }
 
-fn apply_theme_pack(
-    visuals: &mut egui::Visuals,
-    pack: ThemePack,
-    custom: &CustomTheme,
-) {
+fn apply_theme_pack(visuals: &mut egui::Visuals, pack: ThemePack, custom: &CustomTheme) {
     let Some(palette) = palette(pack, visuals.dark_mode, custom) else {
         return;
     };
@@ -856,8 +851,7 @@ impl UiPreferencesPanel {
             }
             if ui.button("Reset custom colors").clicked() {
                 let defaults = CustomTheme::default();
-                *self.draft.custom_theme.for_scheme_mut(dark) =
-                    defaults.for_scheme(dark).clone();
+                *self.draft.custom_theme.for_scheme_mut(dark) = defaults.for_scheme(dark).clone();
                 changed = true;
             }
             let _ = changed;
@@ -866,7 +860,12 @@ impl UiPreferencesPanel {
         }
 
         section(ui, "Fonts");
-        font_row(ui, "Interface font", &mut self.draft.fonts.proportional, catalog);
+        font_row(
+            ui,
+            "Interface font",
+            &mut self.draft.fonts.proportional,
+            catalog,
+        );
         font_row(ui, "Code font", &mut self.draft.fonts.monospace, catalog);
         let missing: Vec<&str> = [&self.draft.fonts.proportional, &self.draft.fonts.monospace]
             .into_iter()
@@ -1149,10 +1148,9 @@ impl fmt::Display for UiPreferencesError {
                 )
             }
             Self::InvalidValue(message) => f.write_str(message),
-            Self::InvalidThemeColor { scheme, role } => write!(
-                f,
-                "customTheme.{scheme}.{role} must look like #RRGGBB"
-            ),
+            Self::InvalidThemeColor { scheme, role } => {
+                write!(f, "customTheme.{scheme}.{role} must look like #RRGGBB")
+            }
             Self::InvalidFontFamily { role } => write!(
                 f,
                 "the {role} font family must be the name of an installed font"
@@ -1372,7 +1370,10 @@ mod tests {
             dark.widgets.inactive.bg_stroke.color,
             egui::Color32::from_rgb(0x33, 0x44, 0x55)
         );
-        assert_eq!(dark.widgets.inactive.corner_radius, egui::CornerRadius::same(2));
+        assert_eq!(
+            dark.widgets.inactive.corner_radius,
+            egui::CornerRadius::same(2)
+        );
         let light = context.style_of(egui::Theme::Light).visuals.clone();
         assert_eq!(light.panel_fill, egui::Color32::from_rgb(0xFD, 0xFD, 0xF5));
     }
@@ -1385,8 +1386,10 @@ mod tests {
         assert!(error.contains("customTheme.dark.accent"), "{error}");
         assert!(error.contains("#RRGGBB"), "{error}");
 
-        let mut preferences = UiPreferences::default();
-        preferences.radius = 40.0;
+        let preferences = UiPreferences {
+            radius: 40.0,
+            ..UiPreferences::default()
+        };
         assert!(preferences.validate().is_err());
 
         let mut preferences = UiPreferences::default();
