@@ -11,6 +11,7 @@ mod restart;
 mod session_list;
 mod settings_panel;
 mod terminal_ansi;
+mod terminal_input;
 mod transcript;
 mod transcript_view;
 mod ui_preferences;
@@ -194,8 +195,15 @@ struct TerminalPanel {
     error: Option<String>,
     writable: bool,
     pending: Option<u64>,
+    queued_input: std::collections::VecDeque<String>,
+    queued_input_bytes: usize,
     cols: u32,
     rows: u32,
+    /// Input modes the attached program enabled.
+    modes: terminal_ansi::InputModes,
+    mode_tracker: terminal_ansi::InputModeTracker,
+    /// Last painted grid rectangle, used to map pointer positions.
+    grid_rect: Option<egui::Rect>,
 }
 
 /// Removes one Office preview's PDF and raster files when conversion finishes.
@@ -220,6 +228,11 @@ impl TerminalPanel {
         self.input = None;
         self.writable = false;
         self.pending = None;
+        self.queued_input.clear();
+        self.queued_input_bytes = 0;
+        self.modes = terminal_ansi::InputModes::default();
+        self.mode_tracker.reset();
+        self.grid_rect = None;
         self.status = "Detached (shell remains alive)".to_owned();
     }
 
@@ -246,9 +259,12 @@ impl TerminalPanel {
     fn clear_output(&mut self) {
         self.output.clear();
         self.output_revision = self.output_revision.wrapping_add(1);
+        self.mode_tracker.reset();
+        self.modes = terminal_ansi::InputModes::default();
     }
 
     fn push_output(&mut self, text: &str) {
+        self.modes = self.mode_tracker.feed(text);
         append_bounded_output(&mut self.output, text);
         self.output_revision = self.output_revision.wrapping_add(1);
     }
@@ -489,6 +505,10 @@ impl TerminalPanel {
                     }
                     TerminalFrame::State(frame) => {
                         self.writable = frame.writable;
+                        if !frame.writable {
+                            self.queued_input.clear();
+                            self.queued_input_bytes = 0;
+                        }
                         self.state_status = format!(
                             "State: {:?} · exit: {:?} · writable: {}",
                             frame.info.state, frame.info.exit_code, frame.writable
@@ -503,6 +523,9 @@ impl TerminalPanel {
                         }
                     }
                     TerminalFrame::Ack(frame) => {
+                        if let Some(writer) = &mut self.input {
+                            writer.acknowledge(frame.sequence);
+                        }
                         if self.pending == Some(frame.sequence) {
                             self.pending = None;
                         }
@@ -511,6 +534,10 @@ impl TerminalPanel {
                         if let Some(refusal) = frame.refusal {
                             self.error =
                                 Some(format!("Input #{} refused: {refusal:?}", frame.sequence));
+                            self.queued_input.clear();
+                            self.queued_input_bytes = 0;
+                        } else {
+                            self.flush_queued_input();
                         }
                     }
                 },
@@ -561,6 +588,91 @@ impl TerminalPanel {
                 self.error = Some(format!("Input was not queued: {error}"));
                 self.detach();
             }
+        }
+    }
+
+    /// Writes already-encoded input through the same uplink and ack tracking.
+    ///
+    /// @param data - Bytes to send exactly as encoded.
+    /// @returns Whether the write was queued.
+    fn send_encoded(&mut self, data: &str) -> bool {
+        if !self.writable || data.is_empty() {
+            return false;
+        }
+        if self.pending.is_some() {
+            let limit = self
+                .environment
+                .as_ref()
+                .map_or(0, |environment| environment.max_buffered_bytes as usize);
+            if self.queued_input_bytes.saturating_add(data.len()) > limit {
+                self.error = Some("Terminal input queue is full; wait for acknowledgement.".into());
+                return false;
+            }
+            self.queued_input_bytes += data.len();
+            self.queued_input.push_back(data.to_owned());
+            return true;
+        }
+        self.write_encoded(data)
+    }
+
+    fn write_encoded(&mut self, data: &str) -> bool {
+        if !self.writable {
+            return false;
+        }
+        let result = {
+            let Some(writer) = &mut self.input else {
+                return false;
+            };
+            writer.write(data).map(|sequence| (sequence, writer.is_closed()))
+        };
+        match result {
+            Ok((_, true)) => {
+                self.error = Some("Terminal input stream closed before the write was sent.".into());
+                self.detach();
+                false
+            }
+            Ok((sequence, false)) => {
+                self.pending = Some(sequence);
+                self.status = format!("Awaiting ack #{sequence}");
+                true
+            }
+            Err(error) => {
+                self.error = Some(format!("Input was not queued: {error}"));
+                self.detach();
+                false
+            }
+        }
+    }
+
+    fn flush_queued_input(&mut self) {
+        if self.pending.is_some() {
+            return;
+        }
+        if let Some(data) = self.queued_input.pop_front() {
+            self.queued_input_bytes = self.queued_input_bytes.saturating_sub(data.len());
+            self.write_encoded(&data);
+        }
+    }
+
+    /// Sends the command text framed as a paste when the program asked for it.
+    fn send_paste(&mut self) {
+        let data = terminal_input::paste(&self.text, self.modes.bracketed_paste);
+        if self.send_encoded(&data) {
+            self.text.clear();
+        }
+    }
+
+    /// Sends one or more pointer gestures at a one-based grid cell.
+    fn send_mouse(&mut self, actions: &[terminal_input::MouseAction], cell: (usize, usize)) {
+        let mut data = String::new();
+        for action in actions {
+            let Some(encoded) = terminal_input::mouse(self.modes, *action, cell.0, cell.1) else {
+                continue;
+            };
+            data.push_str(&encoded);
+        }
+        if !data.is_empty() {
+            self.send_encoded(&data);
         }
     }
 
@@ -723,18 +835,123 @@ impl TerminalPanel {
                 self.reply_to_program(&screen.replies);
             }
         }
+        let mouse_mode = self.modes.mouse_reporting();
+        let mouse_active = mouse_mode != terminal_ansi::MouseReporting::Off;
+        if mouse_active || self.modes.bracketed_paste {
+            let mut enabled = Vec::new();
+            if self.modes.bracketed_paste {
+                enabled.push("bracketed paste");
+            }
+            if mouse_active {
+                enabled.push("mouse reporting");
+            }
+            ui.small(format!("Program enabled {}", enabled.join(" and ")));
+        }
+        // Wheel ticks belong to a program that tracks the pointer, so they are
+        // consumed before the scroll area sees them.
+        if mouse_active {
+            if let Some(rect) = self.grid_rect {
+                if let Some(position) = ui
+                    .input(|input| input.pointer.hover_pos())
+                    .filter(|position| rect.contains(*position))
+                {
+                    let delta =
+                        ui.input_mut(|input| std::mem::take(&mut input.smooth_scroll_delta.y));
+                    if delta != 0.0 {
+                        if let Some(cell) = terminal_cell(ui, rect, position) {
+                            self.send_mouse(
+                                &[terminal_input::MouseAction::Wheel(delta > 0.0)],
+                                cell,
+                            );
+                        }
+                    }
+                }
+            }
+        }
         let job = terminal_ansi::layout(&self.parsed, ui.available_width());
+        let mut grid_response = None;
         egui::ScrollArea::both()
             .id_salt("terminal-output")
             .max_height(180.0)
             .stick_to_bottom(true)
             .show(ui, |ui| {
-                ui.add(
-                    egui::Label::new(job)
-                        .selectable(true)
-                        .wrap_mode(egui::TextWrapMode::Extend),
+                let font = egui::FontId::monospace(12.0);
+                let (cell_width, cell_height) = ui
+                    .painter()
+                    .fonts_mut(|fonts| (fonts.glyph_width(&font, 'M'), fonts.row_height(&font)));
+                let size = egui::vec2(
+                    ui.available_width().max(cell_width * self.cols as f32),
+                    (cell_height * self.rows as f32).max(cell_height),
+                );
+                let sense = if mouse_active {
+                    egui::Sense::click_and_drag()
+                } else {
+                    egui::Sense::hover()
+                };
+                grid_response = Some(
+                    ui.add_sized(
+                        size,
+                        egui::Label::new(job)
+                            .selectable(!mouse_active)
+                            .wrap_mode(egui::TextWrapMode::Extend)
+                            .sense(sense),
+                    ),
                 );
             });
+        if let Some(response) = grid_response {
+            self.grid_rect = Some(response.rect);
+            response.output_event(egui::output::OutputEvent::ValueChanged(
+                egui::WidgetInfo::labeled(
+                    egui::WidgetType::Label,
+                    response.enabled(),
+                    "Terminal screen",
+                ),
+            ));
+            if mouse_active {
+                let pointer = response
+                    .interact_pointer_pos()
+                    .or_else(|| response.clicked().then_some(response.rect.center()));
+                if let Some(position) = pointer {
+                    if let Some(cell) = terminal_cell(ui, response.rect, position) {
+                        for (pointer_button, button) in [
+                            (egui::PointerButton::Primary, 0),
+                            (egui::PointerButton::Middle, 1),
+                            (egui::PointerButton::Secondary, 2),
+                        ] {
+                            if response.drag_started_by(pointer_button) {
+                                self.send_mouse(
+                                    &[terminal_input::MouseAction::Press(button)],
+                                    cell,
+                                );
+                            }
+                            if response.dragged_by(pointer_button) {
+                                self.send_mouse(&[terminal_input::MouseAction::Drag(button)], cell);
+                            }
+                            if response.drag_stopped_by(pointer_button) {
+                                self.send_mouse(
+                                    &[terminal_input::MouseAction::Release(button)],
+                                    cell,
+                                );
+                            } else if response.clicked_by(pointer_button) {
+                                self.send_mouse(
+                                    &[
+                                        terminal_input::MouseAction::Press(button),
+                                        terminal_input::MouseAction::Release(button),
+                                    ],
+                                    cell,
+                                );
+                            }
+                        }
+                        if mouse_mode == terminal_ansi::MouseReporting::AnyMotion
+                            && response.hovered()
+                            && ui.input(|input| input.pointer.delta() != egui::Vec2::ZERO)
+                        {
+                            self.send_mouse(&[terminal_input::MouseAction::Move], cell);
+                        }
+                    }
+                }
+            }
+        }
         let ready = self.input.is_some() && self.writable && self.pending.is_none();
         if let Some(environment) = &self.environment {
             let max_input = environment.max_input_bytes as usize;
@@ -754,6 +971,16 @@ impl TerminalPanel {
                     .clicked()
                 {
                     self.send(false);
+                }
+                if self.modes.bracketed_paste
+                    && ui
+                        .add_enabled(
+                            ready && !self.text.is_empty() && self.text.len() + 12 <= max_input,
+                            egui::Button::new("Send as paste"),
+                        )
+                        .clicked()
+                {
+                    self.send_paste();
                 }
                 ui.label(format!("{} / {max_input} input bytes", self.text.len()));
                 ui.label("Columns");
@@ -782,9 +1009,104 @@ mod ui_harness;
 
 #[cfg(test)]
 mod terminal_panel_tests {
-    use super::{append_bounded_output, TerminalPanel, TERMINAL_VISIBLE_BYTES};
-    use dsh_client_core::terminal::{TerminalInputLimits, TerminalWriter};
+    use super::{append_bounded_output, TerminalPanel, TerminalUpdate, TERMINAL_VISIBLE_BYTES};
+    use crate::terminal_ansi::InputModes;
+    use crate::terminal_input::MouseAction;
+    use dsh_client_core::terminal::{
+        TerminalAckFrame, TerminalEnvironment, TerminalFrame, TerminalInput, TerminalInputLimits,
+        TerminalRefusal, TerminalWriter,
+    };
     use std::sync::mpsc;
+
+    const LIMITS: TerminalInputLimits = TerminalInputLimits {
+        max_input_bytes: 4096,
+        max_buffered_bytes: 16384,
+        max_cols: 200,
+        max_rows: 60,
+    };
+
+    fn attached() -> (TerminalPanel, mpsc::Receiver<TerminalInput>) {
+        let (input, inputs) = mpsc::channel();
+        let mut panel = TerminalPanel::default();
+        panel.input = Some(TerminalWriter::new(input, LIMITS));
+        panel.writable = true;
+        (panel, inputs)
+    }
+
+    #[test]
+    fn paste_is_framed_only_when_the_program_enables_bracketed_paste() {
+        let (mut panel, inputs) = attached();
+        panel.text = "line one\nline two".to_owned();
+        panel.modes = InputModes {
+            bracketed_paste: true,
+            ..InputModes::default()
+        };
+        panel.send_paste();
+        assert_eq!(
+            inputs.try_recv(),
+            Ok(TerminalInput::Write {
+                sequence: 1,
+                data: "\u{1b}[200~line one\nline two\u{1b}[201~".to_owned(),
+            })
+        );
+        assert!(panel.text.is_empty());
+
+        panel.pending = None;
+        panel.text = "raw".to_owned();
+        panel.modes.bracketed_paste = false;
+        panel.send_paste();
+        assert_eq!(
+            inputs.try_recv(),
+            Ok(TerminalInput::Write {
+                sequence: 2,
+                data: "raw".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn mouse_gestures_are_encoded_for_the_enabled_protocol() {
+        let (mut panel, inputs) = attached();
+        panel.modes = InputModes {
+            bracketed_paste: false,
+            mouse_press: true,
+            sgr_mouse: true,
+            ..InputModes::default()
+        };
+        panel.send_mouse(&[MouseAction::Press(0), MouseAction::Release(0)], (3, 2));
+        assert_eq!(
+            inputs.try_recv(),
+            Ok(TerminalInput::Write {
+                sequence: 1,
+                data: "\u{1b}[<0;3;2M\u{1b}[<0;3;2m".to_owned(),
+            })
+        );
+
+        // A press-only program gets the wheel (as in xterm) but never drags.
+        panel.pending = None;
+        panel.send_mouse(&[MouseAction::Drag(0)], (3, 2));
+        assert_eq!(inputs.try_recv(), Err(mpsc::TryRecvError::Empty));
+        panel.send_mouse(&[MouseAction::Wheel(true)], (3, 2));
+        assert_eq!(
+            inputs.try_recv(),
+            Ok(TerminalInput::Write {
+                sequence: 2,
+                data: "\u{1b}[<64;3;2M".to_owned(),
+            })
+        );
+
+        panel.pending = None;
+        panel.modes.mouse_press = false;
+        panel.modes.mouse_drag = true;
+        panel.send_mouse(&[MouseAction::Drag(0)], (4, 2));
+        assert_eq!(
+            inputs.try_recv(),
+            Ok(TerminalInput::Write {
+                sequence: 3,
+                data: "\u{1b}[<32;4;2M".to_owned(),
+            })
+        );
+    }
 
     #[test]
     fn detach_requests_stop_and_releases_input() {
@@ -818,6 +1140,91 @@ mod terminal_panel_tests {
         append_bounded_output(&mut output, "end");
         assert_eq!(output.len(), TERMINAL_VISIBLE_BYTES);
         assert!(output.ends_with("end"));
+    }
+
+    #[test]
+    fn input_modes_survive_output_retention_trimming() {
+        let mut panel = TerminalPanel::default();
+        panel.push_output("\u{1b}[?2004h\u{1b}[?1002h\u{1b}[?1006h");
+        panel.push_output(&"x".repeat(TERMINAL_VISIBLE_BYTES));
+        assert!(panel.modes.bracketed_paste);
+        assert_eq!(
+            panel.modes.mouse_reporting(),
+            crate::terminal_ansi::MouseReporting::ButtonDrag
+        );
+        assert!(panel.modes.sgr_mouse);
+        panel.clear_output();
+        assert_eq!(panel.modes, InputModes::default());
+    }
+
+    #[test]
+    fn refusal_discards_queued_terminal_input_with_a_visible_error() {
+        let (mut panel, _inputs) = attached();
+        panel.environment = Some(TerminalEnvironment {
+            cwd: "/tmp".into(),
+            max_input_bytes: 4096,
+            max_buffered_bytes: 16384,
+            max_cols: 80,
+            max_rows: 24,
+            scrollback: 1000,
+        });
+        panel.pending = Some(1);
+        panel.queued_input.push_back("queued mouse".into());
+        panel.queued_input_bytes = "queued mouse".len();
+        let (updates, receiver) = mpsc::channel();
+        panel.updates = Some(receiver);
+        updates
+            .send(TerminalUpdate::Frame(Box::new(TerminalFrame::Ack(
+                TerminalAckFrame {
+                    sequence: 1,
+                    refusal: Some(TerminalRefusal::ReadOnly),
+                },
+            ))))
+            .expect("ack update");
+
+        panel.poll(&eframe::egui::Context::default());
+        assert_eq!(panel.pending, None);
+        assert!(panel.queued_input.is_empty());
+        assert_eq!(panel.queued_input_bytes, 0);
+        assert!(panel
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("ReadOnly")));
+    }
+
+    #[test]
+    fn terminal_mouse_queue_limit_reports_input_instead_of_growing_unbounded() {
+        let (mut panel, inputs) = attached();
+        panel.environment = Some(TerminalEnvironment {
+            cwd: "/tmp".into(),
+            max_input_bytes: 4096,
+            max_buffered_bytes: 4,
+            max_cols: 80,
+            max_rows: 24,
+            scrollback: 1000,
+        });
+        panel.pending = Some(1);
+        panel.modes.mouse_press = true;
+        panel.modes.sgr_mouse = true;
+        panel.send_mouse(&[MouseAction::Wheel(true)], (3, 2));
+        assert!(panel.queued_input.is_empty());
+        assert_eq!(panel.queued_input_bytes, 0);
+        assert!(panel.error.as_deref().is_some_and(|error| error.contains("queue is full")));
+        assert_eq!(inputs.try_recv(), Err(mpsc::TryRecvError::Empty));
+    }
+
+    #[test]
+    fn closed_terminal_uplink_detaches_after_a_write_fails() {
+        let (mut panel, inputs) = attached();
+        drop(inputs);
+        assert!(!panel.send_encoded("paste"));
+        assert!(!panel.writable);
+        assert_eq!(panel.pending, None);
+        assert!(panel.input.is_none());
+        assert!(panel
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("stream closed")));
     }
 
     #[test]
@@ -5931,6 +6338,27 @@ fn probe_streams(transport: HttpTransport, mux: RemoteStreamMux) {
         ),
         Err(error) => eprintln!("dsh: native models=failed: {error}"),
     }
+}
+
+/// Maps a screen position inside the terminal grid to a one-based cell.
+///
+/// The raster uses `FontId::monospace(12.0)`; pointer rows therefore count
+/// visual rows, which match program rows for a full-screen alternate buffer.
+fn terminal_cell(ui: &egui::Ui, rect: egui::Rect, position: egui::Pos2) -> Option<(usize, usize)> {
+    if !rect.contains(position) {
+        return None;
+    }
+    let font = egui::FontId::monospace(12.0);
+    let (width, height) = ui
+        .painter()
+        .fonts_mut(|fonts| (fonts.glyph_width(&font, 'M'), fonts.row_height(&font)));
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    Some((
+        (((position.x - rect.left()) / width).floor() as usize) + 1,
+        (((position.y - rect.top()) / height).floor() as usize) + 1,
+    ))
 }
 
 fn settings_write_error(error: &Error) -> String {

@@ -97,6 +97,114 @@ struct SavedScreen {
 }
 
 /// Rows of cells plus the cursor a full-screen program moves around.
+/// How much pointer motion the program asked to receive.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MouseReporting {
+    /// The program did not enable mouse reporting.
+    #[default]
+    Off,
+    /// Press and release only (DECSET 1000).
+    Press,
+    /// Adds motion while a button is held (DECSET 1002).
+    ButtonDrag,
+    /// Adds motion with no button held (DECSET 1003).
+    AnyMotion,
+}
+
+/// Input modes the program enabled with DECSET/DECRST.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InputModes {
+    /// Paste must be framed so the program can tell it apart from typing.
+    pub bracketed_paste: bool,
+    /// DECSET 1000 press/release tracking.
+    pub(crate) mouse_press: bool,
+    /// DECSET 1002 button-drag tracking.
+    pub(crate) mouse_drag: bool,
+    /// DECSET 1003 any-motion tracking.
+    pub(crate) mouse_motion: bool,
+    /// Report pointer events with SGR coordinates instead of X10 bytes.
+    pub sgr_mouse: bool,
+}
+
+impl InputModes {
+    /// Most capable pointer tracking mode still enabled by the program.
+    pub fn mouse_reporting(self) -> MouseReporting {
+        if self.mouse_motion {
+            MouseReporting::AnyMotion
+        } else if self.mouse_drag {
+            MouseReporting::ButtonDrag
+        } else if self.mouse_press {
+            MouseReporting::Press
+        } else {
+            MouseReporting::Off
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+enum ModeScanState {
+    #[default]
+    Ground,
+    Escape,
+    Csi(String),
+    Osc,
+    OscEscape,
+}
+
+/// Incremental private-mode reader that survives output-frame splits and trimming.
+#[derive(Debug, Default)]
+pub struct InputModeTracker {
+    state: ModeScanState,
+    modes: InputModes,
+}
+
+impl InputModeTracker {
+    /// Applies one output chunk and returns the modes still enabled.
+    ///
+    /// @param output - Newly received PTY bytes decoded as text.
+    /// @returns Current paste and mouse reporting modes.
+    pub fn feed(&mut self, output: &str) -> InputModes {
+        for character in output.chars() {
+            let state = std::mem::replace(&mut self.state, ModeScanState::Ground);
+            self.state = match state {
+                ModeScanState::Ground if character == '\u{1b}' => ModeScanState::Escape,
+                ModeScanState::Ground => ModeScanState::Ground,
+                ModeScanState::Escape if character == '[' => ModeScanState::Csi(String::new()),
+                ModeScanState::Escape if character == ']' => ModeScanState::Osc,
+                ModeScanState::Escape if character == 'c' => {
+                    self.modes = InputModes::default();
+                    ModeScanState::Ground
+                }
+                ModeScanState::Escape => ModeScanState::Ground,
+                ModeScanState::Csi(parameters) if ('\u{40}'..='\u{7e}').contains(&character) => {
+                    if matches!(character, 'h' | 'l') {
+                        apply_input_mode_list(&mut self.modes, &parameters, character == 'h');
+                    }
+                    ModeScanState::Ground
+                }
+                ModeScanState::Csi(mut parameters) if parameters.len() < 256 => {
+                    parameters.push(character);
+                    ModeScanState::Csi(parameters)
+                }
+                ModeScanState::Csi(_) => ModeScanState::Ground,
+                ModeScanState::Osc if character == '\u{7}' => ModeScanState::Ground,
+                ModeScanState::Osc if character == '\u{1b}' => ModeScanState::OscEscape,
+                ModeScanState::Osc => ModeScanState::Osc,
+                ModeScanState::OscEscape if character == '\\' => ModeScanState::Ground,
+                ModeScanState::OscEscape if character == '\u{1b}' => ModeScanState::OscEscape,
+                ModeScanState::OscEscape => ModeScanState::Osc,
+            };
+        }
+        self.modes
+    }
+
+    /// Clears mode state after a new terminal attachment or session.
+    pub fn reset(&mut self) {
+        self.state = ModeScanState::Ground;
+        self.modes = InputModes::default();
+    }
+}
+
 struct Screen {
     rows: Vec<Row>,
     row: usize,
@@ -602,12 +710,32 @@ fn parse_csi(
     }
 }
 
-/// Applies the private modes this view models: the alternate screen buffer.
+/// Applies the private modes this view models.
+///
+/// The alternate screen changes what is painted; paste framing and pointer
+/// tracking change how input must be encoded.
 fn apply_private_mode(screen: &mut Screen, parameters: &str, enabled: bool) {
     for parameter in parameters.split(';') {
         match parameter.trim() {
             "47" | "1047" | "1049" if enabled => screen.enter_alternate(),
             "47" | "1047" | "1049" => screen.leave_alternate(),
+            _ => {}
+        }
+    }
+}
+
+/// Applies the input-related DEC private modes shared by buffered and incremental parsers.
+fn apply_input_mode_list(modes: &mut InputModes, parameters: &str, enabled: bool) {
+    let Some(parameters) = parameters.strip_prefix('?') else {
+        return;
+    };
+    for parameter in parameters.split(';') {
+        match parameter.trim() {
+            "2004" => modes.bracketed_paste = enabled,
+            "1000" => modes.mouse_press = enabled,
+            "1002" => modes.mouse_drag = enabled,
+            "1003" => modes.mouse_motion = enabled,
+            "1006" => modes.sgr_mouse = enabled,
             _ => {}
         }
     }
@@ -755,6 +883,60 @@ mod tests {
         parse_screen(output, width).lines
     }
 
+    #[test]
+    fn a_full_screen_program_reports_the_input_modes_it_enabled() {
+        // What a TUI sends on startup: alternate buffer, paste framing, and
+        // SGR mouse tracking for drags, then a drawn line and a cursor query.
+        let screen = parse_screen(
+            "\u{1b}[?1049h\u{1b}[?2004h\u{1b}[?1002h\u{1b}[?1006h\u{1b}[H\u{1b}[2Jbox ready\u{1b}[6n",
+            20,
+        );
+        let modes = InputModeTracker::default()
+            .feed("\u{1b}[?1049h\u{1b}[?2004h\u{1b}[?1002h\u{1b}[?1006h");
+        assert!(modes.bracketed_paste);
+        assert_eq!(modes.mouse_reporting(), MouseReporting::ButtonDrag);
+        assert!(modes.sgr_mouse);
+        assert!(text(&screen.lines).contains("box ready"));
+        assert_eq!(screen.replies, "\u{1b}[1;10R");
+
+        // DECRST turns each mode off again; the alternate buffer exit is separate.
+        let modes = InputModeTracker::default()
+            .feed("\u{1b}[?2004l\u{1b}[?1006l\u{1b}[?1002l\u{1b}[?1049l");
+        assert_eq!(modes, InputModes::default());
+
+        // Press-only and any-motion tracking are distinct.
+        let press = InputModeTracker::default().feed("\u{1b}[?1000h");
+        assert_eq!(press.mouse_reporting(), MouseReporting::Press);
+        let any = InputModeTracker::default().feed("\u{1b}[?1003h");
+        assert_eq!(any.mouse_reporting(), MouseReporting::AnyMotion);
+
+        // Modes this view cannot honour stay off rather than being guessed.
+        let unsupported = InputModeTracker::default().feed("\u{1b}[?1005h\u{1b}[?1015h");
+        assert_eq!(unsupported, InputModes::default());
+
+        let combined = InputModeTracker::default().feed("\u{1b}[?1000h\u{1b}[?1002h\u{1b}[?1002l");
+        assert_eq!(combined.mouse_reporting(), MouseReporting::Press);
+    }
+
+    #[test]
+    fn input_mode_tracker_keeps_modes_across_chunks_and_independent_mode_resets() {
+        let mut tracker = InputModeTracker::default();
+        assert_eq!(tracker.feed("\u{1b}[?200"), InputModes::default());
+        let modes = tracker.feed("4h\u{1b}]0;title\u{7}\u{1b}[?1000;1002;1006h");
+        assert!(modes.bracketed_paste);
+        assert_eq!(modes.mouse_reporting(), MouseReporting::ButtonDrag);
+        assert!(modes.sgr_mouse);
+
+        // Disabling a stronger mode leaves a still-enabled fallback intact.
+        let modes = tracker.feed("\u{1b}[?1002l\u{1b}[?1006l");
+        assert_eq!(modes.mouse_reporting(), MouseReporting::Press);
+        assert!(!modes.sgr_mouse);
+        assert!(modes.bracketed_paste);
+        assert_eq!(
+            tracker.feed("\u{1b}[?1000l\u{1b}[?2004l"),
+            InputModes::default()
+        );
+    }
 
     fn text(lines: &[AnsiLine]) -> String {
         lines

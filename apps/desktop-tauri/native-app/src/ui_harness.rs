@@ -1407,3 +1407,162 @@ fn office_preview_reports_a_conversion_that_is_not_a_pdf() {
         .is_some());
     assert!(!office_preview_scratch("out/broken.docx").exists());
 }
+
+#[test]
+fn terminal_tui_bracketed_paste_sends_the_program_protocol_bytes() {
+    use dsh_client_core::terminal::{
+        TerminalEnvironment, TerminalInput, TerminalInputLimits, TerminalWriter,
+    };
+
+    let host = FixtureHost::start();
+    let (mut app, _frames) = fixture(&host);
+    app.selected_session = Some("fixture-session".to_owned());
+    app.terminal.session = Some("fixture-session".to_owned());
+    app.terminal.environment = Some(TerminalEnvironment {
+        cwd: "/tmp".to_owned(),
+        max_input_bytes: 4096,
+        max_buffered_bytes: 16384,
+        max_cols: 200,
+        max_rows: 60,
+        scrollback: 1000,
+    });
+    app.terminal.cols = 80;
+    app.terminal.rows = 24;
+    app.terminal
+        .push_output("\u{1b}[?1049h\u{1b}[?2004h\u{1b}[?1002h\u{1b}[?1006hTUI ready");
+    let (input, inputs) = mpsc::channel();
+    app.terminal.input = Some(TerminalWriter::new(
+        input,
+        TerminalInputLimits {
+            max_input_bytes: 4096,
+            max_buffered_bytes: 16384,
+            max_cols: 200,
+            max_rows: 60,
+        },
+    ));
+    app.terminal.writable = true;
+    let mut harness = harness(app, 1280.0, 860.0);
+    pump(&mut harness, "the TUI modes are applied", |app| {
+        app.terminal.modes.bracketed_paste
+            && app.terminal.modes.mouse_reporting()
+                == crate::terminal_ansi::MouseReporting::ButtonDrag
+            && app.terminal.modes.sgr_mouse
+    });
+    assert!(harness.query_by_label("Terminal screen").is_some());
+
+    let command = harness.get_by_label("Terminal command");
+    command.focus();
+    command.type_text("first line\nsecond line");
+    harness.run_steps(2);
+    assert_eq!(harness.state().terminal.text, "first line\nsecond line");
+    harness.get_by_label("Send as paste").click_accesskit();
+    harness.run_steps(2);
+    assert_eq!(
+        inputs.try_recv(),
+        Ok(TerminalInput::Write {
+            sequence: 1,
+            data: "\u{1b}[200~first line\nsecond line\u{1b}[201~".to_owned(),
+        })
+    );
+    assert!(harness.state().terminal.text.is_empty());
+    assert_eq!(harness.state().terminal.pending, Some(1));
+}
+
+#[test]
+fn terminal_tui_mouse_click_is_encoded_and_ack_order_is_preserved() {
+    use dsh_client_core::terminal::{
+        TerminalAckFrame, TerminalEnvironment, TerminalFrame, TerminalInput, TerminalInputLimits,
+        TerminalWriter,
+    };
+
+    let host = FixtureHost::start();
+    let (mut app, _frames) = fixture(&host);
+    app.selected_session = Some("fixture-session".to_owned());
+    app.terminal.session = Some("fixture-session".to_owned());
+    app.terminal.environment = Some(TerminalEnvironment {
+        cwd: "/tmp".to_owned(),
+        max_input_bytes: 4096,
+        max_buffered_bytes: 16384,
+        max_cols: 80,
+        max_rows: 24,
+        scrollback: 1000,
+    });
+    app.terminal.cols = 80;
+    app.terminal.rows = 24;
+    app.terminal
+        .push_output("\u{1b}[?1002h\u{1b}[?1006hTUI mouse ready");
+    let (input, inputs) = mpsc::channel();
+    let (updates, update_receiver) = mpsc::channel();
+    app.terminal.input = Some(TerminalWriter::new(
+        input,
+        TerminalInputLimits {
+            max_input_bytes: 4096,
+            max_buffered_bytes: 16384,
+            max_cols: 80,
+            max_rows: 24,
+        },
+    ));
+    app.terminal.updates = Some(update_receiver);
+    app.terminal.writable = true;
+    let mut harness = harness(app, 1280.0, 860.0);
+    pump(&mut harness, "the TUI mouse mode is applied", |app| {
+        app.terminal.modes.mouse_reporting() == crate::terminal_ansi::MouseReporting::ButtonDrag
+            && app.terminal.modes.sgr_mouse
+    });
+
+    // An AccessKit click represents a TUI mouse click, not merely a parser test.
+    harness.get_by_label("Terminal screen").click();
+    harness.run_steps(2);
+    let click = inputs.try_recv().expect("encoded mouse click");
+    let TerminalInput::Write { sequence: 1, data } = click else {
+        panic!("mouse input must be a write");
+    };
+    let (press, release) = data
+        .strip_prefix("\u{1b}[<0;")
+        .and_then(|data| data.split_once("M\u{1b}[<0;"))
+        .expect("SGR press then release");
+    let (press_x, press_y) = press.split_once(';').expect("press coordinates");
+    let (release_x, release_y) = release
+        .strip_suffix('m')
+        .and_then(|coordinate| coordinate.split_once(';'))
+        .expect("release coordinates");
+    assert_eq!(press_x, release_x);
+    assert_eq!(press_y, release_y);
+    assert!(press_x.parse::<usize>().is_ok_and(|value| value > 0));
+    assert!(press_y.parse::<usize>().is_ok_and(|value| value > 0));
+    assert_eq!(harness.state().terminal.pending, Some(1));
+
+    // A wheel event over the TUI is intercepted and queued while the click awaits ack.
+    let screen = harness.get_by_label("Terminal screen").rect();
+    harness.event(egui::Event::PointerMoved(screen.center()));
+    harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, 1.0),
+        modifiers: egui::Modifiers::default(),
+        phase: egui::TouchPhase::Move,
+    });
+    harness.run_steps(1);
+    assert_eq!(harness.state().terminal.queued_input.len(), 1);
+    assert_eq!(inputs.try_recv(), Err(mpsc::TryRecvError::Empty));
+    updates
+        .send(TerminalUpdate::Frame(Box::new(TerminalFrame::Ack(
+            TerminalAckFrame {
+                sequence: 1,
+                refusal: None,
+            },
+        ))))
+        .expect("ack channel");
+    harness.run_steps(2);
+    let wheel = inputs.try_recv().expect("queued wheel event");
+    let TerminalInput::Write { sequence: 2, data } = wheel else {
+        panic!("mouse wheel input must be a write");
+    };
+    let (wheel_x, wheel_y) = data
+        .strip_prefix("\u{1b}[<64;")
+        .and_then(|coordinates| coordinates.strip_suffix('M'))
+        .and_then(|coordinates| coordinates.split_once(';'))
+        .expect("SGR wheel coordinates");
+    assert_eq!(wheel_x, press_x);
+    assert_eq!(wheel_y, press_y);
+    assert_eq!(harness.state().terminal.pending, Some(2));
+}
