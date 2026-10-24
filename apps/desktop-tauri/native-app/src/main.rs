@@ -931,6 +931,7 @@ struct DesktopApp {
     page_receiver: Option<mpsc::Receiver<Result<(i64, SessionPage), Error>>>,
     page_through_seq: Option<i64>,
     chat_text: String,
+    focus_composer: bool,
     cancel_receiver: Option<mpsc::Receiver<Result<AcceptedResponse, Error>>>,
     attachment: Option<FileUploadValue>,
     attachment_name: String,
@@ -1090,6 +1091,7 @@ impl DesktopApp {
             page_receiver: None,
             page_through_seq: None,
             chat_text: String::new(),
+            focus_composer: false,
             cancel_receiver: None,
             attachment: None,
             attachment_name: String::new(),
@@ -2666,7 +2668,9 @@ impl DesktopApp {
 impl DesktopApp {
     /// Applies the client-local shortcut bindings; each chord toggles its view once.
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        let Ok([settings, marketplace, goals]) = self.ui_preferences.keybindings.chords() else {
+        let Ok([settings, marketplace, goals, new_session]) =
+            self.ui_preferences.keybindings.chords()
+        else {
             return;
         };
         if let Some(chord) = settings {
@@ -2682,6 +2686,12 @@ impl DesktopApp {
         if let Some(chord) = goals {
             if ctx.input_mut(|input| chord.consume(input)) {
                 self.show_goals = !self.show_goals;
+            }
+        }
+        if let Some(chord) = new_session {
+            if ctx.input_mut(|input| chord.consume(input)) {
+                self.request_sessions(SessionOperation::Create);
+                self.focus_composer = true;
             }
         }
     }

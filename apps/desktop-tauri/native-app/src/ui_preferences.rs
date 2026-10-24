@@ -94,6 +94,9 @@ pub struct Keybindings {
     /// Toggles the Goals view.
     #[serde(default = "default_open_goals")]
     pub open_goals: String,
+    /// Creates a Session and focuses the composer.
+    #[serde(default = "default_new_session")]
+    pub new_session: String,
 }
 
 impl Default for Keybindings {
@@ -102,17 +105,19 @@ impl Default for Keybindings {
             open_settings: default_open_settings(),
             open_marketplace: default_open_marketplace(),
             open_goals: default_open_goals(),
+            new_session: default_new_session(),
         }
     }
 }
 
 impl Keybindings {
     /// The parsed chords for this set, or `None` for a disabled entry.
-    pub fn chords(&self) -> Result<[Option<KeyChord>; 3], UiPreferencesError> {
+    pub fn chords(&self) -> Result<[Option<KeyChord>; 4], UiPreferencesError> {
         Ok([
             KeyChord::parse(&self.open_settings)?,
             KeyChord::parse(&self.open_marketplace)?,
             KeyChord::parse(&self.open_goals)?,
+            KeyChord::parse(&self.new_session)?,
         ])
     }
 }
@@ -560,6 +565,7 @@ impl UiPreferencesPanel {
                     &mut self.draft.keybindings.open_marketplace,
                 ),
                 ("Open goals", &mut self.draft.keybindings.open_goals),
+                ("New session", &mut self.draft.keybindings.new_session),
             ] {
                 ui.horizontal(|ui| {
                     ui.label(label);
@@ -813,6 +819,10 @@ fn default_open_marketplace() -> String {
 
 fn default_open_goals() -> String {
     "Ctrl+Shift+G".to_owned()
+}
+
+fn default_new_session() -> String {
+    "Ctrl+N".to_owned()
 }
 
 #[cfg(test)]
