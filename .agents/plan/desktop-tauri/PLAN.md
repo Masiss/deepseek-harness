@@ -1,11 +1,11 @@
-# PLAN — Desktop Tauri (Rust) + Node
+# PLAN — Desktop native (egui) + Node
 
 Tài liệu này gộp **ADR** và **kế hoạch chi tiết theo phase**. Quy tắc làm việc: [`AGENTS.md`](AGENTS.md). Số đo và bẫy: [`MEMORY.md`](MEMORY.md).
 
 Kế hoạch **cắt nhỏ phần mềm** nằm riêng ở [`PLAN-SHRINK.md`](PLAN-SHRINK.md) và chỉ mở **sau khi** tài liệu này xanh.
 
-- Trạng thái: **Goal 1 (baseline) đã đóng; Goal 2 (release-grade, Linux-first + nền port) đang mở.**
-- Ngày: 2026-10-19 (Goal 1); 2026-10-22 (Goal 2).
+- Trạng thái: **Goal 1 và Goal 2 là lịch sử; Goal 3 (native egui) đang mở, chưa release-grade.**
+- Ngày cập nhật: 2026-10-24.
 - Phạm vi: chỉ `apps/desktop-tauri`, `native/dsh-native`, provider packages và glue tối thiểu.
 
 ---
@@ -233,32 +233,51 @@ Lane tập trung **Linux**; **macOS và Windows để pending** cho tới khi c�
 
 **Còn giữ nguyên:** toàn bộ tính năng dsh nằm ở **Host** (tools, plugin, session, model, provider, terminal, sandbox) — client native nói chuyện với Host qua **đúng API** web client dùng ⇒ không mất tính năng harness. Mất là **bề mặt UI** (66 package `packages/client/*`) phải viết lại, và **UX mới của upstream không tự về** ⇒ có quy trình đối chiếu (M9).
 
-**Mốc (thứ tự theo rủi ro, Q13) — trạng thái thực tế (2026-10-23):**
+**Mốc (thứ tự theo rủi ro, Q13) — trạng thái thực tế (2026-10-24):**
 
 | Mốc | Nội dung | Trạng thái | Ghi chú |
 |---|---|---|---|
 | **M1** | `client-core` Rust: Connection envelope, token→API-cookie auth, unary HTTP, mux transport | **Xong** ✓ | `rpcId`, `{args: ...}`, `GET /connect?interactions=answer`, `/api` routing đã đối chiếu; request chạy trên tokio nên cờ huỷ bỏ request đang bay; **một socket vật lý dùng chung** (`RemoteStreamMux`) + reconnect có backoff, stream đang mở fail có kiểu, open mới chờ socket kế tiếp |
-| **M2** | Viewer: session list/page, log, trạng thái tool call | **Xong một phần** ◐ | egui list + async page viewer; chưa có probe session thật, pagination còn thiếu |
+| **M2** | Viewer: session list/page, log, trạng thái tool call | **Xong một phần** ◐ | egui list + async page viewer and older-page controls; packaged journey reads a page before and after Host restart, older-page Host coverage remains loopback-only |
 | **M3** | Chat: prompt, cancel, follow stream | **Xong một phần** ◐ | egui prompt + follow qua mux dùng chung; **đính kèm tệp**, **Cancel turn**, **transcript** (message/tool/approval/job + draft streaming) từ snapshot và event sống; lượt thật đã probe bằng mock provider (approval + question), còn thiếu card tool chuyên biệt và reasoning |
-| **M4** | Model selection + session management + approval | **Xong một phần** ◐ | HTTP clients + native search/create/rename/fork controls + **model picker** (catalog provider/model, chọn trong composer); `$events` + allow-once/reject UI; probe chứng minh **`$events=ready`**, catalog, và **cả 3 nhánh approval** (allow → bash chạy; reject/delegate → không chạy, audit đúng) + `job/follow` + **trả lời `ask_user_question` sống** |
-| **M5** | Terminal (PTY): RPC + attach/retain + native panel | **Xong một phần** ◐ | Gateway mux + egui list/create/attach/input/resize; `terminal_ansi` render SGR màu/`\r`/`K` (không mô phỏng định vị con trỏ); `TerminalWriter` giữ budget input + **cửa sổ frame** theo snapshot, queue tới khi ack; chưa probe GUI |
-| **M6** | Settings, plugins, skills, schedules, workspace files, preview | **Xong một phần** ◐ | typed clients + multipart decoder; redacted settings viewer + optimistic user-patch editor; plugin inventory view; text page hoặc **ảnh decode** (PNG/JPEG/GIF/WebP/BMP/ICO, trần 16 MiB/8192 px); workspace file watch; **panel Schedules** (list/delete); skills UI và office preview còn thiếu |
-| **M7** | Native app shell, Host sidecar, packaging, system integration | **Xong một phần** ◐ | async Host start/API auth, graceful shutdown, tray, dialogs; updater checks HTTPS/semver metadata and fails closed; AppDir tự chứa **đã chạy được** (`host=ready`, `auth=ok`); chưa ký và chưa nối vào release lane |
-| **M8** | Cổng parity: checklist từng màn hình | **Đang làm** ◐ | `.agents/plan/desktop-tauri/PARITY.md`; các màn hình native có UI với loading/empty/error states từng phần; session keyboard navigation, composer Ctrl+Enter và transcript renderer tách module; egui headless panel geometry chạy ở bốn viewport; còn parity UI đầy đủ, fault injection UI và visual review độc lập |
+| **M4** | Model selection + session management + approval + goals/plan | **Xong một phần** ◐ | composer model picker/profile-default initializer; session controls and older-page navigation; allow/reject/delegate; Goal lifecycle panel; `/plan` toggles through `commands/execute`. Packaged journey covers session create/rename/page reads, but search/fork and live Goal/Plan writes still lack packaged probes |
+| **M5** | Terminal (PTY): RPC + attach/retain + native panel | **Xong một phần** ◐ | Gateway mux + egui list/create/attach/input/resize; `terminal_ansi` renders SGR, carriage-return overwrite, and erase-to-end-of-line; `TerminalWriter` enforces input/frame budgets. Rust PTY provider passes the isolated probe; native panel still lacks a live PTY journey |
+| **M6** | Settings, plugins, skills, schedules, workspace files, preview | **Xong một phần** ◐ | settings editor, plugin/bundle controls, marketplace, skills/schedules, multipart previews, and Office UI are present. Packaged journey proves one settings mutation persists over restart and plugin tarball lifecycle; registry install and PDF rendering remain unverified |
+| **M7** | Native app shell, Host sidecar, packaging, system integration | **Xong một phần** ◐ | Host/auth, tray, dialogs, signed update prompts, outer-AppImage restart, self-contained runtime, and native AppImage boot pass local probes. Release-lane publication and GUI-driven signed update replacement remain pending |
+| **M8** | Cổng parity: checklist từng màn hình | **Đang làm** ◐ | `.agents/plan/desktop-tauri/PARITY.md`; headless panel geometry passes four viewports and the native shell boots/authenticates under isolated Weston. Physical-desktop visual review, UI fault injection, IME, and clipboard remain pending |
 | **M9** | Quy trình kịp upstream | **Xong** ✓ | `.agents/plan/desktop-tauri/UPSTREAM.md` |
 
 **Số đo sàn bộ nhớ (2026-10-22):** Host base-only (không `dsh-web-app`) **≈ 180 MiB RSS / 168 MiB PSS**; Host có webview ~190 MiB ⇒ bỏ bundle web chỉ tiết kiệm ~10 MiB ở Host, **webview ~530 MiB mới là chi phí lớn**. Ước tính native: Host 180 + shell ~30 + client 30–80 = **240–290 MiB** ⇒ đạt `< 300 MiB` nếu giữ transcript có giới hạn + tải plugin lazy.
 
 **Đo thật app native (2026-10-23, Hyprland, cây đóng gói):** sau khi Host sẵn sàng và auth xong, cây tiến trình (app + shell + Host) **263 MiB RSS / 240 MiB PSS** ⇒ **đạt ngân sách < 300 MiB**. `native-gui-probe.sh` in lại được số này trên máy thật.
 
+## Trạng thái hiện tại và việc còn lại — 2026-10-24
+
+Release-mode Linux x64 binary và AppImage 87,587,320-byte hiện có chứa UI preferences. `appimage-probe.sh` passes; `native-gui-probe.sh --no-measure` verifies app boot, Host readiness/authentication, and streams under isolated Weston, but does not click the preference controls or measure current RSS. RSS 263–266 MiB / PSS 240–245 MiB is from an earlier build. This is a local experimental artifact, not a signed or supported release.
+
+Trước khi coi Goal 3 là dùng hằng ngày hoặc phát hành, còn phải:
+
+- Kiểm tra GUI trên desktop thật: visual review, IME, clipboard, UI fault recovery, và cài update có ký rồi swap/restart từ giao diện.
+- Timed-question wait: bản compose hiện tại dùng tool blocking; bật `mode: timed` phải ghi đè `config.plugins` của preset (đổi bề mặt tool model thấy) ⇒ cần quyết định sản phẩm.
+- Hoàn tất hoặc chấp thuận rõ các thiếu hụt parity còn trong [`PARITY.md`](PARITY.md).
+- Chạy lại release lane; xác minh Linux x64/arm64 artifacts và feeds, ký bằng production key rồi mới publish khi được chủ dự án yêu cầu.
+
+**Packaged journeys (2026-10-24):** session fork + Goal lifecycle + marketplace-registry install đã PASS trong `packaged-journey-probe.sh`; `officeToPdf/render` PASS trong `office-component-probe.sh`; terminal journey PASS qua `native-journey-probe.sh`. Terminal từng hỏng trong bản đóng gói (`Cannot find module 'node-pty'` — subprocess runner tự resolve, không đi qua resolve hook của launcher); `prepare-linux-runtime.ts` giờ tạo package `node-pty` trỏ về provider Rust.
+
+AppImage hiện có thể dùng để thử nghiệm Linux x64 preferences, nhưng chưa nên dùng cho công việc cần độ tin cậy hoặc dữ liệu quan trọng. Không có production signing, publication, hoặc kiểm tra trên desktop thật trong lần build này.
+
+Native app now supports a separate client-local `native-ui-preferences.json` under `DSH_HOME` (or `~/.deepseek-harness`): system/light/dark theme, egui zoom, compact/comfortable spacing, and default Sessions panel width. Missing files use defaults; malformed or unsupported files stay untouched, defaults remain active, and Settings reports the error. Save/reload/reset use the versioned schema; Host settings remain separate, and local appearance settings work while disconnected. The editor accepts validated JSON. Custom font families, theme packs, keybindings, and the prototype Explorer/source pane are not implemented in the native app. Native-app tests, release build, AppImage package probe, and isolated-Weston startup/auth/stream probe pass; Settings interaction and current RSS were not verified.
+
+Prototype `DeepSeek Harness — Native Desktop GUI` in OpenDesign remains a separate HTML discussion artifact with a demo Explorer/source preview and wider appearance controls. It is not the native implementation: the source excerpt is supplied demo content, other file previews are placeholders, and its draft config schema is not the app's settings format. Browser/console verification of the artifact remains unavailable because the runner lacks Chrome.
+
 **Cấu trúc code hiện tại:**
 
 ```
-apps/desktop-tauri/client-core/     # protocol library (Rust), 79 unit + 8 multipart tests
-  src/{lib,envelope,auth,transport,binary_response,stream,streams,remote_stream,remote_events,session,chat,follow,models,sessions,approvals,terminal,upload,settings,plugins,skills,schedules,workspace_files}.rs
-  API.md, api.json                  # inventory 73 request + 12 stream
-apps/desktop-tauri/native-app/      # egui shell (no webview), 25 tests
-  src/{main,host,dialog,settings_panel,document_preview,terminal_ansi,updater}.rs
+apps/desktop-tauri/client-core/     # protocol library (Rust), 112 tests across unit and loopback suites
+  src/{lib,envelope,auth,transport,binary_response,stream,streams,remote_stream,remote_events,session,chat,commands,follow,models,sessions,approvals,goals,terminal,upload,settings,plugins,skills,schedules,workspace_files}.rs
+  API.md, api.json                  # inventory 82 requests + 12 streams
+apps/desktop-tauri/native-app/      # egui shell (no webview), 75 tests
+  src/{main,host,restart,dialog,settings_panel,ui_preferences,document_preview,terminal_ansi,updater}.rs
   package-appimage.sh
 ```
 

@@ -1,19 +1,23 @@
-# AGENTS.md — Desktop Tauri migration
+# AGENTS.md — Native Desktop lane
 
-Hướng dẫn bắt buộc cho agent làm việc trên nhánh desktop Tauri. Đọc cùng:
+Hướng dẫn bắt buộc cho agent làm việc trên Desktop lane của fork. ADR-0012 là quyết định hiện hành: UI dùng Rust + egui; Tauri đã rời khỏi lane. Đọc cùng:
 
 - [`PLAN.md`](PLAN.md) — ADR + kế hoạch theo phase + điều kiện nghiệm thu.
 - [`MEMORY.md`](MEMORY.md) — quyết định đã chốt, số đo, bẫy đã gặp.
 - [`../../../AGENTS.md`](../../../AGENTS.md) — quy tắc chung của repo.
 - [`../../../docs/architecture.md`](../../../docs/architecture.md) — kiến trúc harness.
 
+`apps/desktop-tauri/` là tên thư mục được giữ từ giai đoạn trước; Goal 3 không dùng Tauri.
+
 ## 1. Sứ mệnh
 
-Chuyển desktop app từ Electron sang **Tauri (Rust)** và giảm kích thước/runtime footprint, **không làm mất gốc** của sản phẩm:
+Chuyển Desktop lane của fork sang **native Rust + egui** và giảm runtime footprint, trong khi Node Host giữ nguyên harness và API của Web client:
 
 - giữ nguyên plugin ecosystem (Cordis, `dsh plugin`, bundle composition),
 - giữ nguyên session format, model-visible transcript, CLI/config,
-- giữ khả năng merge từ `deepseek-ai/deepseek-harness`.
+- giữ khả năng merge từ `deepseek-ai/deepseek-harness`; không sửa `apps/desktop/` (Electron upstream) trừ khi có yêu cầu riêng.
+
+Goal 2 Tauri là lịch sử và không phải đích triển khai hiện hành. Goal 3 chỉ thêm hoặc cập nhật native carrier, không đổi Host, Session, model-visible transcript, plugin, hay config contracts.
 
 ## 2. Bất biến — không được vi phạm
 
@@ -37,8 +41,8 @@ Chuyển desktop app từ Electron sang **Tauri (Rust)** và giảm kích thư�
 | Lớp | Được phép | Ví dụ |
 |---|---|---|
 | **L0** | Không sửa | `packages/core/*`, `llm/*`, `session/*`, `bundle/*`, `apps/desktop/src/*` |
-| **L1** | Thêm file/package mới | `apps/desktop-tauri/`, `native/dsh-native/`, provider packages |
-| **L2** | Glue tối thiểu, ghi vào `MEMORY.md` | `package.json`, profile patch, tài liệu |
+| **L1** | Thêm file/package mới | `apps/desktop-tauri/client-core/`, `apps/desktop-tauri/native-app/`, `native/dsh-native/` |
+| **L2** | Glue tối thiểu, ghi vào `MEMORY.md` | workflows, package scripts, profile patch, tài liệu |
 
 **Cấm:** rewrite in-place một implementation upstream. Mỗi lần upstream sửa file đó sẽ thành conflict vĩnh viễn.
 
@@ -64,7 +68,7 @@ Chuyển desktop app từ Electron sang **Tauri (Rust)** và giảm kích thư�
 Linux MVP → Linux production → macOS → Windows
 ```
 
-- Trong lúc Linux dùng Tauri, Windows/macOS vẫn dùng Electron cũ.
+- Linux native egui là mục tiêu hiện hành; macOS/Windows chưa mở cho tới khi có runner, signing credentials và quyết định port riêng.
 - Crate native dùng `#[cfg(target_os)]` **từ ngày đầu**, kể cả khi chưa build Windows.
 - Không hardcode đường dẫn Linux ngoài module platform.
 
@@ -79,7 +83,13 @@ bun run lint
 bun run test:web:built
 bun run test:snapshot
 bun run test:expected
+cargo test --locked --offline --manifest-path apps/desktop-tauri/client-core/Cargo.toml
+cargo test --locked --offline --manifest-path apps/desktop-tauri/native-app/Cargo.toml
+cargo build --locked --offline --release --manifest-path apps/desktop-tauri/native-app/Cargo.toml
+bash apps/desktop-tauri/scripts/native-protocol-probe.sh
 ```
+
+Chạy các lệnh tuần tự; không chạy build và test cùng lúc. Chạy packaged probes sau khi dựng runtime tree; chỉ chạy `native-gui-probe.sh` trên desktop rảnh hoặc compositor cô lập.
 
 Quy ước hiện có của repo:
 
@@ -93,29 +103,31 @@ Dừng ngay, không cố, khi gặp:
 
 | Điều kiện | Hành động |
 |---|---|
-| `dsh web` không boot dưới Bun | Bỏ Bun-compiled, fallback Node |
 | Snapshot/expected lệch | Điều tra; không cập nhật fixture |
 | Web e2e fail > 0 | Dừng |
-| `dsh plugin` không cài/chạy được plugin | Dừng mọi nhánh native rewrite |
-| Windows sandbox test fail | Giữ koffi |
-| Cài máy sạch không mở được | Dừng phát hành |
+| `dsh plugin` không cài/chạy được plugin | Dừng thay đổi làm hỏng composition hoặc plugin lifecycle |
+| Packaged Host/AppImage probe fail | Điều tra trước khi đổi release wiring; không gọi source-only test là packaged evidence |
+| Feed signature, artifact digest, or update version check fails | Fail closed; không bypass kiểm tra hoặc cài executable |
+| GUI verification would use the operator's active desktop | Dừng; chỉ chạy khi desktop rảnh hoặc trên compositor cô lập |
+| Release needs a production signing key or publication | Dừng cho tới khi chủ dự án yêu cầu rõ |
 
 ## 8. Những điều cấm
 
-- Không dùng Electron cho desktop mới.
-- Không sửa `apps/desktop/` (Electron) trừ khi có yêu cầu riêng; nó là cầu tạm cho Windows/macOS.
+- Không thêm Tauri/WebView làm UI của Goal 3; `native-app` là shell hiện hành.
+- Không sửa `apps/desktop/` (Electron upstream) trừ khi có yêu cầu riêng.
 - Không thêm dependency nếu crate/stdlib làm được.
 - Không dùng `as unknown`; tuân thủ rule của repo.
 - Không commit binary build vào repo.
-- Không chạy `package:desktop*`/`upload:*` khi chưa được yêu cầu.
+- Không publish, tag, push, hoặc chạy `upload:*` khi chưa được yêu cầu rõ.
 - Không đổi `packageManager` nếu chưa xử lý `scripts/primary-runtime/prepare.spec.ts:168`.
 
 ## 9. Cấu trúc dự kiến
 
 ```
-apps/desktop-tauri/          # L1 — shell Rust
-  src-tauri/                 # Rust: window, tray, menu, updater, sidecar
-  src-tauri/tauri.conf.json
+apps/desktop-tauri/          # L1 — native Linux Desktop lane
+  client-core/               # Host protocol, HTTP transport, shared mux
+  native-app/                # Rust + egui shell and Host sidecar
+  scripts/                   # Linux packaging and packaged probes
 native/dsh-native/           # L1 — crate napi-rs, cfg theo OS
 packages/.../*-native/       # L1 — provider packages
 .agents/plan/desktop-tauri/  # tài liệu này
@@ -125,7 +137,7 @@ packages/.../*-native/       # L1 — provider packages
 
 Một phase chỉ được coi là xong khi:
 
-1. Acceptance criteria của phase trong `PLAN.md` đạt.
-2. Gate ở mục 6 chạy pass (trừ failure có sẵn đã ghi).
-3. `MEMORY.md` được cập nhật số đo và quyết định mới.
-4. Không phát sinh file L2 mới ngoài danh sách đã ghi.
+1. Acceptance criteria của phase trong `PLAN.md` đạt; Goal 3 cần feature parity, RSS < 300 MiB trên máy thật, native probes, và signed AppImage update flow.
+2. Gate mục 6 phù hợp với diff chạy pass; failure có sẵn phải ghi rõ, không sửa fixture để vượt gate.
+3. `PARITY.md`, `HANDOFF.md`, và `MEMORY.md` phản ánh chính xác probe đã chạy, evidence level, quyết định, và phần chưa xác minh.
+4. Không phát sinh file L2 mới ngoài danh sách đã ghi; không publish khi chưa được yêu cầu.

@@ -1,14 +1,41 @@
 # Bàn giao — lane Desktop Tauri (fork `Masiss/deepseek-harness`)
 
-Cập nhật 2026-10-23. Mục đích: session mới đọc file này là biết đang ở đâu, cái gì đã xong, cái gì nên làm tiếp và bẫy nào đã mắc.
+Cập nhật 2026-10-24. Mục đích: session mới đọc file này là biết đang ở đâu, cái gì đã xong, cái gì nên làm tiếp và bẫy nào đã mắc.
+
+## Native release and Host integration — working tree 2026-10-24
+
+### Terminal screen model and appearance packs — 2026-10-24
+
+`terminal_ansi.rs` keeps a bounded screen (5,000 rows) instead of assembling lines: cursor moves (`H`/`f`, `A`/`B`/`C`/`D`, `G`, `d`), save/restore (`s`/`u`), erase-in-line/display (`K`/`J`), wrapping at the terminal's column count, and scrolling all land where a full-screen program expects. The panel re-parses when the stream or the column count changes. `ui_preferences.rs` gained a `themePack` (default / high contrast / Solarized) applied over both color schemes and client-local `keybindings` (open settings, marketplace, goals) that the shell consumes; invalid or duplicate chords fail validation and surface in the preferences editor.
+
+
+### Packaged journey wave (A1) — 2026-10-24
+
+`packaged-journey-probe.sh` now boots a local Messages provider (`mock-model-server.mjs`, `DSH_MOCK_MODEL_MODE=plain`) and drives five more journeys against the packaged tree: complete a turn, fork the Session, read the fork's transcript after a Host restart; the full Goal lifecycle (`create`/`get`/`pause`/`resume`/`edit`/`complete`/`clear`) plus a goal that survives a restart; and a marketplace-style install of the same fixture through a loopback npm registry (`installBundle` with an explicit `registry`). `office-component-probe.sh` installs the Office component, creates a Session, writes a `docx` with the component's Python, and renders it through `officeToPdf/render` (multipart PDF, 16,999 bytes).
+
+`scripts/native-journey-probe.sh [terminal|timed-question]` runs the app on a private headless Weston with env-gated probe hooks in `main.rs`: `DSH_DESKTOP_PROBE_TERMINAL=1` creates a Session and terminal, attaches over the shared mux, writes a command, and reads the output; `DSH_DESKTOP_PROBE_TIMED_QUESTION=1` answers a timed question after observing `userQuestions/attachWait`. The terminal journey **found and fixed a real packaging defect**: the subprocess runner resolves `node-pty` with its own `createRequire`, which does not consult the launcher's resolve hooks, so every `terminal/create` failed with `Cannot find module 'node-pty'`. `prepare-linux-runtime.ts` now materializes a `node-pty` package that re-exports the Rust provider, and the terminal journey is in the release lane (with `weston` installed there). The timed-question journey cannot run on the shipped composition: the preset composes the blocking tool, and enabling `mode: timed` means overriding the preset's `config.plugins`, i.e. changing the model-visible tool surface.
+
+Release source separates `manifest-native.json` from the webview `manifest.json`, signs both with the existing Host canonical bytes, and embeds shell-safe feed defaults in AppRun. Native Host startup consumes framed `ready`/`fatal` messages, forwards update prompts to egui for explicit confirmation, and schedules restart only after installation. The restart helper selects the outer `$APPIMAGE`, waits for the old process to exit, and refuses an invalid image path rather than falling back to the mounted binary. Native app headless tests are included in the Linux CI source.
+
+Validation: native-app 75/75; native release build; AppImage probe; and native GUI boot/auth/stream probe under isolated Weston pass. The UI preference file has round-trip, validation, failure-preservation, default-loading, and theme-application tests. The AppImage is 87,587,320 bytes. Its preference controls were not clicked during GUI testing; physical-desktop appearance, IME, clipboard, and visual review remain open. `test:docs` remains 20/21 because of the known `python/sdk/uv.lock:113` repository-reference failure. No production key, publication, tag, or active-desktop GUI interaction was used. Goal 3 remains open for release and the remaining live Host journeys.
+
+## Native functional controls — working tree 2026-10-24
+
+The egui layout presents Host update confirmations, approval delegation, older-page navigation, profile-default model initialization, Goal lifecycle controls, and `/plan` commands through existing Host APIs. Native UI preferences are stored separately in versioned `native-ui-preferences.json`; theme, scale, density, and default Sessions width can be previewed and saved without a Host connection. Invalid files leave their bytes unchanged and show a Settings error; the JSON editor validates drafts before applying them. The current AppImage passes its package probe, and the native app boots, authenticates, and reads streams under isolated Weston; Settings interactions still need GUI verification.
 
 ## Cập nhật native UI — 2026-10-23
 
-`native-app` tiếp tục có navigation rail/sidebar, session-list renderer riêng, composer multiline với Ctrl+Enter, trạng thái loading/disconnected/retry, và transcript renderer riêng trong `src/transcript_view.rs`. Eguis headless test dựng rail/sidebar/central panels ở bốn viewport, và transcript 1.000 dòng vẫn nằm trong vùng cuộn; debug layout đo kích thước panel thật mỗi frame. `cargo test --manifest-path apps/desktop-tauri/native-app/Cargo.toml` (54 tests) và `cargo build --manifest-path apps/desktop-tauri/native-app/Cargo.toml --release` xanh.
+`native-app` có navigation rail/sidebar, session-list renderer riêng, composer multiline với Ctrl+Enter, loading/disconnected/retry states, transcript renderer riêng, Goal lifecycle panel, older-page navigation, profile-default model initialization, approval delegation, và update confirmation. Eguis headless tests dựng layout ở bốn viewport và giữ transcript 1.000 dòng trong vùng cuộn; `cargo test` hiện có 69 tests và release build xanh. Physical-desktop IME/clipboard và visual review vẫn chờ.
 
 `bun run build` xanh (9/9); `bun run test:docs` đạt 20/21, lỗi `python/sdk/uv.lock:113`; `bun run doc-sync` đạt 39/43, còn ba generated catalogs stale (`api-catalog.ts`, config catalog, event graphs) và cùng repository-reference error. Không sửa các generated artifact ngoài phạm vi.
 
-Chưa xong: Goal 3 parity đầy đủ, interactive GUI verification cho IME/clipboard, fault injection riêng cho UI, independent visual review, signed native updater executable swap/restart, và release signing/publishing native AppImage. Các trạng thái chi tiết nằm trong [`PARITY.md`](PARITY.md); không coi các hạng mục này là đã nghiệm thu.
+## Dọn build và release artifacts — 2026-10-23
+
+`bun run clean` đã xóa 359 build/runtime paths; `cargo clean` cho `native-app`, `client-core`, `src-tauri`, và `native/dsh-native` đã thu hồi tổng cộng khoảng 24,3 GB. Runtime tree Linux sau đó được dựng từ các archive đã cache và xác minh hash; `.desktop-build` hiện khoảng 3,3 GB. Native AppImage `0.2.1-rc.4` được đóng gói lại (87.521.784 B) với URL feed native và component feed. `.artifacts` (23 MB), `.cache` (416 MB), và tracked `apps/desktop-tauri/dist/index.html` vẫn được giữ nguyên.
+
+Probe AppImage có thư mục `squashfs-root` chỉ đọc nên lần đầu `bun run clean` dừng với `EACCES`; trước khi chạy lại, mở quyền ghi cho riêng cây generated bằng `chmod -R u+w apps/desktop/.desktop-build`. Runtime preparation lần đầu timeout vì dùng cache path rỗng; rerun với `/home/masis/.cache/dsh-primary-runtime` dùng các archive đã xác minh và hoàn tất.
+
+Chưa xong: Goal 3 parity đầy đủ, packaged PTY/Goal/marketplace-write journeys, PDF render, timed-question wait, signed native swap/restart qua GUI, interactive IME/clipboard, UI fault injection, independent visual review, chạy lại release lane và release signing/publishing. Các trạng thái chi tiết nằm trong [`PARITY.md`](PARITY.md); không coi các hạng mục này là đã nghiệm thu.
 
 ## 1. Trạng thái repo
 
@@ -32,7 +59,6 @@ Chưa xong: Goal 3 parity đầy đủ, interactive GUI verification cho IME/cli
 - **F12** **lease** trên state desktop (`$DSH_HOME/desktop-host.lease`) do cả hai entrypoint giữ.
 - **A9** đã chạy với **model thật**: `live-transcript-probe.sh` (lượt thật qua route Codex ⇒ session ghi ⇒ replay ⇒ hai log đã chuẩn hoá khớp từng byte).
 - Route **Codex** dùng được (xem §6).
-- Đã **dọn ~21 GB** rác máy (cây runtime lane, build Rust, output build, `~/.wine`, image Docker, `/tmp/opencode`).
 
 ## 2b. Goal 2 — release-grade (đang mở, 2026-10-22)
 
@@ -45,7 +71,7 @@ Mục tiêu và acceptance đầy đủ ở `PLAN.md` § "Cấu trúc mục tiê
 - **Kill giữa download**: `crash-download-probe.sh` phục vụ archive chậm, kill -9 sau khi file dở > 64 KiB; boot lại ⇒ `left_before=1`, `cleaned=0`, `current=absent`.
 - **Kill giữa extract**: `crash-extract-probe.sh` kill -9 khi `staging-*` xuất hiện; boot lại ⇒ `staging=0`, `versions=0`, không cài dở. `recover()` cũng xoá version không được `current.json` trỏ tới.
 - **Update trọn luồng** (`update-flow-probe.mjs`): sau D40 probe này **bị hỏng** (manifest schema 1 + không ký) và đã sửa: schemaVersion 2, ký Ed25519 bằng key tạm, truyền `DSH_DESKTOP_UPDATE_PUBLIC_KEY`; giờ `RESULT update-flow=OK` (prompt download/install, `restart`, ảnh được thay).
-- **Profile contention**: `desktop-lease-probe.sh` vẫn `OK`.
+- **Profile contention**: `native-lease-probe.sh linux-x64` proves a second packaged Host is refused and a new Host can take over after the owner dies.
 - **Sharp fallback**: `image-parity-probe.sh` 11/11; khác byte JPEG/GIF/TIFF/resize là đã chấp nhận (D39).
 - **Benchmark**: Host cold start 1,98–2,09 s (warm), idle RSS 179–182 MiB; shell 0,55 s → 0,77 s → 4,54 s trên weston headless. App **đang chạy** trên session thật: **RSS 719–728 MiB / PSS 551–559 MiB** (web 330–338, shell 138–139, Host 192–193, network 58–59), FPS 57, app nạp 67 tài nguyên / 5,2 MB. Probe mới `graphics-probe.sh` (RSS/PSS/FPS/tài nguyên/ảnh webview), `office-engine-probe.sh` (engine Office).
 
@@ -88,7 +114,7 @@ Sau grill với chủ dự án, lane **chuyển hẳn** sang ứng dụng native
 
 | Mốc | Kết quả | Commit |
 |---|---|---|
-| M1 | `client-core`: envelope, auth (token→cookie), transport HTTP + cancel; inventory 73 request + 12 stream | done, API correctness re-audited 2026-10-23 |
+| M1 | `client-core`: envelope, auth (token→cookie), HTTP + cancel, shared mux; inventory 82 requests + 12 streams, including Goal and command RPCs | done, exact request coverage and Goal/command wire behavior re-audited 2026-10-24 |
 | M2 | `session`: list/page + tool-call status; fixture recorded-session | protocol done; egui viewer partial |
 | M3 | `chat` (prompt/cancel) + `follow` (Gateway mux stream) | protocol + basic egui panel, no model probe |
 | M4 | `models`, `sessions`, Remote Events approvals | API clients + allow/reject UI, no Host probe |
@@ -136,15 +162,15 @@ Sau grill với chủ dự án, lane **chuyển hẳn** sang ứng dụng native
 - **Feedback**: 👍/👎 cho assistant message theo `messageId`, list hiện có khi mở session, lưu qua `messageFeedback/put`.
 - **Settings ghi bằng mutate** (xoá field, bảo vệ secret slot) và **bật/tắt plugin/bundle** trong tab Plugins.
 - **Office preview** (Host `officeToPdf/render` → pdftoppm → image), **Marketplace** tab (search + install), **feedback** 👍/👎.
-- **Updater**: feed Ed25519 verification (ring) + verified download to cache when `DSH_AUTO_UPDATE=1`; executable replacement still manual.
-- **Native AppImage**: `DSH_DESKTOP_SHELL=native bash apps/desktop-tauri/scripts/pack-appimage.sh linux-x64` (87,6 MB), `appimage-probe.sh` PASS (AppRun contract + Host boot, headless); release lane vẫn đóng gói Tauri và chưa ký native.
+- **Updater**: Host verifies the Ed25519 feed and artifact before installation; native egui asks before download and install, then schedules the outer AppImage after the old process exits. Packaged signed swap/restart remains unverified.
+- **Native AppImage**: `DSH_DESKTOP_SHELL=native bash apps/desktop-tauri/scripts/pack-appimage.sh linux-x64` (87,6 MB), `appimage-probe.sh` PASS (AppRun contract + Host boot, headless); release workflow source now packages/verifies the native image and publishes a separate signed `manifest-native.json`, but no release run has validated it.
 - **Skills tab** (list theo session), **Deliverables panel** (link mở preview), **transcript card** cho todo/goal/plan + reasoning.
 - **Question card**: `ask_user_question` hiện card chọn đáp án (một/nhiều + free text), gửi qua waterfall `$events`; trước đó app delegate mọi event lạ nên câu hỏi thật bị `NO_PROVIDER`.
 - **Approval + job + câu hỏi thật**: `scripts/approval-probe.sh [allow|reject|delegate]` + `scripts/mock-model-server.mjs` chứng minh ask → allow (tool chạy, marker ngoài workspace) / reject / delegate (audit đúng, không chạy), `job/follow` đọc output job nền, và `ask_user_question` được trả lời qua waterfall `$events`.
 - Lệnh: `bash apps/desktop-tauri/scripts/approval-probe.sh` (cần display; log trong `~/.cache/dsh-probe/approval.*`).
 - Test: `client-core` **79 unit + 8 multipart**, `native-app` **25 unit**.
 
-**Còn lại (2026-10-23):** card feedback trong transcript, panel quản lý goal/todo/plan; card approval có nút delegate; `attachWait` (Desktop dùng tool legacy nên không có frame, cần overlay timed nếu muốn); marketplace/deliverables/feedback/goals/todo/plan UI và skills/schedules UI; office preview; marketplace/install và probe ghi plugin trên Host thật; updater ký số; nối AppDir/AppImage vào release lane + ký; parity đủ màn hình.
+**Còn lại (2026-10-24):** packaged Host journeys for session fork, PTY execution, settings writes/persistence, Goal mutations, marketplace-registry installation, PDF rendering, and timed-question waits; native GUI-driven update acceptance/restart; interactive IME/clipboard; UI fault injection and independent visual review; release-lane signing/publication. The packaged tree was rebuilt from verified cached runtime archives; no release was published.
 
 ## 3. Việc nên làm tiếp (theo thứ tự giá trị)
 
@@ -221,7 +247,7 @@ Audit để lại 13 unit deferred (ngân sách agent) — đáng để soi trư
 | **Private key ký release không được nằm trên đĩa** | Đã từng có bản sao ở `/tmp/opencode/signkey.pem` (mode 644) ⇒ đã xoá. Key chỉ ở secret `DSH_RELEASE_SIGNING_KEY` của fork. |
 | **Bun không chạy được runtime** | Native addon cần Node ⇒ `node --import tsx/esm apps/cli/src/bin.ts ...` (không phải `bun`). |
 | **`TMPDIR` trong repo làm hỏng lane snapshot** | Đặt `TMPDIR=/tmp/opencode/...` hoặc `apps/desktop/.desktop-build/tmp`. |
-| **Cây đóng gói đã bị dọn** | `apps/desktop/.desktop-build/targets/linux-x64/` phải dựng lại (`pack-linux.sh` + `prepare:primary-runtime` + `prepare-linux-runtime.ts`) trước khi chạy `update-probe.sh`, `desktop-lease-probe.sh`, `image-parity-probe.sh`, `entry-parity-probe.sh`, `office-component-probe.sh`. |
+| **Native runtime tree** | `apps/desktop/.desktop-build/targets/linux-x64/` currently contains the rebuilt package tree and native AppImage. Use `native-lease-probe.sh` and `update-flow-probe.mjs` for egui-era checks; `update-probe.sh`, `desktop-lease-probe.sh`, `graphics-probe.sh`, and `cold-start-probe.sh` still require the retired Tauri shell. |
 | **Probe cần `apps/desktop/.desktop-build/tmp` writable** | Không chạy được trên `/tmp` tmpfs còn trống ít. |
 | **Hai phiên Codex song song giết trẻ của nhau** | Chạy 2 CLI session cùng lúc ⇒ subagent của session cũ bị dừng giữa chừng ("stopped before it finished"), không để lại thay đổi. Grant OAuth Codex xoay vòng refresh token ⇒ session mới làm hỏng token của session cũ. **Một phiên Codex tại một thời điểm**; các vòng subagent chạy tuần tự |
 | **Probe L3 phải dùng binary release của cargo** | AppDir đóng gói trong cây build có thể cũ hơn các hook đo (cờ console) ⇒ probe không thấy `webview-auth=200` và bị chặn. Các probe khác dùng `apps/desktop-tauri/src-tauri/target/release/dsh-desktop-tauri` ✓ |
@@ -248,19 +274,25 @@ Audit để lại 13 unit deferred (ngân sách agent) — đáng để soi trư
 
 ```sh
 cd /home/masis/deepseek-harness
-bun run typecheck && bun run lint                 # gate (lint ~90 s; lint hẹp: bunx oxlint <path>, 3 s nhưng có thể báo giả "error type" ở file import build output)
-bunx vitest run apps/desktop-host                # test Host
-cargo test --manifest-path native/dsh-native/Cargo.toml --lib
-cargo test --manifest-path native/dsh-native/Cargo.toml --features landlock-bin --bin landlock-run
-bun apps/desktop-tauri/scripts/desktop-drift-gate.ts origin/master   # chỉ 2 file apps/desktop được đổi
-bash apps/desktop-tauri/scripts/update-probe.sh          # feed ký hợp lệ → available; sửa chữ ký → idle
-bash apps/desktop-tauri/scripts/desktop-lease-probe.sh   # lease: hai carrier không ghi chung state
-bash apps/desktop-tauri/scripts/image-parity-probe.sh    # shim ảnh vs sharp thật
-bash apps/desktop-tauri/scripts/live-transcript-probe.sh  # model thật ⇒ replay ⇒ diff 0
-bash apps/desktop-tauri/scripts/entry-parity-probe.sh    # cả hai entrypoint Host boot
-bash apps/desktop-tauri/scripts/office-engine-probe.sh  # engine Office: component có/không
-bash apps/desktop-tauri/scripts/graphics-probe.sh        # RSS/PSS/FPS/tài nguyên + ảnh webview
-bash apps/desktop-tauri/scripts/cold-start-probe.sh      # webview-auth=200 + cold_start=OK
+ bun run typecheck
+ bun run build
+ bun run lint
+ bunx vitest run apps/desktop-tauri/tests/native-release.spec.ts
+ bash apps/desktop-tauri/scripts/native-protocol-probe.sh
+ cargo test --locked --offline --manifest-path apps/desktop-tauri/native-app/Cargo.toml
+ cargo build --locked --offline --release --manifest-path apps/desktop-tauri/native-app/Cargo.toml
+ bash apps/desktop-tauri/scripts/entry-parity-probe.sh linux-x64
+ bash apps/desktop-tauri/scripts/native-lease-probe.sh linux-x64
+ bash apps/desktop-tauri/scripts/packaged-journey-probe.sh linux-x64
+ bash apps/desktop-tauri/scripts/fault-probe.sh linux-x64
+ bash apps/desktop-tauri/scripts/crash-download-probe.sh linux-x64
+ bash apps/desktop-tauri/scripts/crash-extract-probe.sh linux-x64
+  DSH_ISOLATION_DIR=/home/masis/.cache/dsh-probe/office-component-current bash apps/desktop-tauri/scripts/isolated-run.sh bash apps/desktop-tauri/scripts/office-component-probe.sh
+  bash apps/desktop-tauri/scripts/office-engine-probe.sh linux-x64
+  DSH_ISOLATION_DIR=/home/masis/.cache/dsh-probe/update-flow-current bash apps/desktop-tauri/scripts/isolated-run.sh node apps/desktop-tauri/scripts/update-flow-probe.mjs linux-x64
+ bash apps/desktop-tauri/scripts/appimage-probe.sh apps/desktop/.desktop-build/targets/linux-x64/appimage/DeepSeek-Harness-native-0.2.1-rc.4-x86_64.AppImage
+ DSH_DESKTOP_SHELL=native bash apps/desktop-tauri/scripts/pack-appimage.sh linux-x64
+ # The native GUI probe requires a display; run only on an idle physical desktop or isolated compositor.
 # B1 (khi được duyệt phát hành): bump `0.2.1-rc.4` đã có sẵn trong branch history
 git push fork chore/web-bun-migration                    # đẩy commit bump lên fork
 git tag desktop-v0.2.1-rc.4 && git push fork desktop-v0.2.1-rc.4   # kích hoạt lane release
