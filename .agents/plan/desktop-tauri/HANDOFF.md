@@ -4,6 +4,18 @@ Cập nhật 2026-10-24. Mục đích: session mới đọc file này là biết
 
 ## Native release and Host integration — working tree 2026-10-24
 
+### Appearance editor: role colors and font families — 2026-10-24
+
+Preferences moved to schema 2. A version-1 file is still read: every new field defaults, the loaded version is raised, and the stored choices survive (test `reads_a_version_one_file_and_keeps_its_choices`). New fields are a `customTheme` with a palette per color scheme, `fonts`, and `radius`.
+
+The palette uses role names rather than widget fields — background, surface, text, muted, accent, selection, border, warn, error — the same vocabulary as the OpenDesign "Neutral Modern" token model, and the Settings editor exposes a swatch plus hex field per role with a reset button. Defaults follow that model (cobalt accent, near-black background instead of pure black). The Settings page now groups Appearance (theme, scale, density, corner radius), Colors (pack and per-role editor), Fonts, shortcuts, Sessions width, the JSON draft, and the actions into labeled sections instead of one flat list.
+
+Fonts are real choices, not a fixed fallback. `fonts.rs` scans `fc-list` on a background thread, keeps single-face `.ttf`/`.otf` files (font collections cannot be loaded), resolves a configured family exactly then case-insensitively then by substring, and builds the egui chains with the chosen family first, the bundled faces next, and the system fallbacks last, so uncovered scripts still render. A configured family that disappeared is reported in the editor and in the log instead of failing startup.
+
+Verified on the physical desktop with an isolated Home: a green custom palette painted the panels (`#0F1A12` sampled from the screenshot), radius 4 flattened the controls, `Noto Sans` shaped the interface, `JetBrainsMono Nerd Font Mono` shaped code, and the preview line rendered `việt`. Native tests are 95, clippy keeps its 9 pre-existing warnings, and the AppImage was rebuilt (87,652,856 B) and reinstalled.
+
+Two probe lessons: `fcitx5` composing ASCII while testing fonts rewrites words (`fonttest` → `fontòtét`), so deactivate the IME for Latin checks and re-activate it afterwards; and a keystroke that activates a focused egui button can open the portal file dialog, which blocks the UI thread long enough for Hyprland to show "Application Not Responding". That path is pre-existing (the file dialog is called synchronously), not a regression from the appearance work, but the next GUI probe should check it.
+
 ### Physical-desktop pass (L3) and four defects it found — 2026-10-24
 
 Every earlier GUI check ran under headless Weston. This pass drove the installed AppImage (`~/.local/bin/dsh`, 87,607,800 B) on the real Hyprland session with an isolated `DSH_HOME`, injecting keys with `wtype` and capturing windows with `grim`. It found four real defects, all fixed in the working tree:
