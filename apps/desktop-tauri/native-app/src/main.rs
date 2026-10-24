@@ -198,6 +198,19 @@ struct TerminalPanel {
     rows: u32,
 }
 
+/// Removes one Office preview's PDF and raster files when conversion finishes.
+struct PreviewScratchDirectory(PathBuf);
+
+impl Drop for PreviewScratchDirectory {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.0) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                eprintln!("dsh: could not remove Office preview scratch directory: {error}");
+            }
+        }
+    }
+}
+
 impl TerminalPanel {
     fn detach(&mut self) {
         if let Some(stop) = self.stop.take() {
@@ -1838,7 +1851,15 @@ impl DesktopApp {
                 .render(scope, path.clone(), "foreground")
                 .map_err(|error| error.to_string())
                 .and_then(|preview| {
-                    let directory = std::env::temp_dir().join("dsh-office-preview");
+                    // Keep parallel previews from overwriting the same temporary PDF.
+                    let fingerprint = path.bytes().fold(0_u64, |hash, byte| {
+                        hash.wrapping_mul(31).wrapping_add(u64::from(byte))
+                    });
+                    let directory = std::env::temp_dir().join(format!(
+                        "dsh-office-preview-{}-{fingerprint:x}",
+                        std::process::id()
+                    ));
+                    let _scratch = PreviewScratchDirectory(directory.clone());
                     std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
                     let pdf_path = directory.join("document.pdf");
                     std::fs::write(&pdf_path, &preview.pdf).map_err(|error| error.to_string())?;

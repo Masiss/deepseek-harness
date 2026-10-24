@@ -1080,6 +1080,17 @@ trailer<</Root 1 0 R>>
     .to_vec()
 }
 
+/// Scratch path used by the Office preview worker for one Host path.
+fn office_preview_scratch(path: &str) -> std::path::PathBuf {
+    let fingerprint = path
+        .bytes()
+        .fold(0_u64, |hash, byte| hash.wrapping_mul(31).wrapping_add(u64::from(byte)));
+    std::env::temp_dir().join(format!(
+        "dsh-office-preview-{}-{fingerprint:x}",
+        std::process::id()
+    ))
+}
+
 /// Opens Settings, expands the Host section, and waits for its description.
 fn open_host_settings(harness: &mut Harness<'_, DesktopApp>) {
     harness.get_by_label("Settings").click_accesskit();
@@ -1359,6 +1370,7 @@ fn office_preview_renders_the_converted_pdf() {
         .query_by_label_contains("Image: report.docx")
         .is_some());
     assert!(harness.query_by_label_contains("306 × 153 px").is_some());
+    assert!(!office_preview_scratch("out/report.docx").exists());
 }
 
 #[test]
@@ -1393,4 +1405,5 @@ fn office_preview_reports_a_conversion_that_is_not_a_pdf() {
     assert!(harness
         .query_by_label_contains("Document read failed:")
         .is_some());
+    assert!(!office_preview_scratch("out/broken.docx").exists());
 }
