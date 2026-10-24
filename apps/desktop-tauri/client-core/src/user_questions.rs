@@ -76,6 +76,9 @@ pub struct UserQuestionWait {
     /// Whether the answer may also arrive after the foreground wait ends.
     #[serde(default)]
     pub timed: bool,
+    /// Foreground time left, as `userQuestions/attachWait` frames report it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remaining_ms: Option<u64>,
 }
 
 /// The `user-questions/request` payload presented by the waterfall.
@@ -203,6 +206,17 @@ mod tests {
             pending.request.wait.as_ref().and_then(|wait| wait.call_id.as_deref()),
             Some("call-1")
         );
+    }
+
+    #[test]
+    fn decodes_the_foreground_wait_frame() {
+        let wait: UserQuestionWait = serde_json::from_value(serde_json::json!({
+            "remainingMs": 1500
+        }))
+        .unwrap();
+        assert_eq!(wait.remaining_ms, Some(1500));
+        assert!(!wait.timed);
+        assert_eq!(wait.call_id, None);
     }
 
     #[test]

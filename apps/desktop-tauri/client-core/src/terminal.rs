@@ -264,6 +264,12 @@ impl<F> TerminalStream<F> {
         &self.cancel
     }
 }
+impl<F> TerminalStream<F> {
+    /// Waits up to `timeout` for the next decoded frame.
+    pub fn recv_timeout(&mut self, timeout: std::time::Duration) -> Option<Result<F, Error>> {
+        self.receiver.recv_timeout(timeout).ok()
+    }
+}
 impl<F> Iterator for TerminalStream<F> {
     type Item = Result<F, Error>;
     fn next(&mut self) -> Option<Self::Item> {
@@ -559,6 +565,58 @@ mod tests {
     use super::*;
     use crate::remote_stream::tests::{read, send, server};
     use std::time::Duration;
+
+    #[test]
+    fn attach_delivers_snapshot_output_ack_and_exit_after_input() {
+        let (url, credential, worker) = server(|mut socket| {
+            let open = read(&mut socket);
+            assert_eq!(open["endpoint"], "terminal/attach");
+            assert_eq!(open["payload"], serde_json::json!({"args":{"agentId":"a","id":"t"}}));
+            let id = &open["streamId"];
+            let mut info = serde_json::json!({
+                "id":"t","title":"PTY","shell":{"path":"/bin/sh","args":[],"name":"sh"},
+                "cwd":"/workspace","cols":80,"rows":24,"state":"running","exitCode":null
+            });
+            send(&mut socket, serde_json::json!({
+                "type":"item","streamId":id,"value":{
+                    "type":"snapshot","sequence":0,"screen":"$ ","info":info,"writable":true,
+                    "inputWindow":{"maxBytes":4096,"frameOverheadBytes":64}
+                }
+            }));
+            assert_eq!(read(&mut socket), serde_json::json!({
+                "type":"item","streamId":id,"value":{"type":"write","sequence":1,"data":"printf native\n"}
+            }));
+            send(&mut socket, serde_json::json!({"type":"item","streamId":id,"value":{"type":"ack","sequence":1}}));
+            send(&mut socket, serde_json::json!({"type":"item","streamId":id,"value":{"type":"output","sequence":1,"data":"native\r\n"}}));
+            info["state"] = serde_json::json!("exited");
+            info["exitCode"] = serde_json::json!(0);
+            send(&mut socket, serde_json::json!({"type":"item","streamId":id,"value":{"type":"state","info":info,"writable":false}}));
+            send(&mut socket, serde_json::json!({"type":"end","streamId":id}));
+        });
+        let mux = RemoteStreamMux::connect(&url, &credential).unwrap();
+        let (mut stream, input) = attach(&mux, "a", "t").unwrap();
+        let TerminalFrame::Snapshot(snapshot) = stream.next().unwrap().unwrap() else {
+            panic!("expected terminal snapshot")
+        };
+        assert!(snapshot.writable);
+        assert_eq!(snapshot.screen, "$ ");
+        input.send(TerminalInput::Write { sequence:1, data:"printf native\n".into() }).unwrap();
+        assert!(matches!(stream.next().unwrap().unwrap(), TerminalFrame::Ack(TerminalAckFrame { sequence:1, refusal:None })));
+        let TerminalFrame::Output(output) = stream.next().unwrap().unwrap() else {
+            panic!("expected PTY output")
+        };
+        assert_eq!(output.data, "native\r\n");
+        let TerminalFrame::State(state) = stream.next().unwrap().unwrap() else {
+            panic!("expected terminal exit")
+        };
+        assert!(!state.writable);
+        assert_eq!(state.info.state, TerminalState::Exited);
+        assert_eq!(state.info.exit_code, Some(0));
+        assert!(stream.next().is_none());
+        drop(input);
+        drop(stream);
+        worker.join().unwrap();
+    }
 
     #[test]
     fn authenticated_attach_sends_agent_and_single_inputs_then_half_closes() {

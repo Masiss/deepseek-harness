@@ -101,15 +101,12 @@ fn diff_section(
         if is_secret {
             return Err("Fields containing secret slots cannot be changed in this editor.".into());
         }
-        match (original.and_then(|original| original.get(key)), value.as_object()) {
+        match (
+            original.and_then(|original| original.get(key)),
+            value.as_object(),
+        ) {
             (Some(previous), Some(nested)) if previous.is_object() => {
-                diff_section(
-                    previous.as_object(),
-                    nested,
-                    secrets,
-                    prefix,
-                    ops,
-                )?;
+                diff_section(previous.as_object(), nested, secrets, prefix, ops)?;
             }
             (_, _) if secret_below(prefix) => {
                 return Err(
@@ -439,13 +436,7 @@ mod tests {
             });
         let mut editor = SettingsEditor::new(&ns).unwrap();
         assert!(editor.request().is_err());
-        for text in [
-            "{",
-            "[]",
-            "null",
-            "42",
-            r#"{"auth":{"token":"new"}}"#,
-        ] {
+        for text in ["{", "[]", "null", "42", r#"{"auth":{"token":"new"}}"#] {
             editor.text = text.into();
             assert!(editor.request().is_err(), "{text}");
         }

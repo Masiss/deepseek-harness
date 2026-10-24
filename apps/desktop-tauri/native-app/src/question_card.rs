@@ -163,10 +163,12 @@ mod tests {
             header: Some("Header".into()),
             options: options
                 .iter()
-                .map(|label| dsh_client_core::user_questions::UserQuestionOption {
-                    label: (*label).into(),
-                    description: None,
-                })
+                .map(
+                    |label| dsh_client_core::user_questions::UserQuestionOption {
+                        label: (*label).into(),
+                        description: None,
+                    },
+                )
                 .collect(),
             multi_select: multi,
         }
@@ -222,7 +224,15 @@ mod tests {
         for clipped in output.shapes {
             collect_text(&clipped.shape, &mut texts);
         }
-        for expected in ["Header", "Question one?", "detail text", "Yes", "No", "Answer", "Skip"] {
+        for expected in [
+            "Header",
+            "Question one?",
+            "detail text",
+            "Yes",
+            "No",
+            "Answer",
+            "Skip",
+        ] {
             assert!(texts.iter().any(|text| text == expected), "{texts:?}");
         }
     }

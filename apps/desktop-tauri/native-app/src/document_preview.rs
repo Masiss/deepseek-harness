@@ -342,7 +342,9 @@ mod tests {
             name: "shot.png".into(),
             host_path: "/host/project/shot.png".into(),
             size: [2, 2],
-            rgba: vec![255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255],
+            rgba: vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+            ],
         }
     }
 
@@ -350,9 +352,7 @@ mod tests {
     fn image_preview_reports_identity_and_dimensions() {
         let image = image();
         let mut preview = ImagePreview::default();
-        let texts = render_panel(320.0, |ui| {
-            preview.ui(ui, Some(&image), false, None)
-        });
+        let texts = render_panel(320.0, |ui| preview.ui(ui, Some(&image), false, None));
         for expected in ["Image preview", "Image: shot.png", "2 × 2 px"] {
             assert!(texts.iter().any(|text| text == expected), "{texts:?}");
         }
@@ -364,9 +364,7 @@ mod tests {
         let mut preview = ImagePreview::default();
         let missing = render_panel(320.0, |ui| preview.ui(ui, None, false, None));
         assert!(missing.iter().any(|text| text == "No image selected."));
-        let failed = render_panel(320.0, |ui| {
-            preview.ui(ui, None, false, Some("Unavailable"))
-        });
+        let failed = render_panel(320.0, |ui| preview.ui(ui, None, false, Some("Unavailable")));
         assert!(failed
             .iter()
             .any(|text| text == "Image read failed: Unavailable"));

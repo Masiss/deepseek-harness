@@ -584,6 +584,57 @@ mod tests {
     }
 
     #[test]
+    fn question_wait_failure_does_not_interrupt_a_shared_file_watch() {
+        use std::time::Duration;
+        let (url, credential, worker) = server(|mut socket| {
+            let wait = expect_open(
+                &mut socket,
+                "userQuestions/attachWait",
+                &serde_json::json!({"args":{"agentId":"s1","callId":"call-1"}}),
+            );
+            let watch = expect_open(
+                &mut socket,
+                "workspaceFiles/changes",
+                &serde_json::json!({"args":{"workspaceFileScopeId":"s1","path":"notes.txt"}}),
+            );
+            for (id, value) in [
+                (&watch["streamId"], serde_json::json!({"kind":"ready"})),
+                (&wait["streamId"], serde_json::json!({"remainingMs":"invalid"})),
+                (&wait["streamId"], serde_json::json!({"remainingMs":400})),
+            ] {
+                send(&mut socket, serde_json::json!({"type":"item","streamId":id,"value":value}));
+            }
+            send(&mut socket, serde_json::json!({
+                "type":"error","streamId":wait["streamId"],
+                "error":{"code":"gateway/cancelled","message":"wait ended","details":{}}
+            }));
+            send(&mut socket, serde_json::json!({
+                "type":"item","streamId":watch["streamId"],
+                "value":{"kind":"change","change":{"absolutePath":"/w/notes.txt","absent":true}}
+            }));
+            assert_eq!(read(&mut socket), serde_json::json!({
+                "type":"cancel","streamId":watch["streamId"]
+            }));
+        });
+        let mux = RemoteStreamMux::connect(&url, &credential).unwrap();
+        let mut wait = user_question_wait(&mux, "s1", "call-1").unwrap();
+        let scope = WorkspaceFileScope { session_id: "s1".into() };
+        let mut watch = workspace_file_changes(&mux, &scope, "notes.txt").unwrap();
+        let timeout = Duration::from_secs(10);
+        assert!(matches!(wait.recv_timeout(timeout), Some(Err(Error::InvalidEnvelope(_)))));
+        assert_eq!(wait.recv_timeout(timeout).unwrap().unwrap().remaining_ms, 400);
+        assert!(matches!(wait.recv_timeout(timeout), Some(Err(Error::Remote { code, .. })) if code == "gateway/cancelled"));
+        assert!(wait.recv_timeout(timeout).is_none());
+        assert_eq!(watch.recv_timeout(timeout).unwrap().unwrap(), WorkspaceFileWatchFrame::Ready);
+        let WorkspaceFileWatchFrame::Change { change } = watch.recv_timeout(timeout).unwrap().unwrap() else {
+            panic!("expected file removal after question failure")
+        };
+        assert_eq!(change.absent, Some(true));
+        drop(watch);
+        worker.join().unwrap();
+    }
+
+    #[test]
     fn unknown_frame_tags_are_rejected() {
         assert!(serde_json::from_value::<WorkspaceFollowFrame>(
             serde_json::json!({"type":"other"})

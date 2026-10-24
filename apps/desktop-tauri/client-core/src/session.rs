@@ -9,6 +9,9 @@ use std::sync::atomic::AtomicBool;
 
 use crate::{transport::HttpTransport, Error};
 
+/// Largest sequence bound accepted by the Host's JavaScript request validator.
+pub const MAX_SAFE_SEQUENCE: i64 = 9_007_199_254_740_991;
+
 /// A session identity accepted by the Host history endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,6 +89,28 @@ pub struct SessionPage {
     pub has_more: bool,
 }
 
+/// Bounds and turn context for one durable session page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTurnWindow {
+    pub min_messages: usize,
+    pub min_turns: usize,
+}
+
+/// Request options supported by the Host's session history endpoint.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionPageRequest {
+    pub address: SessionAddress,
+    pub through_seq: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before_seq: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_messages: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_window: Option<SessionTurnWindow>,
+}
+
 /// Status derived from a tool call and its matching result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolCallStatus {
@@ -126,11 +151,22 @@ impl<'a> SessionViewer<'a> {
 
     /// Read one page of a session's durable event log.
     pub fn page(&self, session_id: &str, through_seq: i64) -> Result<SessionPage, Error> {
+        self.page_request(SessionPageRequest {
+            address: SessionAddress {
+                kind: SessionAddressKind::Session,
+                session_id: session_id.to_owned(),
+            },
+            through_seq,
+            before_seq: None,
+            max_messages: None,
+            turn_window: None,
+        })
+    }
+
+    /// Read a page with optional older-page and turn-window bounds.
+    pub fn page_request(&self, request: SessionPageRequest) -> Result<SessionPage, Error> {
         let cancel = AtomicBool::new(false);
-        let payload = json!({"request": {
-            "address": {"kind": "session", "sessionId": session_id},
-            "throughSeq": through_seq
-        }});
+        let payload = json!({"request": request});
         let value = self.transport.request("session/page", payload, &cancel)?;
         Ok(serde_json::from_value(value)?)
     }
@@ -215,6 +251,33 @@ mod tests {
                 (&"call-failed".to_owned(), &ToolCallStatus::Failed),
                 (&"call-pending".to_owned(), &ToolCallStatus::Pending),
             ]
+        );
+    }
+
+    #[test]
+    fn page_request_serializes_older_page_bounds_and_turn_context() {
+        let request = SessionPageRequest {
+            address: SessionAddress {
+                kind: SessionAddressKind::Session,
+                session_id: "session-1".into(),
+            },
+            through_seq: 20,
+            before_seq: Some(12),
+            max_messages: Some(40),
+            turn_window: Some(SessionTurnWindow {
+                min_messages: 10,
+                min_turns: 2,
+            }),
+        };
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            json!({
+                "address":{"kind":"session","sessionId":"session-1"},
+                "throughSeq":20,
+                "beforeSeq":12,
+                "maxMessages":40,
+                "turnWindow":{"minMessages":10,"minTurns":2}
+            })
         );
     }
 }

@@ -149,10 +149,7 @@ fn project(event: &SessionWireEvent) -> Vec<TranscriptRow> {
                             }
                         }
                         Some("tool-call") => {
-                            let name = block
-                                .get("name")
-                                .and_then(Value::as_str)
-                                .unwrap_or("tool");
+                            let name = block.get("name").and_then(Value::as_str).unwrap_or("tool");
                             let arguments = block
                                 .get("arguments")
                                 .and_then(Value::as_str)
@@ -300,7 +297,10 @@ fn todo_row(event: &SessionWireEvent) -> TranscriptRow {
     let text = todos
         .iter()
         .map(|todo| {
-            let status = todo.get("status").and_then(Value::as_str).unwrap_or("pending");
+            let status = todo
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("pending");
             let mark = match status {
                 "completed" => "[x]",
                 "in_progress" => "[~]",
@@ -435,9 +435,7 @@ fn tool_summary(name: &str, arguments: &str) -> String {
 /// Removes terminal control characters that would disturb layout.
 fn sanitize(text: &str) -> String {
     text.chars()
-        .filter(|character| {
-            *character == '\n' || *character == '\t' || !character.is_control()
-        })
+        .filter(|character| *character == '\n' || *character == '\t' || !character.is_control())
         .collect()
 }
 
@@ -520,7 +518,11 @@ mod tests {
             "job/settled",
             serde_json::json!({"status": "completed", "detail": "exit code: 0"}),
         ));
-        let titles: Vec<_> = transcript.rows().iter().map(|row| row.title.as_str()).collect();
+        let titles: Vec<_> = transcript
+            .rows()
+            .iter()
+            .map(|row| row.title.as_str())
+            .collect();
         assert_eq!(
             titles,
             [
@@ -568,11 +570,7 @@ mod tests {
             "goal/change",
             serde_json::json!({"operation": "create", "goal": {"objective": "Ship the lane", "phase": "active"}}),
         ));
-        transcript.apply(&event(
-            5,
-            "plan/mode",
-            serde_json::json!({"active": true}),
-        ));
+        transcript.apply(&event(5, "plan/mode", serde_json::json!({"active": true})));
         transcript.apply(&event(
             6,
             "goal/change",

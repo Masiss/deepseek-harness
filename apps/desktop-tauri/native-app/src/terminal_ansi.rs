@@ -1,9 +1,11 @@
-//! Terminal output decoding for the native shell: SGR styling plus line assembly.
+//! Terminal output decoding for the native shell: SGR styling, cursor addressing,
+//! and screen assembly.
 //!
-//! The Host sends raw PTY bytes, including cursor-positioning sequences. This module
-//! renders the parts a plain scrollback view can represent — text, line breaks,
-//! carriage-return overwrites, and SGR attributes — and drops sequences that only
-//! move the cursor or erase the screen.
+//! The Host sends raw PTY bytes. This module keeps a small screen model so the
+//! sequences a full-screen program emits — absolute and relative cursor moves,
+//! erases, saved cursors — land where the program intended instead of appending
+//! text. Attributes resolve into egui paint formats, and the result is rendered as
+//! one scrollable monospace layout.
 
 use eframe::egui::{self, Color32, FontId};
 
@@ -33,6 +35,8 @@ pub struct AnsiLine {
 }
 
 const TAB_WIDTH: usize = 8;
+/// Rows retained before the oldest scrolls out of the view.
+const MAX_ROWS: usize = 5_000;
 const DEFAULT_FOREGROUND: Color32 = Color32::from_rgb(0xd8, 0xde, 0xe9);
 const DEFAULT_BACKGROUND: Color32 = Color32::from_rgb(0x1a, 0x1b, 0x26);
 
@@ -78,53 +82,178 @@ fn color_256(index: u8) -> Color32 {
     }
 }
 
-#[derive(Default)]
-struct LineBuffer {
-    cells: Vec<(char, AnsiStyle)>,
-    cursor: usize,
+/// Rows of cells plus the cursor a full-screen program moves around.
+struct Screen {
+    rows: Vec<Vec<(char, AnsiStyle)>>,
+    row: usize,
+    col: usize,
+    saved: Option<(usize, usize)>,
+    /// Terminal width in columns; `0` grows rows without wrapping.
+    width: usize,
 }
 
-impl LineBuffer {
-    fn write(&mut self, character: char, style: AnsiStyle) {
-        if character == '\t' {
-            let next = (self.cursor / TAB_WIDTH + 1) * TAB_WIDTH;
-            while self.cursor < next {
-                self.put(' ', style);
-            }
-            return;
+impl Screen {
+    fn new(width: usize) -> Self {
+        Self {
+            rows: vec![Vec::new()],
+            row: 0,
+            col: 0,
+            saved: None,
+            width,
         }
-        self.put(character, style);
+    }
+
+    fn ensure_row(&mut self) {
+        while self.rows.len() <= self.row {
+            self.rows.push(Vec::new());
+        }
     }
 
     fn put(&mut self, character: char, style: AnsiStyle) {
-        if self.cursor < self.cells.len() {
-            self.cells[self.cursor] = (character, style);
-        } else {
-            self.cells.push((character, style));
+        if self.width > 0 && self.col >= self.width {
+            self.row += 1;
+            self.col = 0;
         }
-        self.cursor += 1;
+        self.ensure_row();
+        let line = &mut self.rows[self.row];
+        while line.len() < self.col {
+            line.push((' ', AnsiStyle::default()));
+        }
+        if self.col < line.len() {
+            line[self.col] = (character, style);
+        } else {
+            line.push((character, style));
+        }
+        self.col += 1;
+        self.scroll();
     }
 
-    fn take(&mut self) -> AnsiLine {
-        let mut line = AnsiLine::default();
-        for (character, style) in self.cells.drain(..) {
-            match line.spans.last_mut() {
-                Some(span) if span.style == style => span.text.push(character),
-                _ => line.spans.push(AnsiSpan {
-                    text: character.to_string(),
-                    style,
-                }),
+    fn write_tab(&mut self, style: AnsiStyle) {
+        let next = (self.col / TAB_WIDTH + 1) * TAB_WIDTH;
+        while self.col < next {
+            self.put(' ', style);
+        }
+    }
+
+    /// Drops the oldest row once the screen holds more than it displays.
+    fn scroll(&mut self) {
+        if self.rows.len() > MAX_ROWS {
+            let excess = self.rows.len() - MAX_ROWS;
+            self.rows.drain(..excess);
+            self.row = self.row.saturating_sub(excess);
+        }
+    }
+
+    fn newline(&mut self) {
+        self.row += 1;
+        self.col = 0;
+        self.ensure_row();
+        self.scroll();
+    }
+
+    fn move_to(&mut self, row: usize, col: usize) {
+        self.row = if self.width > 0 {
+            row.min(MAX_ROWS.saturating_sub(1))
+        } else {
+            row
+        };
+        self.col = if self.width > 0 {
+            col.min(self.width.saturating_sub(1))
+        } else {
+            col
+        };
+        self.ensure_row();
+    }
+
+    fn move_by(&mut self, rows: isize, cols: isize) {
+        let row = self.row.saturating_add_signed(rows);
+        let col = self.col.saturating_add_signed(cols);
+        self.move_to(row, col);
+    }
+
+    fn erase_in_line(&mut self, mode: u16) {
+        self.ensure_row();
+        let line = &mut self.rows[self.row];
+        match mode {
+            1 => {
+                let end = self.col.min(line.len().saturating_sub(1));
+                for cell in line.iter_mut().take(end + 1) {
+                    *cell = (' ', AnsiStyle::default());
+                }
+            }
+            2 => line.clear(),
+            _ => {
+                if self.col < line.len() {
+                    line.truncate(self.col);
+                }
             }
         }
-        self.cursor = 0;
-        line
+    }
+
+    fn erase_in_display(&mut self, mode: u16) {
+        match mode {
+            1 => {
+                for index in 0..self.row {
+                    self.rows[index].clear();
+                }
+                self.erase_in_line(1);
+            }
+            2 => {
+                for line in &mut self.rows {
+                    line.clear();
+                }
+                self.row = 0;
+                self.col = 0;
+            }
+            _ => {
+                self.erase_in_line(0);
+                for index in self.row + 1..self.rows.len() {
+                    self.rows[index].clear();
+                }
+            }
+        }
+    }
+
+    /// Emits the written rows, stopping at the last one with visible cells.
+    fn into_lines(mut self) -> Vec<AnsiLine> {
+        self.ensure_row();
+        let last = self
+            .rows
+            .iter()
+            .rposition(|line| !line.is_empty())
+            .unwrap_or(0);
+        self.rows
+            .into_iter()
+            .take(last + 1)
+            .map(|mut cells| {
+                while cells
+                    .last()
+                    .is_some_and(|(character, style)| *character == ' ' && *style == AnsiStyle::default())
+                {
+                    cells.pop();
+                }
+                let mut line = AnsiLine::default();
+                for (character, style) in cells {
+                    match line.spans.last_mut() {
+                        Some(span) if span.style == style => span.text.push(character),
+                        _ => line.spans.push(AnsiSpan {
+                            text: character.to_string(),
+                            style,
+                        }),
+                    }
+                }
+                line
+            })
+            .collect()
     }
 }
 
-/// Parses terminal output into rendered lines, applying SGR state and carriage returns.
-pub fn parse(output: &str) -> Vec<AnsiLine> {
-    let mut lines = Vec::new();
-    let mut line = LineBuffer::default();
+/// Parses terminal output into rendered lines.
+///
+/// `width` is the terminal width in columns, so wrapping and absolute cursor
+/// positioning match what the program drew; `0` grows rows without wrapping.
+pub fn parse_sized(output: &str, width: usize) -> Vec<AnsiLine> {
+    let mut screen = Screen::new(width);
     let mut style = AnsiStyle::default();
     let mut characters = output.chars().peekable();
     while let Some(character) = characters.next() {
@@ -132,7 +261,7 @@ pub fn parse(output: &str) -> Vec<AnsiLine> {
             '\u{1b}' => {
                 if characters.peek() == Some(&'[') {
                     characters.next();
-                    parse_csi(&mut characters, &mut style, &mut line);
+                    parse_csi(&mut characters, &mut style, &mut screen);
                 } else if characters.peek() == Some(&']') {
                     characters.next();
                     for inner in characters.by_ref() {
@@ -150,36 +279,67 @@ pub fn parse(output: &str) -> Vec<AnsiLine> {
                     }
                 }
             }
-            '\n' => lines.push(line.take()),
-            '\r' => line.cursor = 0,
-            character if character.is_control() && character != '\t' => {}
-            character => line.write(character, style),
+            '\n' => screen.newline(),
+            '\r' => screen.col = 0,
+            '\t' => screen.write_tab(style),
+            character if character.is_control() => {}
+            character => screen.put(character, style),
         }
     }
-    if !line.cells.is_empty() || lines.is_empty() {
-        lines.push(line.take());
-    }
-    lines
+    screen.into_lines()
 }
 
 fn parse_csi(
     characters: &mut std::iter::Peekable<std::str::Chars<'_>>,
     style: &mut AnsiStyle,
-    line: &mut LineBuffer,
+    screen: &mut Screen,
 ) {
     let mut parameters = String::new();
     for character in characters.by_ref() {
         if ('\u{40}'..='\u{7e}').contains(&character) {
-            if character == 'm' {
-                apply_sgr(style, &parameters);
-            } else if character == 'K' {
-                // Erase to the end of the line.
-                line.cells.truncate(line.cursor);
+            match character {
+                'm' => apply_sgr(style, &parameters),
+                'K' => screen.erase_in_line(csi_value(&parameters, 0, 0)),
+                'J' => screen.erase_in_display(csi_value(&parameters, 0, 0)),
+                'H' | 'f' => {
+                    let row = csi_value(&parameters, 0, 1).max(1) as usize - 1;
+                    let col = csi_value(&parameters, 1, 1).max(1) as usize - 1;
+                    screen.move_to(row, col);
+                }
+                'A' => screen.move_by(-(csi_value(&parameters, 0, 1) as isize), 0),
+                'B' => screen.move_by(csi_value(&parameters, 0, 1) as isize, 0),
+                'C' => screen.move_by(0, csi_value(&parameters, 0, 1) as isize),
+                'D' => screen.move_by(0, -(csi_value(&parameters, 0, 1) as isize)),
+                'G' => screen.move_to(screen.row, csi_value(&parameters, 0, 1).max(1) as usize - 1),
+                'd' => screen.move_to(csi_value(&parameters, 0, 1).max(1) as usize - 1, screen.col),
+                's' => screen.saved = Some((screen.row, screen.col)),
+                'u' => {
+                    if let Some((row, col)) = screen.saved {
+                        screen.move_to(row, col);
+                    }
+                }
+                // Mode switches (hidden cursor, alternate screen) and every other
+                // sequence carry no cell change in this view.
+                _ => {}
             }
             return;
         }
         parameters.push(character);
     }
+}
+
+/// One CSI parameter by position, falling back to `default` when it is absent or blank.
+fn csi_value(parameters: &str, index: usize, default: u16) -> u16 {
+    let private = parameters.starts_with('?');
+    let parameters = parameters.trim_start_matches('?');
+    if private {
+        return default;
+    }
+    parameters
+        .split(';')
+        .nth(index)
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(default)
 }
 
 fn apply_sgr(style: &mut AnsiStyle, parameters: &str) {
@@ -303,6 +463,11 @@ pub fn layout(lines: &[AnsiLine], wrap_width: f32) -> egui::text::LayoutJob {
 mod tests {
     use super::*;
 
+    fn parse(output: &str) -> Vec<AnsiLine> {
+        parse_sized(output, 0)
+    }
+
+
     fn text(lines: &[AnsiLine]) -> String {
         lines
             .iter()
@@ -317,9 +482,37 @@ mod tests {
     }
 
     #[test]
-    fn plain_text_keeps_lines_and_ignores_cursor_sequences() {
+    fn absolute_cursor_moves_rewrite_existing_rows() {
         let lines = parse("one\r\n\u{1b}[2Ktwo\u{1b}[1;1Hthree\n");
-        assert_eq!(text(&lines), "one\ntwothree");
+        assert_eq!(text(&lines), "three\ntwo");
+    }
+
+    #[test]
+    fn absolute_and_relative_moves_address_one_screen() {
+        let lines = parse("\u{1b}[2;3Habc\u{1b}[1;1Htop\u{1b}[1Bdown\u{1b}[2D!\u{1b}[3;1Hx");
+        assert_eq!(text(&lines), "top\n  ado!n\nx");
+    }
+
+    #[test]
+    fn save_and_restore_return_to_the_marked_cell() {
+        let lines = parse("a\u{1b}[s\u{1b}[2;1Hb\u{1b}[u!");
+        assert_eq!(text(&lines), "a!\nb");
+    }
+
+    #[test]
+    fn erase_display_clears_the_requested_region() {
+        let all = parse("one\ntwo\u{1b}[2Jok");
+        assert_eq!(text(&all), "ok");
+        let below = parse("one\ntwo\u{1b}[1;2H\u{1b}[0J");
+        assert_eq!(text(&below), "o");
+    }
+
+    #[test]
+    fn known_width_wraps_and_clamps_the_cursor() {
+        let lines = parse_sized("abcdef", 4);
+        assert_eq!(text(&lines), "abcd\nef");
+        let clamped = parse_sized("\u{1b}[1;99Hx", 4);
+        assert_eq!(text(&clamped), "   x");
     }
 
     #[test]

@@ -16,6 +16,16 @@ The browser does not put a token in each RPC envelope. Connection creates or reu
 
 ## Plain requests
 
+### Headless verification
+
+`bash apps/desktop-tauri/scripts/native-protocol-probe.sh` runs the Rust protocol tests without starting the GUI or a Host. The loopback fixtures use an ephemeral operator cookie and check exact HTTP request envelopes, settings revisions and conflicts, session management, human-command listing/execution, Goal lifecycle, terminal RPCs and mux input/output, plugin/marketplace results, multipart document/Office bytes, and independent question/file streams. They do not access user credentials or install packages. Cargo runs offline and requires cached build dependencies.
+
+These fixtures do not establish packaged-Host parity: session fork persistence, real PTY execution through the native app, Goal writes, marketplace-registry installation, Office PDF conversion, timed-question waits, and native screen interaction still require isolated live-Host or L3 probes. `session/page` uses the cursor from `session/follow`; the native viewer requests older records with `beforeSeq`, `maxMessages`, and `turnWindow`.
+
+`pluginManager/installBundle` returns the completed change, not an installation receipt. `waitForInstall` returns `null` for an unknown or completed request; `cancelInstall` then returns `{status:"not-running"}`. The native install worker consumes the completed `application` result directly.
+
+### Request inventory
+
 Every plain request is a POST unless noted otherwise. `request` and `response` use the TypeScript names from the owning package; the RPC result wrapper is implicit.
 
 | Path | Request | Response | Mount |
@@ -45,6 +55,15 @@ Every plain request is a POST unless noted otherwise. `request` and `response` u
 | `messageFeedback/put` | `{sessionId, messageId, rating, note?, category?, ifVersion}` | feedback item or rejection | Desktop |
 | `messageFeedback/delete` | `{sessionId, messageId, ifVersion}` | `{absent: true}` or rejection | Desktop |
 | `job/kill` | `{sessionId, jobId}` | `{outcome}` | Desktop |
+| `goals/get` | `{agentId}` | `GoalView` or absent value | Desktop |
+| `goals/create` | `{agentId, request: {objective, maxGoalRounds?}}` | `{ref: GoalRef}` | Desktop |
+| `goals/edit` | `{agentId, ref: GoalRef, request: {objective?, maxGoalRounds?}}` | `GoalView` | Desktop |
+| `goals/pause` | `{agentId, ref: GoalRef}` | `GoalView` | Desktop |
+| `goals/resume` | `{agentId, ref: GoalRef}` | `GoalView` | Desktop |
+| `goals/complete` | `{agentId, ref: GoalRef}` | `GoalView` | Desktop |
+| `goals/clear` | `{agentId, ref: GoalRef}` | `GoalRef` tombstone | Desktop |
+| `commands/list` | `{agentId}` | `CommandDescriptor[]` | Desktop |
+| `commands/execute` | `{agentId, line, submittedAttachments[]}` | `CommandExecution` or absent value | Desktop |
 | `workspace/create` | `{path}` | `{workspace, created}` | Desktop |
 | `workspace/initializeDefault` | `{}` | workspace or `undefined` | Desktop |
 | `workspace/rename` | `{workspaceId, title}` | `{workspace}` | Desktop |
@@ -114,10 +133,14 @@ All streams below use the Gateway WebSocket mux and are cancelled by closing the
 
 ## Counts and scope
 
-There are **73 plain requests and 12 streams**. The inventory covers the Desktop profile's Web application composition and the protocol-facing registrations found in its Host bundle. It does not cover model tools, Cordis internal events, direct in-process service methods, browser UI slots, upload transport outside Connection, or optional plugins and user-installed profile overlays. It also does not claim that an optional capability is available merely because its controller is mounted.
+There are **82 plain requests and 12 streams**. The inventory covers the Desktop profile's Web application composition and the protocol-facing registrations found in its Host bundle. It does not cover model tools, Cordis internal events, direct in-process service methods, browser UI slots, upload transport outside Connection, or optional plugins and user-installed profile overlays. It also does not claim that an optional capability is available merely because its controller is mounted.
+
+Goal requests follow the [`GoalService` Remote declarations](../../../packages/goal/goal/src/index.ts), with payload types defined in [`types.ts`](../../../packages/goal/goal/src/types.ts). The `agentId` identifies a live Agent, not a Session lookup parameter. Creation returns only `{ref}`; callers read `goals/get` for the live view. Every edit, phase transition, and clear sends the exact expected `{id, revision}`. `client-core` preserves remote failures without retrying a stale revision. There is no remote `block` or `disarm` method.
+
+Command requests use `agentId` to address the live Session Agent. `commands/execute` records `command/run` and `command/done` and returns an absent value when no command resolves. The native Plan controls invoke the existing `/plan` and `/plan off` commands; Todo edits continue through the model-facing `todo_write` tool, with no direct Todo RPC.
 
 A native client must provide a native presentation for every listed capability. `client-core` implements the `rpcId` envelope, named `args` payloads, API-operator cookie exchange, unary HTTP calls including multipart byte restoration, and a shared physical mux (`RemoteStreamMux`) whose typed clients cover every listed stream: `session/follow`, `session/control`, `workspace/follow`, `job/list`, `job/follow`, `terminal/retain`, `terminal/attach`, `workspaceFiles/changes`, `account/watchExpiry`, `account/watch`, `remoteAccess/follow`, and `userQuestions/attachWait`, plus `$events` for approvals. One socket carries every logical stream; after a carrier loss the open streams fail with a carrier error and the mux replaces the socket with backoff, queueing opens issued in the meantime. The protocol has no per-stream resume, so callers reopen the logical stream. Terminal input honors the session byte budget and the snapshot's encoded-frame window. Prompt file parts reference receipts minted by `POST /api/session/uploadFileBinary?sessionId=…&name=…`, an authenticated raw-byte route outside this inventory.
 
-The egui app has a session list/read-only viewer, a prompt/follow panel with a bounded transcript projection (messages, tool calls and results, approvals, jobs, streaming draft), approval controls, and file attachments, a terminal panel with ANSI rendering, a jobs panel, a schedules panel with delete, a redacted settings viewer, a read-only plugin inventory view, decoded-image document preview, and a model picker over the catalog. `scripts/native-gui-probe.sh` proves boot, authentication, the approval channel, seven stream endpoints, and the memory budget on the packaged runtime. `scripts/approval-probe.sh [allow|reject|delegate]` drives a mock Messages provider through a sandbox-escalation approval on all three decision paths, reads a live background job over `job/follow`, and answers a live `ask_user_question` through the `$events` waterfall. `userQuestions/answer` exists for a *continued* question even though this inventory lists only the wait stream; `attachWait` emits frames only for the timed tool, while Desktop composes the blocking legacy tool. Native question cards settle open requests through the `user-questions/request` waterfall and encode option labels plus free text in the same answer batch. Full chat transcript projection, marketplace, Office preview, deliverables, feedback, goals/todo/plan panels, skills UI, settings replace/mutate, and the signed updater remain incomplete. It must not invent endpoints for operations absent from this inventory.
+The egui app provides session management and older-page navigation, chat/follow with file attachments and cancellation, transcript cards and feedback, approval allow/reject/delegate, terminal input and ANSI output, jobs, schedules, skills, settings mutations, plugin and marketplace management, document previews, Goal lifecycle controls, plan-mode toggling through the Host command registry, and a panel for recent task/plan events. It can confirm update download and installation prompts; the Host verifies signed metadata and artifact bytes before replacement. `scripts/native-gui-probe.sh` proves boot, authentication, the approval channel, seven stream endpoints, and the memory budget on the packaged runtime. `scripts/approval-probe.sh [allow|reject|delegate]` drives a mock Messages provider through all three approval decisions, reads a live background job over `job/follow`, and answers a live `ask_user_question` through the `$events` waterfall. `userQuestions/answer` supports continued questions; `attachWait` emits frames only for the timed tool, while Desktop composes the blocking legacy tool. Loopback client-core fixtures verify request envelopes but do not claim packaged-Host parity. Separate packaged probes cover plugin tarball lifecycle, session create/rename/page reads across restart, `agent-default-model` settings mutation across restart, Office component installation, and the signed Host update flow with a mock shell. Goal writes, marketplace-registry installation, PTY interaction through the native UI, Office PDF conversion, timed-question waits, native-GUI update/restart, interactive IME/clipboard, UI fault injection, and independent visual review remain unverified. Todo edits continue through the existing `todo_write` tool; no direct Todo RPC is defined. The client must not invent endpoints for operations absent from this inventory.
 
-The native profile also needs signed update metadata and release-lane AppImage integration before update installation can be enabled. `DSH_AUTO_UPDATE=1` currently remains fail-closed because the feed does not provide a signature-verification contract.
+The native release source generates a separately signed `manifest-native.json` and embeds its feed URL in AppRun. The release lane has not yet rebuilt or published that artifact; update installation should not be considered release-verified until the packaged signed swap/restart journey passes.

@@ -44,6 +44,15 @@
     {"path":"messageFeedback/put","method":"POST","request":"{sessionId: SessionId, messageId: MessageId, rating: 'positive'|'negative', note?: string, category?: string, ifVersion: MessageFeedbackVersion|null}","response":"success item | rejected result","kind":"plain","mount":"desktop (web-app bundle)"},
     {"path":"messageFeedback/delete","method":"POST","request":"{sessionId: SessionId, messageId: MessageId, ifVersion: MessageFeedbackVersion}","response":"{ok: true, value: {absent: true}} | rejected result","kind":"plain","mount":"desktop (web-app bundle)"},
     {"path":"job/kill","method":"POST","request":"{sessionId: SessionId, jobId: JobId}","response":"{outcome: 'requested'|'already-finished'}","kind":"plain","mount":"desktop (web-app bundle)"},
+    {"path":"commands/list","method":"POST","request":"{agentId: SessionId}","response":"CommandDescriptor[]","kind":"plain","mount":"desktop (base bundle)"},
+    {"path":"commands/execute","method":"POST","request":"{agentId: SessionId, line: string, submittedAttachments: CommandSubmitAttachment[]}","response":"CommandExecution | undefined","kind":"plain","mount":"desktop (base bundle)"},
+    {"path":"goals/get","method":"POST","request":"{agentId: SessionId}","response":"GoalView | undefined","kind":"plain","mount":"desktop (base bundle)"},
+    {"path":"goals/create","method":"POST","request":"{agentId: SessionId, request: CreateGoalRequest}","response":"CreateGoalResult","kind":"plain","mount":"desktop (base bundle)"},
+    {"path":"goals/edit","method":"POST","request":"{agentId: SessionId, ref: GoalRef, request: EditGoalRequest}","response":"GoalView","kind":"plain","mount":"desktop (base bundle)"},
+    {"path":"goals/pause","method":"POST","request":"{agentId: SessionId, ref: GoalRef}","response":"GoalView","kind":"plain","mount":"desktop (base bundle)"},
+    {"path":"goals/resume","method":"POST","request":"{agentId: SessionId, ref: GoalRef}","response":"GoalView","kind":"plain","mount":"desktop (base bundle)"},
+    {"path":"goals/complete","method":"POST","request":"{agentId: SessionId, ref: GoalRef}","response":"GoalView","kind":"plain","mount":"desktop (base bundle)"},
+    {"path":"goals/clear","method":"POST","request":"{agentId: SessionId, ref: GoalRef}","response":"GoalRef tombstone","kind":"plain","mount":"desktop (base bundle)"},
     {"path":"workspace/create","method":"POST","request":"{path: string}","response":"{workspace: WorkspaceView, created: boolean}","kind":"plain","mount":"desktop (web-app bundle)"},
     {"path":"workspace/initializeDefault","method":"POST","request":"{}","response":"{workspace: WorkspaceView} | undefined","kind":"plain","mount":"desktop (web-app bundle)"},
     {"path":"workspace/rename","method":"POST","request":"{workspaceId: WorkspaceId, title: string}","response":"{workspace: WorkspaceView}","kind":"plain","mount":"desktop (web-app bundle)"},
@@ -107,5 +116,5 @@
     {"path":"remoteAccess/follow","method":"WebSocket stream","request":"{}","response":"baseline | upsert | remove frames","mount":"desktop (web-app bundle)"},
     {"path":"userQuestions/attachWait","method":"WebSocket stream","request":"agent-scoped {callId: ToolCallId}","response":"{remainingMs: number} frames","mount":"desktop (web-app bundle)"}
   ],
-  "counts": {"requests": 73, "streams": 12, "plainRequests": 73}
+  "counts": {"requests": 82, "streams": 12, "plainRequests": 82}
 }

@@ -4,58 +4,61 @@ mod composer_input;
 mod dialog;
 mod document_preview;
 mod host;
-mod session_list;
 mod layout;
 mod question_card;
+mod restart;
+mod session_list;
 mod settings_panel;
 mod terminal_ansi;
 mod transcript;
 mod transcript_view;
+mod ui_preferences;
 mod updater;
 
-use transcript::{RowKind, Transcript};
-use transcript_view::render_transcript;
 use document_preview::{
     DocumentPreview, ImageDocument, ImagePreview, PreviewDocument, TextDocument,
 };
 use dsh_client_core::{
     approvals::{ApprovalDecision, PendingApproval},
     chat::{AcceptedResponse, ChatClient, PromptContentPart, PromptMode, PromptRequest},
+    commands::{CommandExecution, CommandResult, CommandsClient},
     follow::{self, FollowFrame, FollowRequest},
+    goals::{
+        CreateGoalRequest, EditGoalRequest, GoalActivation, GoalPhase, GoalRef, GoalView,
+        GoalsClient,
+    },
+    marketplace::MarketplaceClient,
+    message_feedback::{MessageFeedbackClient, MessageFeedbackItem, MessageFeedbackPutRequest},
     models::{
         ModelCatalog, ModelCatalogModel, ModelClient, ModelSelection, SelectModelRequest,
         SelectModelResponse,
     },
+    office_to_pdf::OfficeToPdfClient,
     plugins::{BundleInfo, ChangeResult, ManagedPlugin, PluginInventorySnapshot, PluginsClient},
-    schedules::{ScheduleDeleteRequest, ScheduleListRequest, SchedulesClient},
-    skills::{SkillListResponse, SkillsClient},
-    marketplace::MarketplaceClient,
-    message_feedback::{MessageFeedbackClient, MessageFeedbackItem, MessageFeedbackPutRequest},
     remote_events::{RemoteEvent, RemoteEventError, RemoteEventOutcome, RemoteEvents},
     remote_stream::RemoteStreamMux,
-    streams::{self, JobFollowFrame, JobView},
+    schedules::{ScheduleDeleteRequest, ScheduleListRequest, SchedulesClient},
     session::{
-        SessionAddress, SessionAddressKind, SessionPage, SessionSummary, SessionViewer,
-        ToolCallStatus,
+        SessionAddress, SessionAddressKind, SessionPage, SessionPageRequest, SessionSummary,
+        SessionTurnWindow, SessionViewer, ToolCallStatus, MAX_SAFE_SEQUENCE,
     },
-    stream::FrameStream,
     sessions::{
         CreateSessionRequest, ForkSessionRequest, RenameSessionRequest, SessionSearchResponse,
         SessionsClient,
     },
-    settings::{
-        SettingsClient, SettingsDescribeValue, SettingsNamespaceView,
-    },
-    workspace_files::WorkspaceByteReadOptions,
+    settings::{SettingsClient, SettingsDescribeValue, SettingsNamespaceView},
+    skills::{SkillListResponse, SkillsClient},
+    stream::FrameStream,
+    streams::{self, JobFollowFrame, JobView},
     terminal::{
-        self, TerminalClient, TerminalCloseRequest, TerminalCreateRequest,
-        TerminalEnvironment, TerminalFrame, TerminalInput, TerminalInputLimits,
-        TerminalRenameRequest, TerminalWriter, WebTerminalInfo,
+        self, TerminalClient, TerminalCloseRequest, TerminalCreateRequest, TerminalEnvironment,
+        TerminalFrame, TerminalInput, TerminalInputLimits, TerminalRenameRequest, TerminalWriter,
+        WebTerminalInfo,
     },
     transport::HttpTransport,
     upload::{FileUploadClient, FileUploadValue},
-    user_questions::{AskUserQuestionAnswer, AskUserQuestionAnswerItem, PendingQuestion},
-    office_to_pdf::OfficeToPdfClient,
+    user_questions::{AskUserQuestionAnswer, AskUserQuestionAnswerItem, PendingQuestion, UserQuestionsClient},
+    workspace_files::WorkspaceByteReadOptions,
     workspace_files::{
         WorkspaceByteRange, WorkspaceFileRange, WorkspaceFileScope, WorkspaceFilesClient,
     },
@@ -70,8 +73,11 @@ use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
+use transcript::{RowKind, Transcript};
+use transcript_view::render_transcript;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{Icon, TrayIconBuilder, TrayIconEvent};
+use ui_preferences::{UiPreferences, UiPreferencesAction, UiPreferencesPanel};
 
 enum PluginAction {
     SetPlugin { id: String, enabled: bool },
@@ -82,6 +88,20 @@ enum ApprovalCommand {
     Answer(PendingApproval, ApprovalDecision),
     Delegate(dsh_client_core::remote_events::RemoteEventInvocation),
     AnswerQuestion(PendingQuestion, AskUserQuestionAnswer),
+}
+
+enum ApprovalChoice {
+    Answer(ApprovalDecision),
+    Delegate,
+}
+
+enum GoalMutation {
+    Create(CreateGoalRequest),
+    Edit(GoalRef, EditGoalRequest),
+    Pause(GoalRef),
+    Resume(GoalRef),
+    Complete(GoalRef),
+    Clear(GoalRef),
 }
 
 const TERMINAL_VISIBLE_BYTES: usize = 128 * 1024;
@@ -149,6 +169,7 @@ struct TerminalPanel {
     output_revision: u64,
     parsed: Vec<terminal_ansi::AnsiLine>,
     parsed_revision: u64,
+    parsed_width: u32,
     text: String,
     title: String,
     status: String,
@@ -364,12 +385,15 @@ impl TerminalPanel {
             };
             match receiver.try_recv() {
                 Ok(TerminalUpdate::Attached(input)) => {
-                    let limits = self.environment.as_ref().map(|environment| TerminalInputLimits {
-                        max_input_bytes: environment.max_input_bytes as usize,
-                        max_buffered_bytes: environment.max_buffered_bytes as usize,
-                        max_cols: environment.max_cols,
-                        max_rows: environment.max_rows,
-                    });
+                    let limits = self
+                        .environment
+                        .as_ref()
+                        .map(|environment| TerminalInputLimits {
+                            max_input_bytes: environment.max_input_bytes as usize,
+                            max_buffered_bytes: environment.max_buffered_bytes as usize,
+                            max_cols: environment.max_cols,
+                            max_rows: environment.max_rows,
+                        });
                     match limits {
                         Some(limits) => {
                             self.input = Some(TerminalWriter::new(input, limits));
@@ -640,11 +664,12 @@ impl TerminalPanel {
             ui.colored_label(egui::Color32::LIGHT_RED, error);
         }
         ui.small(
-            "ANSI SGR colors and carriage returns are rendered; cursor positioning is not emulated.",
+            "ANSI SGR colors, cursor addressing, and line erases are rendered from the stream.",
         );
-        if self.parsed_revision != self.output_revision {
-            self.parsed = terminal_ansi::parse(&self.output);
+        if self.parsed_revision != self.output_revision || self.parsed_width != self.cols {
+            self.parsed = terminal_ansi::parse_sized(&self.output, self.cols as usize);
             self.parsed_revision = self.output_revision;
+            self.parsed_width = self.cols;
         }
         let job = terminal_ansi::layout(&self.parsed, ui.available_width());
         egui::ScrollArea::both()
@@ -856,6 +881,7 @@ enum ActiveView {
     Plugins,
     Skills,
     Marketplace,
+    Goals,
 }
 
 struct DesktopApp {
@@ -876,8 +902,10 @@ struct DesktopApp {
     selected_session: Option<String>,
     session_page: Option<SessionPage>,
     page_loading: bool,
+    page_before_seq: Option<i64>,
     page_error: Option<String>,
-    page_receiver: Option<mpsc::Receiver<Result<SessionPage, Error>>>,
+    page_receiver: Option<mpsc::Receiver<Result<(i64, SessionPage), Error>>>,
+    page_through_seq: Option<i64>,
     chat_text: String,
     cancel_receiver: Option<mpsc::Receiver<Result<AcceptedResponse, Error>>>,
     attachment: Option<FileUploadValue>,
@@ -906,6 +934,10 @@ struct DesktopApp {
     feedback_put_receiver: Option<mpsc::Receiver<Result<MessageFeedbackItem, Error>>>,
     feedback_status: Option<String>,
     settings_panel: SettingsPanel,
+    ui_preferences_path: PathBuf,
+    ui_preferences: UiPreferences,
+    applied_ui_preferences: Option<UiPreferences>,
+    ui_preferences_panel: UiPreferencesPanel,
     settings_description: Option<SettingsDescribeValue>,
     settings_loading: bool,
     settings_error: Option<String>,
@@ -924,6 +956,20 @@ struct DesktopApp {
     show_plugins: bool,
     show_skills: bool,
     show_market: bool,
+    show_goals: bool,
+    goal: Option<GoalView>,
+    goal_loading: bool,
+    goal_mutation_loading: bool,
+    goal_receiver: Option<mpsc::Receiver<Result<Option<GoalView>, Error>>>,
+    goal_mutation_receiver: Option<mpsc::Receiver<Result<Option<GoalView>, Error>>>,
+    goal_objective: String,
+    goal_max_rounds: String,
+    clear_goal_confirmation: Option<GoalRef>,
+    goal_error: Option<String>,
+    goal_status: Option<String>,
+    plan_command_receiver: Option<mpsc::Receiver<Result<Option<CommandExecution>, Error>>>,
+    plan_command_loading: bool,
+    plan_command_status: Option<String>,
     active_view: ActiveView,
     skills: Option<SkillListResponse>,
     skills_receiver: Option<mpsc::Receiver<Result<SkillListResponse, Error>>>,
@@ -934,11 +980,14 @@ struct DesktopApp {
     model_error: Option<String>,
     model_receiver: Option<mpsc::Receiver<Result<ModelCatalog, Error>>>,
     model_select_receiver: Option<mpsc::Receiver<Result<SelectModelResponse, Error>>>,
+    model_init_receiver: Option<mpsc::Receiver<Result<(), Error>>>,
     plugins_snapshot: Option<PluginInventorySnapshot>,
     plugins_loading: bool,
     plugins_error: Option<String>,
     plugins_receiver: Option<
-        mpsc::Receiver<Result<(PluginInventorySnapshot, Vec<BundleInfo>, Vec<ManagedPlugin>), Error>>,
+        mpsc::Receiver<
+            Result<(PluginInventorySnapshot, Vec<BundleInfo>, Vec<ManagedPlugin>), Error>,
+        >,
     >,
     plugin_bundles: Vec<BundleInfo>,
     managed_plugins: Vec<ManagedPlugin>,
@@ -959,6 +1008,8 @@ struct DesktopApp {
     job_status: String,
     job_receiver: Option<mpsc::Receiver<Result<JobFollowFrame, String>>>,
     status: String,
+    update_prompt: Option<host::UpdatePrompt>,
+    update_error: Option<String>,
     quitting: Arc<AtomicBool>,
     show_requested: Arc<AtomicBool>,
     hide_requested: Arc<AtomicBool>,
@@ -977,6 +1028,17 @@ impl DesktopApp {
         viewport: Arc<Mutex<Option<egui::Context>>>,
         tray_available: bool,
     ) -> Self {
+        let ui_preferences_path = UiPreferences::config_path();
+        let (ui_preferences, ui_preferences_load_error) =
+            match UiPreferences::load(&ui_preferences_path) {
+                Ok(preferences) => (preferences, None),
+                Err(error) => {
+                    eprintln!("dsh: UI preferences unavailable; defaults are active: {error}");
+                    (UiPreferences::default(), Some(error.to_string()))
+                }
+            };
+        let ui_preferences_panel =
+            UiPreferencesPanel::new(ui_preferences.clone(), ui_preferences_load_error);
         let (host_sender, host_receiver) = mpsc::channel();
         std::thread::spawn(move || {
             let _ = host_sender.send(Host::start());
@@ -999,8 +1061,10 @@ impl DesktopApp {
             selected_session: None,
             session_page: None,
             page_loading: false,
+            page_before_seq: None,
             page_error: None,
             page_receiver: None,
+            page_through_seq: None,
             chat_text: String::new(),
             cancel_receiver: None,
             attachment: None,
@@ -1029,6 +1093,10 @@ impl DesktopApp {
             feedback_put_receiver: None,
             feedback_status: None,
             settings_panel: SettingsPanel::default(),
+            ui_preferences_path,
+            ui_preferences,
+            applied_ui_preferences: None,
+            ui_preferences_panel,
             settings_description: None,
             settings_loading: false,
             settings_error: None,
@@ -1047,6 +1115,20 @@ impl DesktopApp {
             show_plugins: false,
             show_skills: false,
             show_market: false,
+            show_goals: false,
+            goal: None,
+            goal_loading: false,
+            goal_mutation_loading: false,
+            goal_receiver: None,
+            goal_mutation_receiver: None,
+            goal_objective: String::new(),
+            goal_max_rounds: String::new(),
+            clear_goal_confirmation: None,
+            goal_error: None,
+            goal_status: None,
+            plan_command_receiver: None,
+            plan_command_loading: false,
+            plan_command_status: None,
             active_view: ActiveView::Sessions,
             skills: None,
             skills_receiver: None,
@@ -1057,6 +1139,7 @@ impl DesktopApp {
             model_error: None,
             model_receiver: None,
             model_select_receiver: None,
+            model_init_receiver: None,
             plugins_snapshot: None,
             plugins_loading: false,
             plugins_error: None,
@@ -1080,6 +1163,8 @@ impl DesktopApp {
             job_status: String::new(),
             job_receiver: None,
             status: "Starting Host sidecar…".to_owned(),
+            update_prompt: None,
+            update_error: None,
             quitting,
             show_requested,
             hide_requested,
@@ -1190,9 +1275,9 @@ impl DesktopApp {
         std::thread::spawn(move || {
             let client = SessionsClient::new(&transport);
             let result = match operation {
-                SessionOperation::List => SessionViewer::new(&transport).list(None).map(|items| {
-                    SessionUpdate::List(items)
-                }),
+                SessionOperation::List => SessionViewer::new(&transport)
+                    .list(None)
+                    .map(|items| SessionUpdate::List(items)),
                 SessionOperation::Search(query) => client.search(query).map(SessionUpdate::Search),
                 SessionOperation::Create => client
                     .create(CreateSessionRequest {
@@ -1220,6 +1305,69 @@ impl DesktopApp {
             return;
         }
         self.refresh_settings();
+    }
+
+    fn handle_ui_preferences_action(&mut self, action: UiPreferencesAction, ctx: &egui::Context) {
+        match action {
+            UiPreferencesAction::Preview(preferences) => {
+                self.ui_preferences = preferences;
+                self.apply_ui_preferences(ctx);
+            }
+            UiPreferencesAction::Save(preferences) => {
+                match preferences.save(&self.ui_preferences_path) {
+                    Ok(()) => {
+                        self.ui_preferences = preferences.clone();
+                        self.ui_preferences_panel.saved(preferences);
+                        self.apply_ui_preferences(ctx);
+                    }
+                    Err(error) => {
+                        eprintln!("dsh: UI preferences save failed: {error}");
+                        let disposition = if self.ui_preferences == preferences {
+                            "Preview remains active for this session"
+                        } else {
+                            "The previous appearance remains active"
+                        };
+                        self.ui_preferences_panel.failed(format!(
+                            "Could not save UI preferences: {error}. {disposition}; draft retained. Fix the file location or permissions and retry."
+                        ));
+                    }
+                }
+            }
+            UiPreferencesAction::Reload => match UiPreferences::load(&self.ui_preferences_path) {
+                Ok(preferences) => {
+                    self.ui_preferences = preferences.clone();
+                    self.ui_preferences_panel.reloaded(preferences);
+                    self.apply_ui_preferences(ctx);
+                }
+                Err(error) => {
+                    eprintln!("dsh: UI preferences reload failed: {error}");
+                    self.ui_preferences_panel.failed(format!(
+                            "Could not reload UI preferences: {error}. Current appearance remains active."
+                        ));
+                }
+            },
+            UiPreferencesAction::Reset => {
+                let preferences = UiPreferences::default();
+                match preferences.save(&self.ui_preferences_path) {
+                    Ok(()) => {
+                        self.ui_preferences = preferences.clone();
+                        self.ui_preferences_panel.saved(preferences);
+                        self.apply_ui_preferences(ctx);
+                    }
+                    Err(error) => {
+                        eprintln!("dsh: UI preferences reset failed: {error}");
+                        self.ui_preferences_panel.failed(format!(
+                            "Could not reset UI preferences: {error}. Current appearance remains active."
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    fn apply_ui_preferences(&mut self, ctx: &egui::Context) {
+        ui_preferences::apply(ctx, &self.ui_preferences);
+        self.applied_ui_preferences = Some(self.ui_preferences.clone());
     }
 
     fn refresh_models(&mut self) {
@@ -1256,6 +1404,22 @@ impl DesktopApp {
         self.model_error = None;
     }
 
+    fn initialize_default_model(&mut self) {
+        if self.model_init_receiver.is_some() {
+            return;
+        }
+        let Some(transport) = self.transport.clone() else {
+            self.model_error = Some("Connect before selecting the default model".to_owned());
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(ModelClient::new(&transport).initialize_default_model());
+        });
+        self.model_init_receiver = Some(receiver);
+        self.model_error = None;
+    }
+
     fn refresh_plugins(&mut self) {
         if self.plugins_loading {
             return;
@@ -1271,7 +1435,11 @@ impl DesktopApp {
                 .list()
                 .map(|snapshot| (snapshot, client.list_bundles(), client.list_plugins()))
                 .map(|(snapshot, bundles, plugins)| {
-                    (snapshot, bundles.unwrap_or_default(), plugins.unwrap_or_default())
+                    (
+                        snapshot,
+                        bundles.unwrap_or_default(),
+                        plugins.unwrap_or_default(),
+                    )
                 });
             let _ = sender.send(result);
         });
@@ -1380,7 +1548,10 @@ impl DesktopApp {
             let client = MarketplaceClient::new(&transport);
             let result = (|| -> Result<String, Error> {
                 let inspect = client.inspect(&spec)?;
-                let status = inspect.get("status").and_then(serde_json::Value::as_str).unwrap_or("");
+                let status = inspect
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
                 if status != "accepted" {
                     return Err(Error::Remote {
                         code: "inspect-rejected".into(),
@@ -1389,15 +1560,10 @@ impl DesktopApp {
                     });
                 }
                 let install = client.install_bundle(&spec)?;
-                let request_id = install
-                    .get("requestId")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| Error::InvalidEnvelope("missing requestId"))?;
-                let waited = client.wait_for_install(request_id)?;
-                let application = waited
+                let application = install
                     .get("application")
                     .and_then(serde_json::Value::as_str)
-                    .unwrap_or("unknown");
+                    .ok_or_else(|| Error::InvalidEnvelope("missing application result"))?;
                 Ok(format!("{spec} -> {application}"))
             })();
             let _ = sender.send(result.map(serde_json::Value::String));
@@ -1534,11 +1700,9 @@ impl DesktopApp {
                 .map_err(|error| error.to_string())
                 .and_then(|preview| {
                     let directory = std::env::temp_dir().join("dsh-office-preview");
-                    std::fs::create_dir_all(&directory)
-                        .map_err(|error| error.to_string())?;
+                    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
                     let pdf_path = directory.join("document.pdf");
-                    std::fs::write(&pdf_path, &preview.pdf)
-                        .map_err(|error| error.to_string())?;
+                    std::fs::write(&pdf_path, &preview.pdf).map_err(|error| error.to_string())?;
                     let prefix = directory.join("page");
                     let output = std::process::Command::new("pdftoppm")
                         .args([
@@ -1559,13 +1723,17 @@ impl DesktopApp {
                     }
                     let png_path = format!("{}-1.png", prefix.display());
                     let bytes = std::fs::read(&png_path).map_err(|error| error.to_string())?;
-                    let image = image::load_from_memory(&bytes).map_err(|error| error.to_string())?;
+                    let image =
+                        image::load_from_memory(&bytes).map_err(|error| error.to_string())?;
                     let rgba = image.to_rgba8();
                     let (width, height) = rgba.dimensions();
                     let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
                     let mut document_name = name;
                     if !preview.missing_fonts.is_empty() {
-                        document_name = format!("{document_name} (missing fonts: {})", preview.missing_fonts.join(", "));
+                        document_name = format!(
+                            "{document_name} (missing fonts: {})",
+                            preview.missing_fonts.join(", ")
+                        );
                     }
                     Ok(PreviewDocument::Image(ImageDocument {
                         name: document_name,
@@ -1593,6 +1761,14 @@ impl DesktopApp {
         self.show_settings = false;
         self.show_plugins = false;
         self.selected_session = Some(session_id.clone());
+        self.goal = None;
+        self.goal_receiver = None;
+        self.goal_mutation_receiver = None;
+        self.goal_loading = false;
+        self.goal_mutation_loading = false;
+        self.goal_error = None;
+        self.goal_status = None;
+        self.clear_goal_confirmation = None;
         self.terminal.select_session(
             Some(session_id.clone()),
             self.transport.clone(),
@@ -1612,7 +1788,10 @@ impl DesktopApp {
         self.start_job_list();
         self.start_schedules();
         self.session_page = None;
+        self.page_receiver = None;
+        self.page_through_seq = None;
         self.page_error = None;
+        self.page_before_seq = None;
         self.chat_receiver = None;
         self.chat_loading = false;
         self.transcript.reset();
@@ -1630,12 +1809,439 @@ impl DesktopApp {
             self.page_error = Some("Connect to load this session".to_owned());
             return;
         };
+        let Some(streams) = self.streams.clone() else {
+            self.page_loading = false;
+            self.page_error = Some("Remote streams are not connected".to_owned());
+            return;
+        };
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
-            let result = SessionViewer::new(&transport).page(&session_id, i64::MAX);
+            let result = (|| {
+                let mut stream = follow::follow(
+                    &streams,
+                    FollowRequest {
+                        address: SessionAddress {
+                            kind: SessionAddressKind::Session,
+                            session_id: session_id.clone(),
+                        },
+                        max_messages: Some(1),
+                        turn_window: None,
+                        assistant_stream: Some(false),
+                    },
+                )?;
+                let frame = stream.next().ok_or(Error::InvalidEnvelope(
+                    "session follow ended before snapshot",
+                ))??;
+                let FollowFrame::Snapshot(snapshot) = frame else {
+                    return Err(Error::InvalidEnvelope(
+                        "session follow did not start with snapshot",
+                    ));
+                };
+                let through_seq = snapshot.cursor;
+                drop(stream);
+                let page = SessionViewer::new(&transport).page(&session_id, through_seq)?;
+                Ok((through_seq, page))
+            })();
             let _ = sender.send(result);
         });
         self.page_receiver = Some(receiver);
+        if self.show_goals {
+            self.refresh_goal();
+        }
+    }
+
+    fn load_older_session_page(&mut self) {
+        if self.page_loading {
+            return;
+        }
+        let Some(session_id) = self.selected_session.clone() else {
+            self.page_error = Some("Select a Session before loading older events".to_owned());
+            return;
+        };
+        let Some(before_seq) = self
+            .session_page
+            .as_ref()
+            .and_then(|page| page.records.first())
+            .map(|record| record.event.seq)
+        else {
+            self.page_error = Some("No earlier session events are available".to_owned());
+            return;
+        };
+        let Some(through_seq) = self.page_through_seq else {
+            self.page_error = Some("Session history cursor is unavailable".to_owned());
+            return;
+        };
+        let Some(transport) = self.transport.clone() else {
+            self.page_error = Some("Connect before loading older events".to_owned());
+            return;
+        };
+        let request = SessionPageRequest {
+            address: SessionAddress {
+                kind: SessionAddressKind::Session,
+                session_id,
+            },
+            through_seq,
+            before_seq: Some(before_seq),
+            max_messages: Some(200),
+            turn_window: Some(SessionTurnWindow {
+                min_messages: 100,
+                min_turns: 2,
+            }),
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = SessionViewer::new(&transport)
+                .page_request(request)
+                .map(|page| (through_seq, page));
+            let _ = sender.send(result);
+        });
+        self.page_receiver = Some(receiver);
+        self.page_loading = true;
+        self.page_before_seq = Some(before_seq);
+        self.page_error = None;
+    }
+
+    fn refresh_goal(&mut self) {
+        if self.goal_loading || self.goal_mutation_loading {
+            return;
+        }
+        let Some(session_id) = self.selected_session.clone() else {
+            self.goal_error = Some("Select a Session to view its goal".to_owned());
+            return;
+        };
+        let Some(transport) = self.transport.clone() else {
+            self.goal_error = Some("Connect before loading the goal".to_owned());
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(GoalsClient::new(&transport).get(&session_id));
+        });
+        self.goal_receiver = Some(receiver);
+        self.goal_loading = true;
+        self.goal_error = None;
+    }
+
+    fn mutate_goal(&mut self, mutation: GoalMutation) {
+        if self.goal_mutation_loading || self.goal_loading {
+            return;
+        }
+        let Some(session_id) = self.selected_session.clone() else {
+            self.goal_error = Some("Select a Session before changing its goal".to_owned());
+            return;
+        };
+        let Some(transport) = self.transport.clone() else {
+            self.goal_error = Some("Connect before changing the goal".to_owned());
+            return;
+        };
+        let status = match &mutation {
+            GoalMutation::Create(_) => "Creating goal…",
+            GoalMutation::Edit(_, _) => "Saving goal…",
+            GoalMutation::Pause(_) => "Pausing goal…",
+            GoalMutation::Resume(_) => "Resuming goal…",
+            GoalMutation::Complete(_) => "Completing goal…",
+            GoalMutation::Clear(_) => "Clearing goal…",
+        }
+        .to_owned();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let client = GoalsClient::new(&transport);
+            let result = match mutation {
+                GoalMutation::Create(request) => {
+                    client.create(&session_id, request).and_then(|created| {
+                        let goal = client
+                            .get(&session_id)?
+                            .ok_or(Error::InvalidEnvelope("created goal is not readable"))?;
+                        if goal.id != created.r#ref.id || goal.revision != created.r#ref.revision {
+                            return Err(Error::InvalidEnvelope("created goal identity changed"));
+                        }
+                        Ok(Some(goal))
+                    })
+                }
+                GoalMutation::Edit(reference, request) => {
+                    client.edit(&session_id, &reference, request).map(Some)
+                }
+                GoalMutation::Pause(reference) => client.pause(&session_id, &reference).map(Some),
+                GoalMutation::Resume(reference) => client.resume(&session_id, &reference).map(Some),
+                GoalMutation::Complete(reference) => {
+                    client.complete(&session_id, &reference).map(Some)
+                }
+                GoalMutation::Clear(reference) => {
+                    client.clear(&session_id, &reference).map(|_| None)
+                }
+            };
+            let _ = sender.send(result);
+        });
+        self.goal_mutation_receiver = Some(receiver);
+        self.goal_mutation_loading = true;
+        self.goal_status = Some(status);
+        self.goal_error = None;
+    }
+
+    fn run_plan_command(&mut self, active: bool) {
+        if self.plan_command_loading || self.chat_loading || self.assistant_streaming {
+            return;
+        }
+        let Some(agent_id) = self.selected_session.clone() else {
+            self.plan_command_status =
+                Some("Select a Session before changing plan mode".to_owned());
+            return;
+        };
+        let Some(transport) = self.transport.clone() else {
+            self.plan_command_status = Some("Connect before changing plan mode".to_owned());
+            return;
+        };
+        let line = if active { "/plan" } else { "/plan off" };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = CommandsClient::new(&transport).execute(agent_id.as_str(), line, vec![]);
+            let _ = sender.send(result);
+        });
+        self.plan_command_receiver = Some(receiver);
+        self.plan_command_loading = true;
+        self.plan_command_status = Some(if active {
+            "Entering plan mode…".to_owned()
+        } else {
+            "Leaving plan mode…".to_owned()
+        });
+    }
+
+    fn render_goals_panel(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.heading("Goal");
+            if ui
+                .add_enabled(
+                    !self.goal_loading && !self.goal_mutation_loading,
+                    egui::Button::new("Refresh"),
+                )
+                .clicked()
+            {
+                self.refresh_goal();
+            }
+        });
+        let Some(session_id) = self.selected_session.as_deref() else {
+            ui.label("Select a Session to manage its goal.");
+            return;
+        };
+        ui.label(format!("Session: {session_id}"));
+        if let Some(status) = &self.goal_status {
+            ui.small(status);
+        }
+        if let Some(error) = &self.goal_error {
+            ui.colored_label(egui::Color32::LIGHT_RED, error);
+        }
+        if self.goal_loading && self.goal.is_none() {
+            ui.spinner();
+            return;
+        }
+
+        let goal = self.goal.clone();
+        if let Some(goal) = goal.filter(|goal| goal.phase != GoalPhase::Complete) {
+            ui.label(format!(
+                "{} · {:?} · {:?}",
+                goal.id, goal.phase, goal.activation
+            ));
+            ui.label(format!(
+                "{} of {} rounds used",
+                goal.rounds_started, goal.max_goal_rounds
+            ));
+            ui.add(
+                egui::TextEdit::multiline(&mut self.goal_objective)
+                    .hint_text("Goal objective")
+                    .desired_rows(3),
+            );
+            ui.horizontal(|ui| {
+                ui.label("Maximum rounds");
+                ui.add(egui::TextEdit::singleline(&mut self.goal_max_rounds).desired_width(80.0));
+            });
+            let reference = GoalRef {
+                id: goal.id.clone(),
+                revision: goal.revision,
+            };
+            let objective_changed = self.goal_objective.trim() != goal.objective;
+            let rounds_text_changed = self.goal_max_rounds != goal.max_goal_rounds.to_string();
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        !self.goal_mutation_loading
+                            && (objective_changed || rounds_text_changed)
+                            && !self.goal_objective.trim().is_empty(),
+                        egui::Button::new("Save changes"),
+                    )
+                    .clicked()
+                {
+                    let max_goal_rounds = if rounds_text_changed {
+                        match self.goal_max_rounds.parse::<u64>() {
+                            Ok(rounds) if rounds > 0 && rounds <= MAX_SAFE_SEQUENCE as u64 => {
+                                Some(rounds)
+                            }
+                            _ => {
+                                self.goal_error = Some(
+                                    "Maximum rounds must be a positive whole number".to_owned(),
+                                );
+                                return;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    self.mutate_goal(GoalMutation::Edit(
+                        reference.clone(),
+                        EditGoalRequest {
+                            objective: objective_changed
+                                .then(|| self.goal_objective.trim().to_owned()),
+                            max_goal_rounds,
+                        },
+                    ));
+                }
+                match (goal.phase, goal.activation) {
+                    (GoalPhase::Active, GoalActivation::Armed) => {
+                        if ui.button("Pause").clicked() {
+                            self.mutate_goal(GoalMutation::Pause(reference.clone()));
+                        }
+                    }
+                    (GoalPhase::Paused | GoalPhase::Blocked, _)
+                    | (GoalPhase::Active, GoalActivation::Disarmed) => {
+                        if ui.button("Resume").clicked() {
+                            self.mutate_goal(GoalMutation::Resume(reference.clone()));
+                        }
+                    }
+                    (GoalPhase::Complete, _) => {}
+                }
+                if ui
+                    .add_enabled(!self.goal_mutation_loading, egui::Button::new("Complete"))
+                    .clicked()
+                {
+                    self.mutate_goal(GoalMutation::Complete(reference.clone()));
+                }
+                if ui
+                    .add_enabled(!self.goal_mutation_loading, egui::Button::new("Clear"))
+                    .clicked()
+                {
+                    self.clear_goal_confirmation = Some(reference);
+                }
+            });
+        } else {
+            if self
+                .goal
+                .as_ref()
+                .is_some_and(|goal| goal.phase == GoalPhase::Complete)
+            {
+                ui.label("The previous goal is complete. Create another goal for this Session.");
+            } else {
+                ui.label("No goal is active for this Session.");
+            }
+            ui.add(
+                egui::TextEdit::multiline(&mut self.goal_objective)
+                    .hint_text("What should the agent accomplish?")
+                    .desired_rows(3),
+            );
+            ui.horizontal(|ui| {
+                ui.label("Maximum rounds (optional)");
+                ui.add(egui::TextEdit::singleline(&mut self.goal_max_rounds).desired_width(80.0));
+            });
+            if ui
+                .add_enabled(
+                    !self.goal_mutation_loading && !self.goal_objective.trim().is_empty(),
+                    egui::Button::new("Create goal"),
+                )
+                .clicked()
+            {
+                let max_goal_rounds = if self.goal_max_rounds.trim().is_empty() {
+                    None
+                } else {
+                    match self.goal_max_rounds.parse::<u64>() {
+                        Ok(rounds) if rounds > 0 && rounds <= MAX_SAFE_SEQUENCE as u64 => {
+                            Some(rounds)
+                        }
+                        _ => {
+                            self.goal_error =
+                                Some("Maximum rounds must be a positive whole number".to_owned());
+                            return;
+                        }
+                    }
+                };
+                self.mutate_goal(GoalMutation::Create(CreateGoalRequest {
+                    objective: self.goal_objective.trim().to_owned(),
+                    max_goal_rounds,
+                }));
+            }
+        }
+        self.render_clear_goal_confirmation(ui.ctx());
+        ui.separator();
+        ui.heading("Recent tasks and plan changes");
+        let work_events: Vec<_> = self
+            .session_page
+            .as_ref()
+            .into_iter()
+            .flat_map(|page| page.records.iter().rev())
+            .filter(|record| {
+                matches!(
+                    record.event.event_type.as_str(),
+                    "todo/write" | "goal/change" | "plan/mode"
+                )
+            })
+            .take(12)
+            .collect();
+        if work_events.is_empty() {
+            ui.label("Task and plan updates will appear here when the assistant records them.");
+        } else {
+            for record in work_events {
+                ui.strong(format!(
+                    "{} · sequence {}",
+                    record.event.event_type, record.event.seq
+                ));
+                ui.label(event_text(&record.event.data));
+                ui.separator();
+            }
+        }
+        ui.heading("Plan mode");
+        ui.horizontal(|ui| {
+            let can_run =
+                !self.plan_command_loading && !self.chat_loading && !self.assistant_streaming;
+            if ui
+                .add_enabled(can_run, egui::Button::new("Enter plan mode"))
+                .clicked()
+            {
+                self.run_plan_command(true);
+            }
+            if ui
+                .add_enabled(can_run, egui::Button::new("Leave plan mode"))
+                .clicked()
+            {
+                self.run_plan_command(false);
+            }
+        });
+        if let Some(status) = &self.plan_command_status {
+            ui.small(status);
+        }
+    }
+
+    fn render_clear_goal_confirmation(&mut self, ctx: &egui::Context) {
+        let Some(reference) = self.clear_goal_confirmation.clone() else {
+            return;
+        };
+        let mut action = None;
+        egui::Modal::new(egui::Id::new("clear-goal-confirmation")).show(ctx, |ui| {
+            ui.heading("Clear current goal?");
+            ui.label("The goal will be removed from this Session. Its history remains in the session log.");
+            ui.horizontal(|ui| {
+                if ui.button("Clear goal").clicked() {
+                    action = Some(true);
+                }
+                if ui.button("Keep goal").clicked() {
+                    action = Some(false);
+                }
+            });
+        });
+        match action {
+            Some(true) => {
+                self.clear_goal_confirmation = None;
+                self.mutate_goal(GoalMutation::Clear(reference));
+            }
+            Some(false) => self.clear_goal_confirmation = None,
+            None => {}
+        }
     }
 
     fn pick_attachment(&mut self) {
@@ -1693,7 +2299,8 @@ impl DesktopApp {
     }
 
     fn start_schedules(&mut self) {
-        let (Some(session), Some(transport)) = (self.selected_session.clone(), self.transport.clone())
+        let (Some(session), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
         else {
             return;
         };
@@ -1716,7 +2323,8 @@ impl DesktopApp {
     }
 
     fn delete_schedule(&mut self, id: String) {
-        let (Some(session), Some(transport)) = (self.selected_session.clone(), self.transport.clone())
+        let (Some(session), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
         else {
             return;
         };
@@ -1842,7 +2450,10 @@ impl DesktopApp {
 
     fn poll_jobs(&mut self) {
         loop {
-            let update = self.jobs_receiver.as_ref().map(|receiver| receiver.try_recv());
+            let update = self
+                .jobs_receiver
+                .as_ref()
+                .map(|receiver| receiver.try_recv());
             match update {
                 Some(Ok(Ok(rows))) => self.jobs = rows,
                 Some(Ok(Err(error))) => {
@@ -1856,7 +2467,10 @@ impl DesktopApp {
             }
         }
         loop {
-            let update = self.job_receiver.as_ref().map(|receiver| receiver.try_recv());
+            let update = self
+                .job_receiver
+                .as_ref()
+                .map(|receiver| receiver.try_recv());
             match update {
                 Some(Ok(Ok(frame))) => match frame {
                     JobFollowFrame::Opened { job, from } => {
@@ -1966,6 +2580,88 @@ impl DesktopApp {
         });
         self.chat_receiver = Some(receiver);
     }
+
+    fn render_update_prompt(&mut self, ctx: &egui::Context) {
+        let Some(prompt) = self.update_prompt.clone() else {
+            return;
+        };
+        let mut answer = None;
+        egui::Modal::new(egui::Id::new("native-update-confirmation")).show(ctx, |ui| {
+            ui.heading(match prompt.action.as_str() {
+                "download" => "Download desktop update?",
+                "install" => "Install desktop update?",
+                _ => "Desktop update",
+            });
+            ui.label(format!("Version {} is available.", prompt.version));
+            if let Some(error) = &self.update_error {
+                ui.colored_label(egui::Color32::LIGHT_RED, error);
+            }
+            ui.horizontal(|ui| {
+                if ui
+                    .button(match prompt.action.as_str() {
+                        "download" => "Download",
+                        "install" => "Install and restart",
+                        _ => "Continue",
+                    })
+                    .clicked()
+                {
+                    answer = Some(true);
+                }
+                if ui.button("Not now").clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+        let Some(accepted) = answer else {
+            return;
+        };
+        let response = self
+            .host
+            .as_ref()
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotConnected, "Host is unavailable")
+            })
+            .and_then(|host| host.respond_to_update_prompt(prompt.prompt_id, accepted));
+        match response {
+            Ok(()) => {
+                self.update_prompt = None;
+                self.update_error = None;
+                self.status = if accepted {
+                    format!("Update {} accepted", prompt.action)
+                } else {
+                    "Update postponed".to_owned()
+                };
+            }
+            Err(error) => {
+                self.update_error = Some(format!("Could not send update choice: {error}"))
+            }
+        }
+    }
+}
+
+impl DesktopApp {
+    /// Applies the client-local shortcut bindings; each chord toggles its view once.
+    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        let Ok([settings, marketplace, goals]) = self.ui_preferences.keybindings.chords() else {
+            return;
+        };
+        if let Some(chord) = settings {
+            if ctx.input_mut(|input| chord.consume(input)) {
+                self.show_settings = !self.show_settings;
+            }
+        }
+        if let Some(chord) = marketplace {
+            if ctx.input_mut(|input| chord.consume(input)) {
+                self.show_market = !self.show_market;
+            }
+        }
+        if let Some(chord) = goals {
+            if ctx.input_mut(|input| chord.consume(input)) {
+                self.show_goals = !self.show_goals;
+            }
+        }
+    }
+
 }
 
 impl eframe::App for DesktopApp {
@@ -1988,6 +2684,39 @@ impl eframe::App for DesktopApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             return;
         }
+        if let Some(host) = self.host.as_mut() {
+            while let Some(event) = host.event() {
+                match event {
+                    host::HostEvent::Failed(message) => {
+                        eprintln!("dsh: native Host failed: {message}");
+                        self.status = message;
+                        self.update_prompt = None;
+                        self.update_error = None;
+                        self.host_url = None;
+                        self.transport = None;
+                        self.streams = None;
+                        self.connect_receiver = None;
+                        self.terminal.detach();
+                    }
+                    host::HostEvent::UpdatePrompt(prompt) => {
+                        self.update_prompt = Some(prompt);
+                        self.update_error = None;
+                        ctx.request_repaint();
+                    }
+                    host::HostEvent::Restart => {
+                        match restart::executable(std::env::var_os("APPIMAGE").map(Into::into))
+                            .and_then(|path| restart::schedule(&path, std::process::id())) {
+                            Ok(_) => {
+                                self.quitting.store(true, Ordering::Release);
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                return;
+                            }
+                            Err(error) => eprintln!("dsh: native restart failed; restart the application manually: {error}"),
+                        }
+                    }
+                }
+            }
+        }
         self.terminal.select_session(
             self.selected_session.clone(),
             self.transport.clone(),
@@ -2009,7 +2738,9 @@ impl eframe::App for DesktopApp {
                     );
                     self.host = Some(host);
                     self.host_receiver = None;
-                    eprintln!("dsh: native host=ready");
+                    if self.host_url.is_some() {
+                        eprintln!("dsh: native host=ready");
+                    }
                     if self.auto_connect && self.host_url.is_some() {
                         self.connect();
                     }
@@ -2044,14 +2775,31 @@ impl eframe::App for DesktopApp {
                         std::env::var("DSH_DESKTOP_PROBE_APPROVAL").as_deref(),
                         Ok("1" | "allow" | "reject" | "delegate")
                     );
+                    let terminal_probe =
+                        std::env::var("DSH_DESKTOP_PROBE_TERMINAL").as_deref() == Ok("1");
+                    let timed_question_probe =
+                        std::env::var("DSH_DESKTOP_PROBE_TIMED_QUESTION").as_deref() == Ok("1");
                     if approval_probe {
                         // The probe owns the only `$events` reader so one waterfall
                         // answer cannot race a second connected client.
                         let probe_transport = transport.clone();
                         let probe_mux = streams.clone();
                         std::thread::spawn(move || probe_approval(probe_transport, probe_mux));
+                    } else if timed_question_probe {
+                        // Same exclusivity: the timed question is answered by the
+                        // probe, not by a card the operator would have to click.
+                        let probe_transport = transport.clone();
+                        let probe_mux = streams.clone();
+                        std::thread::spawn(move || {
+                            probe_timed_question(probe_transport, probe_mux)
+                        });
                     } else {
                         self.start_remote_events(transport.clone(), streams.clone());
+                    }
+                    if terminal_probe {
+                        let probe_transport = transport.clone();
+                        let probe_mux = streams.clone();
+                        std::thread::spawn(move || probe_terminal(probe_transport, probe_mux));
                     }
                     if std::env::var("DSH_DESKTOP_PROBE_STREAMS").as_deref() == Ok("1") {
                         let probe_transport = transport.clone();
@@ -2126,21 +2874,141 @@ impl eframe::App for DesktopApp {
         }
         if let Some(receiver) = &self.page_receiver {
             match receiver.try_recv() {
-                Ok(Ok(page)) => {
-                    self.session_page = Some(page);
+                Ok(Ok((through_seq, page))) => {
+                    self.page_through_seq = Some(through_seq);
+                    let before_seq = self.page_before_seq.take();
+                    self.session_page = Some(match (before_seq, self.session_page.take()) {
+                        (Some(before_seq), Some(current)) => {
+                            let advanced = page
+                                .records
+                                .first()
+                                .is_some_and(|record| record.event.seq < before_seq);
+                            let mut records = page.records;
+                            records.extend(current.records);
+                            records.sort_by_key(|record| record.event.seq);
+                            records.dedup_by_key(|record| record.event.seq);
+                            SessionPage {
+                                records,
+                                has_more: page.has_more && advanced,
+                            }
+                        }
+                        _ => page,
+                    });
                     self.page_loading = false;
                     self.page_error = None;
                     self.page_receiver = None;
                 }
                 Ok(Err(error)) => {
                     self.page_loading = false;
+                    self.page_before_seq = None;
                     self.page_error = Some(format!("Could not load session: {error}"));
                     self.page_receiver = None;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.page_loading = false;
+                    self.page_before_seq = None;
                     self.page_error = Some("Session request stopped unexpectedly".to_owned());
                     self.page_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30));
+                }
+            }
+        }
+        if let Some(receiver) = &self.goal_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(goal)) => {
+                    self.goal = goal;
+                    if let Some(goal) = &self.goal {
+                        self.goal_objective = goal.objective.clone();
+                        self.goal_max_rounds = goal.max_goal_rounds.to_string();
+                    } else {
+                        self.goal_objective.clear();
+                        self.goal_max_rounds.clear();
+                    }
+                    self.goal_loading = false;
+                    self.goal_error = None;
+                    self.goal_receiver = None;
+                }
+                Ok(Err(error)) => {
+                    self.goal_loading = false;
+                    self.goal_error = Some(format!("Could not load goal: {error}"));
+                    self.goal_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.goal_loading = false;
+                    self.goal_error = Some("Goal request stopped unexpectedly".to_owned());
+                    self.goal_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30));
+                }
+            }
+        }
+        if let Some(receiver) = &self.goal_mutation_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(goal)) => {
+                    self.goal = goal;
+                    if let Some(goal) = &self.goal {
+                        self.goal_objective = goal.objective.clone();
+                        self.goal_max_rounds = goal.max_goal_rounds.to_string();
+                        self.goal_status = Some("Goal updated".to_owned());
+                    } else {
+                        self.goal_objective.clear();
+                        self.goal_status = Some("Goal cleared".to_owned());
+                    }
+                    self.goal_mutation_loading = false;
+                    self.goal_error = None;
+                    self.goal_mutation_receiver = None;
+                }
+                Ok(Err(error)) => {
+                    self.goal_mutation_loading = false;
+                    self.goal_error = Some(format!("Could not change goal: {error}"));
+                    self.goal_mutation_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.goal_mutation_loading = false;
+                    self.goal_error = Some("Goal update stopped unexpectedly".to_owned());
+                    self.goal_mutation_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30));
+                }
+            }
+        }
+        if let Some(receiver) = &self.plan_command_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(Some(execution))) => {
+                    self.plan_command_loading = false;
+                    self.plan_command_receiver = None;
+                    match execution.result {
+                        CommandResult::Success { text, .. } => {
+                            self.plan_command_status =
+                                text.or_else(|| Some("Plan command completed".to_owned()));
+                            if let Some(session_id) = self.selected_session.clone() {
+                                self.load_session(session_id);
+                            }
+                        }
+                        CommandResult::Error { text } => {
+                            self.plan_command_status = Some(text);
+                        }
+                    }
+                }
+                Ok(Ok(None)) => {
+                    self.plan_command_loading = false;
+                    self.plan_command_receiver = None;
+                    self.plan_command_status =
+                        Some("The /plan command is not available in this Session".to_owned());
+                }
+                Ok(Err(error)) => {
+                    self.plan_command_loading = false;
+                    self.plan_command_receiver = None;
+                    self.plan_command_status = Some(format!("Plan command failed: {error}"));
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.plan_command_loading = false;
+                    self.plan_command_receiver = None;
+                    self.plan_command_status = Some("Plan command stopped unexpectedly".to_owned());
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     ctx.request_repaint_after(std::time::Duration::from_millis(30));
@@ -2291,6 +3159,27 @@ impl eframe::App for DesktopApp {
                 }
             }
         }
+        if let Some(receiver) = &self.model_init_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(())) => {
+                    self.model_init_receiver = None;
+                    self.model_selection = None;
+                    self.model_error = None;
+                    self.refresh_models();
+                }
+                Ok(Err(error)) => {
+                    self.model_error = Some(format!("Default model selection failed: {error}"));
+                    self.model_init_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.model_error = Some("Default model worker stopped unexpectedly".into());
+                    self.model_init_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30));
+                }
+            }
+        }
         if let Some(receiver) = &self.plugins_receiver {
             match receiver.try_recv() {
                 Ok(Ok((snapshot, bundles, plugins))) => {
@@ -2308,7 +3197,8 @@ impl eframe::App for DesktopApp {
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.plugins_loading = false;
-                    self.plugins_error = Some("Plugin inventory worker stopped unexpectedly".into());
+                    self.plugins_error =
+                        Some("Plugin inventory worker stopped unexpectedly".into());
                     self.plugins_receiver = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {
@@ -2349,7 +3239,11 @@ impl eframe::App for DesktopApp {
         if let Some(receiver) = &self.feedback_put_receiver {
             match receiver.try_recv() {
                 Ok(Ok(item)) => {
-                    if let Some(existing) = self.feedback_items.iter_mut().find(|x| x.message_id == item.message_id) {
+                    if let Some(existing) = self
+                        .feedback_items
+                        .iter_mut()
+                        .find(|x| x.message_id == item.message_id)
+                    {
                         *existing = item;
                     } else {
                         self.feedback_items.push(item);
@@ -2401,7 +3295,8 @@ impl eframe::App for DesktopApp {
                             .and_then(serde_json::Value::as_array)
                             .cloned()
                             .unwrap_or_default();
-                        self.market_status = Some(format!("{} result(s)", self.market_results.len()));
+                        self.market_status =
+                            Some(format!("{} result(s)", self.market_results.len()));
                     } else if value.get("url").is_some() || value.is_array() {
                         let indexes = if value.is_array() {
                             value.as_array().cloned().unwrap_or_default()
@@ -2415,7 +3310,8 @@ impl eframe::App for DesktopApp {
                             .and_then(|index| index.get("url"))
                             .and_then(serde_json::Value::as_str)
                             .map(str::to_owned);
-                        self.market_status = Some(format!("{} index(es)", self.market_indexes.len()));
+                        self.market_status =
+                            Some(format!("{} index(es)", self.market_indexes.len()));
                     }
                     self.market_loading = false;
                     self.market_receiver = None;
@@ -2520,9 +3416,7 @@ impl eframe::App for DesktopApp {
                         }
                     } else if invocation.event == "user-questions/request" {
                         match PendingQuestion::from_invocation(invocation) {
-                            Ok(pending) => self
-                                .pending_questions
-                                .push(QuestionCard::new(pending)),
+                            Ok(pending) => self.pending_questions.push(QuestionCard::new(pending)),
                             Err(error) => {
                                 self.page_error = Some(format!("Invalid question request: {error}"))
                             }
@@ -2577,6 +3471,10 @@ impl eframe::App for DesktopApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if self.applied_ui_preferences.as_ref() != Some(&self.ui_preferences) {
+            self.apply_ui_preferences(ui.ctx());
+        }
+        self.handle_shortcuts(ui.ctx());
         let mut nav_rail_width = 0.0;
         let mut sessions_width = 0.0;
         let mut central_size = egui::Vec2::ZERO;
@@ -2606,6 +3504,7 @@ impl eframe::App for DesktopApp {
                         ("P", "Plugins", ActiveView::Plugins),
                         ("K", "Skills", ActiveView::Skills),
                         ("M", "Market", ActiveView::Marketplace),
+                        ("G", "Goals", ActiveView::Goals),
                         ("T", "Settings", ActiveView::Settings),
                     ];
                     for (icon, tooltip, view) in items {
@@ -2618,11 +3517,8 @@ impl eframe::App for DesktopApp {
                         let clicked = btn.clicked();
                         btn.on_hover_text(tooltip);
                         if selected {
-                            ui.painter().rect_filled(
-                                rect,
-                                8.0,
-                                ui.visuals().selection.bg_fill,
-                            );
+                            ui.painter()
+                                .rect_filled(rect, 8.0, ui.visuals().selection.bg_fill);
                         }
                         if clicked {
                             self.active_view = view;
@@ -2633,6 +3529,7 @@ impl eframe::App for DesktopApp {
                                     self.show_plugins = false;
                                     self.show_skills = false;
                                     self.show_market = false;
+                                    self.show_goals = false;
                                 }
                                 ActiveView::Settings => {
                                     self.open_settings();
@@ -2640,6 +3537,7 @@ impl eframe::App for DesktopApp {
                                     self.show_plugins = false;
                                     self.show_skills = false;
                                     self.show_market = false;
+                                    self.show_goals = false;
                                 }
                                 ActiveView::Document => {
                                     self.show_document = true;
@@ -2647,6 +3545,7 @@ impl eframe::App for DesktopApp {
                                     self.show_plugins = false;
                                     self.show_skills = false;
                                     self.show_market = false;
+                                    self.show_goals = false;
                                 }
                                 ActiveView::Plugins => {
                                     self.show_plugins = true;
@@ -2654,6 +3553,7 @@ impl eframe::App for DesktopApp {
                                     self.show_document = false;
                                     self.show_skills = false;
                                     self.show_market = false;
+                                    self.show_goals = false;
                                     if self.plugins_snapshot.is_none() {
                                         self.refresh_plugins();
                                     }
@@ -2664,6 +3564,7 @@ impl eframe::App for DesktopApp {
                                     self.show_document = false;
                                     self.show_plugins = false;
                                     self.show_market = false;
+                                    self.show_goals = false;
                                     if self.skills.is_none() {
                                         self.refresh_skills();
                                     }
@@ -2674,9 +3575,19 @@ impl eframe::App for DesktopApp {
                                     self.show_document = false;
                                     self.show_plugins = false;
                                     self.show_skills = false;
+                                    self.show_goals = false;
                                     if self.market_indexes.is_empty() {
                                         self.refresh_market_indexes();
                                     }
+                                }
+                                ActiveView::Goals => {
+                                    self.show_goals = true;
+                                    self.show_settings = false;
+                                    self.show_document = false;
+                                    self.show_plugins = false;
+                                    self.show_skills = false;
+                                    self.show_market = false;
+                                    self.refresh_goal();
                                 }
                             }
                         }
@@ -2685,198 +3596,240 @@ impl eframe::App for DesktopApp {
             });
         egui::Panel::left("sessions")
             .resizable(true)
-            .default_size(layout::SIDEBAR_DEFAULT)
+            .default_size(self.ui_preferences.session_panel_width)
             .min_size(layout::SIDEBAR_MIN)
             .max_size(layout::SIDEBAR_MAX)
             .show(ui, |ui| {
-            sessions_width = ui.max_rect().width();
-            if ui
-                .selectable_label(
-                    !self.show_settings && !self.show_plugins && !self.show_skills,
-                    "Sessions",
-                )
-                .clicked()
-            {
-                self.show_settings = false;
-                self.show_document = false;
-                self.show_plugins = false;
-                self.show_skills = false;
-                self.show_market = false;
-            }
-            if ui
-                .selectable_label(self.show_settings, "Settings")
-                .clicked()
-            {
-                self.open_settings();
-                self.show_document = false;
-                self.show_plugins = false;
-                self.show_skills = false;
-            }
-            if ui
-                .selectable_label(self.show_document, "Document")
-                .clicked()
-            {
-                self.show_document = true;
-                self.show_settings = false;
-                self.show_plugins = false;
-                self.show_skills = false;
-            }
-            if ui
-                .selectable_label(self.show_plugins, "Plugins")
-                .clicked()
-            {
-                self.show_plugins = true;
-                self.show_settings = false;
-                self.show_document = false;
-                self.show_skills = false;
-                if self.plugins_snapshot.is_none() {
-                    self.refresh_plugins();
+                sessions_width = ui.max_rect().width();
+                if ui
+                    .selectable_label(self.active_view == ActiveView::Sessions, "Sessions")
+                    .clicked()
+                {
+                    self.active_view = ActiveView::Sessions;
+                    self.show_settings = false;
+                    self.show_document = false;
+                    self.show_plugins = false;
+                    self.show_skills = false;
+                    self.show_market = false;
+                    self.show_goals = false;
                 }
-            }
-            if ui
-                .selectable_label(self.show_skills, "Skills")
-                .clicked()
-            {
-                self.show_skills = true;
-                self.show_settings = false;
-                self.show_document = false;
-                self.show_plugins = false;
-                if self.skills.is_none() {
-                    self.refresh_skills();
+                if ui
+                    .selectable_label(self.active_view == ActiveView::Settings, "Settings")
+                    .clicked()
+                {
+                    self.active_view = ActiveView::Settings;
+                    self.open_settings();
+                    self.show_document = false;
+                    self.show_plugins = false;
+                    self.show_skills = false;
+                    self.show_market = false;
+                    self.show_goals = false;
                 }
-            }
-            if ui
-                .selectable_label(self.show_market, "Marketplace")
-                .clicked()
-            {
-                self.show_market = true;
-                self.show_settings = false;
-                self.show_document = false;
-                self.show_plugins = false;
-                self.show_skills = false;
-                if self.market_indexes.is_empty() {
-                    self.refresh_market_indexes();
+                if ui
+                    .selectable_label(self.active_view == ActiveView::Document, "Document")
+                    .clicked()
+                {
+                    self.active_view = ActiveView::Document;
+                    self.show_document = true;
+                    self.show_settings = false;
+                    self.show_plugins = false;
+                    self.show_skills = false;
+                    self.show_market = false;
+                    self.show_goals = false;
                 }
-            }
-            ui.heading("Sessions");
-            let connected = self.transport.is_some();
-            let busy = self.sessions_receiver.is_some();
-            ui.add_enabled_ui(connected && !busy, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    if ui.button("Refresh").clicked() {
+                if ui
+                    .selectable_label(self.active_view == ActiveView::Plugins, "Plugins")
+                    .clicked()
+                {
+                    self.active_view = ActiveView::Plugins;
+                    self.show_plugins = true;
+                    self.show_settings = false;
+                    self.show_document = false;
+                    self.show_skills = false;
+                    self.show_market = false;
+                    self.show_goals = false;
+                    if self.plugins_snapshot.is_none() {
+                        self.refresh_plugins();
+                    }
+                }
+                if ui
+                    .selectable_label(self.active_view == ActiveView::Skills, "Skills")
+                    .clicked()
+                {
+                    self.active_view = ActiveView::Skills;
+                    self.show_skills = true;
+                    self.show_settings = false;
+                    self.show_document = false;
+                    self.show_plugins = false;
+                    self.show_market = false;
+                    self.show_goals = false;
+                    if self.skills.is_none() {
+                        self.refresh_skills();
+                    }
+                }
+                if ui
+                    .selectable_label(self.active_view == ActiveView::Marketplace, "Marketplace")
+                    .clicked()
+                {
+                    self.active_view = ActiveView::Marketplace;
+                    self.show_market = true;
+                    self.show_settings = false;
+                    self.show_document = false;
+                    self.show_plugins = false;
+                    self.show_skills = false;
+                    self.show_goals = false;
+                    if self.market_indexes.is_empty() {
+                        self.refresh_market_indexes();
+                    }
+                }
+                if ui
+                    .selectable_label(self.active_view == ActiveView::Goals, "Goals")
+                    .clicked()
+                {
+                    self.active_view = ActiveView::Goals;
+                    self.show_goals = true;
+                    self.show_settings = false;
+                    self.show_document = false;
+                    self.show_plugins = false;
+                    self.show_skills = false;
+                    self.show_market = false;
+                    self.refresh_goal();
+                }
+                ui.heading("Sessions");
+                let connected = self.transport.is_some();
+                let busy = self.sessions_receiver.is_some();
+                ui.add_enabled_ui(connected && !busy, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button("Refresh").clicked() {
+                            self.session_query.clear();
+                            self.refresh_sessions();
+                        }
+                        if ui.button("New Session").clicked() {
+                            self.request_sessions(SessionOperation::Create);
+                        }
+                    });
+                    let search = ui.add(
+                        egui::TextEdit::singleline(&mut self.session_query)
+                            .hint_text("Search sessions")
+                            .desired_width(170.0),
+                    );
+                    if ui.button("Search").clicked()
+                        || (search.lost_focus()
+                            && ui.input(|input| input.key_pressed(egui::Key::Enter)))
+                    {
+                        if self.session_query.trim().is_empty() {
+                            self.refresh_sessions();
+                        } else {
+                            self.request_sessions(SessionOperation::Search(
+                                self.session_query.clone(),
+                            ));
+                        }
+                    }
+                    if let Some(session_id) = self.selected_session.clone() {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.session_title)
+                                .hint_text("New session title")
+                                .desired_width(170.0),
+                        );
+                        ui.horizontal_wrapped(|ui| {
+                            if ui
+                                .add_enabled(
+                                    !self.session_title.trim().is_empty(),
+                                    egui::Button::new("Rename selected"),
+                                )
+                                .clicked()
+                            {
+                                self.request_sessions(SessionOperation::Rename(
+                                    RenameSessionRequest {
+                                        session_id: session_id.clone(),
+                                        title: self.session_title.trim().to_owned(),
+                                    },
+                                ));
+                            }
+                            if ui.button("Fork selected").clicked() {
+                                self.request_sessions(SessionOperation::Fork(ForkSessionRequest {
+                                    session_id,
+                                    at_seq: None,
+                                    allow_migration: None,
+                                }));
+                            }
+                        });
+                    }
+                });
+                if !connected {
+                    ui.label("Connect to enable sessions");
+                }
+                if busy {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Loading sessions…");
+                    });
+                }
+                if !self.sessions_status.is_empty() {
+                    ui.small(&self.sessions_status);
+                }
+                if self.sessions.is_empty() && self.session_search.is_none() && !busy && connected {
+                    ui.add_space(8.0);
+                    ui.label("No sessions yet.");
+                    ui.small("Create one to start chatting.");
+                }
+                if let Some(error) = &self.sessions_error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                    if ui.button("Retry").clicked() {
                         self.session_query.clear();
                         self.refresh_sessions();
                     }
-                    if ui.button("New Session").clicked() {
-                        self.request_sessions(SessionOperation::Create);
-                    }
-                });
-                let search = ui.add(
-                    egui::TextEdit::singleline(&mut self.session_query)
-                        .hint_text("Search sessions")
-                        .desired_width(170.0),
-                );
-                if ui.button("Search").clicked()
-                    || (search.lost_focus()
-                        && ui.input(|input| input.key_pressed(egui::Key::Enter)))
-                {
-                    if self.session_query.trim().is_empty() {
-                        self.refresh_sessions();
-                    } else {
-                        self.request_sessions(SessionOperation::Search(self.session_query.clone()));
-                    }
                 }
-                if let Some(session_id) = self.selected_session.clone() {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.session_title)
-                            .hint_text("New session title")
-                            .desired_width(170.0),
+                ui.add_enabled_ui(!busy, |ui| {
+                    let mut selected = session_list::render(
+                        ui,
+                        &self.sessions,
+                        self.session_search.as_ref(),
+                        self.selected_session.as_deref(),
+                        now_millis(),
                     );
-                    ui.horizontal_wrapped(|ui| {
-                        if ui
-                            .add_enabled(
-                                !self.session_title.trim().is_empty(),
-                                egui::Button::new("Rename selected"),
-                            )
-                            .clicked()
-                        {
-                            self.request_sessions(SessionOperation::Rename(RenameSessionRequest {
-                                session_id: session_id.clone(),
-                                title: self.session_title.trim().to_owned(),
-                            }));
-                        }
-                        if ui.button("Fork selected").clicked() {
-                            self.request_sessions(SessionOperation::Fork(ForkSessionRequest {
-                                session_id,
-                                at_seq: None,
-                                allow_migration: None,
-                            }));
-                        }
-                    });
-                }
-            });
-            if !connected {
-                ui.label("Connect to enable sessions");
-            }
-            if busy {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label("Loading sessions…");
+                    // Keyboard navigation in session list
+                    if !ui.ctx().egui_wants_keyboard_input()
+                        && ui.input(|i| {
+                            i.key_pressed(egui::Key::ArrowDown) || i.key_pressed(egui::Key::ArrowUp)
+                        })
+                    {
+                        let direction = if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+                            1
+                        } else {
+                            -1
+                        };
+                        let sessions = if self.session_search.is_some() {
+                            self.session_search
+                                .as_ref()
+                                .map(|r| {
+                                    r.items
+                                        .iter()
+                                        .map(|i| i.session_id.clone())
+                                        .collect::<Vec<_>>()
+                                })
+                                .unwrap_or_default()
+                        } else {
+                            self.sessions.iter().map(|s| s.session_id.clone()).collect()
+                        };
+                        let current_idx = self
+                            .selected_session
+                            .as_ref()
+                            .and_then(|id| sessions.iter().position(|session| session == id));
+                        selected = session_list::next_index(current_idx, direction, sessions.len())
+                            .map(|index| sessions[index].clone());
+                    }
+                    if let Some(session_id) = selected {
+                        self.load_session(session_id);
+                    }
                 });
-            }
-            if !self.sessions_status.is_empty() {
-                ui.small(&self.sessions_status);
-            }
-            if self.sessions.is_empty() && self.session_search.is_none() && !busy && connected {
-                ui.add_space(8.0);
-                ui.label("No sessions yet.");
-                ui.small("Create one to start chatting.");
-            }
-            if let Some(error) = &self.sessions_error {
-                ui.colored_label(egui::Color32::LIGHT_RED, error);
-                if ui.button("Retry").clicked() {
-                    self.session_query.clear();
-                    self.refresh_sessions();
+                if ui.button("Open file").clicked() {
+                    let _ = dialog::open_file();
                 }
-            }
-            ui.add_enabled_ui(!busy, |ui| {
-                let mut selected = session_list::render(
-                    ui,
-                    &self.sessions,
-                    self.session_search.as_ref(),
-                    self.selected_session.as_deref(),
-                    now_millis(),
-                );
-                // Keyboard navigation in session list
-                if !ui.ctx().egui_wants_keyboard_input()
-                    && ui.input(|i| {
-                        i.key_pressed(egui::Key::ArrowDown) || i.key_pressed(egui::Key::ArrowUp)
-                    })
-                {
-                    let direction = if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) { 1 } else { -1 };
-                    let sessions = if self.session_search.is_some() {
-                        self.session_search.as_ref().map(|r| r.items.iter().map(|i| i.session_id.clone()).collect::<Vec<_>>()).unwrap_or_default()
-                    } else {
-                        self.sessions.iter().map(|s| s.session_id.clone()).collect()
-                    };
-                    let current_idx = self
-                        .selected_session
-                        .as_ref()
-                        .and_then(|id| sessions.iter().position(|session| session == id));
-                    selected = session_list::next_index(current_idx, direction, sessions.len())
-                        .map(|index| sessions[index].clone());
-                }
-                if let Some(session_id) = selected {
-                    self.load_session(session_id);
+                if ui.button("Save file").clicked() {
+                    let _ = dialog::save_file();
                 }
             });
-            if ui.button("Open file").clicked() {
-                let _ = dialog::open_file();
-            }
-            if ui.button("Save file").clicked() {
-                let _ = dialog::save_file();
-            }
-        });
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.label(&self.status);
         });
@@ -2999,7 +3952,9 @@ impl eframe::App for DesktopApp {
                             if ui
                                 .link(label)
                                 .on_hover_text(
-                                    file.description.as_deref().unwrap_or("Open this deliverable"),
+                                    file.description
+                                        .as_deref()
+                                        .unwrap_or("Open this deliverable"),
                                 )
                                 .clicked()
                             {
@@ -3030,13 +3985,13 @@ impl eframe::App for DesktopApp {
                     .default_open(true)
                     .show(ui, |ui| {
                         self.terminal
-            .ui(ui, self.transport.clone(), self.streams.clone());
+                            .ui(ui, self.transport.clone(), self.streams.clone());
                     });
             });
         }
         egui::CentralPanel::default().show(ui, |ui| {
             central_size = ui.available_size();
-            if self.transport.is_none() {
+            if self.transport.is_none() && !self.show_settings {
                 ui.vertical_centered(|ui| {
                     ui.add_space(40.0);
                     ui.heading("Not connected");
@@ -3048,7 +4003,12 @@ impl eframe::App for DesktopApp {
                 });
                 return;
             }
-            if !self.show_settings && !self.show_plugins && !self.show_skills && !self.show_market && !self.show_document
+            if !self.show_settings
+                && !self.show_plugins
+                && !self.show_skills
+                && !self.show_market
+                && !self.show_document
+                && !self.show_goals
                 && self.selected_session.is_none()
             {
                 ui.vertical_centered(|ui| {
@@ -3067,18 +4027,31 @@ impl eframe::App for DesktopApp {
                 return;
             }
             if self.show_settings {
-                let action = self.settings_panel.ui(
-                    ui,
-                    self.settings_description.as_ref(),
-                    self.settings_loading,
-                    self.settings_error.as_deref(),
-                    self.settings_update_receiver.is_some(),
-                );
-                match action {
-                    Some(SettingsAction::Refresh) => self.refresh_settings(),
-                    Some(SettingsAction::Mutate(request)) => self.mutate_settings(request),
-                    None => {}
+                if let Some(action) = self.ui_preferences_panel.ui(ui, &self.ui_preferences_path) {
+                    self.handle_ui_preferences_action(action, ui.ctx());
                 }
+                ui.separator();
+                if self.transport.is_some() {
+                    let mut settings_action = None;
+                    ui.collapsing("Host settings (agent and plugin configuration)", |ui| {
+                        settings_action = self.settings_panel.ui(
+                            ui,
+                            self.settings_description.as_ref(),
+                            self.settings_loading,
+                            self.settings_error.as_deref(),
+                            self.settings_update_receiver.is_some(),
+                        );
+                    });
+                    match settings_action {
+                        Some(SettingsAction::Refresh) => self.refresh_settings(),
+                        Some(SettingsAction::Mutate(request)) => self.mutate_settings(request),
+                        None => {}
+                    }
+                } else {
+                    ui.label("Connect to the Host to view or change agent and plugin settings.");
+                }
+            } else if self.show_goals {
+                self.render_goals_panel(ui);
             } else if self.show_plugins {
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
@@ -3124,21 +4097,15 @@ impl eframe::App for DesktopApp {
                                 );
                                 let state = if entry.enabled { "enabled" } else { "disabled" };
                                 ui.horizontal(|ui| {
-                                    ui.label(format!(
-                                        "{} · {state} · {phase}",
-                                        entry.module_name
-                                    ));
+                                    ui.label(format!("{} · {state} · {phase}", entry.module_name));
                                     let managed = self
                                         .managed_plugins
                                         .iter()
                                         .find(|plugin| plugin.entry_id == entry.entry_id);
                                     match managed {
                                         Some(plugin) if plugin.patch_id.is_some() => {
-                                            let label = if entry.enabled {
-                                                "Disable"
-                                            } else {
-                                                "Enable"
-                                            };
+                                            let label =
+                                                if entry.enabled { "Disable" } else { "Enable" };
                                             if ui
                                                 .add_enabled(
                                                     !busy,
@@ -3146,12 +4113,10 @@ impl eframe::App for DesktopApp {
                                                 )
                                                 .clicked()
                                             {
-                                                plugin_action = Some(
-                                                    PluginAction::SetPlugin {
-                                                        id: entry.entry_id.clone(),
-                                                        enabled: !entry.enabled,
-                                                    },
-                                                );
+                                                plugin_action = Some(PluginAction::SetPlugin {
+                                                    id: entry.entry_id.clone(),
+                                                    enabled: !entry.enabled,
+                                                });
                                             }
                                         }
                                         Some(plugin) => {
@@ -3177,16 +4142,10 @@ impl eframe::App for DesktopApp {
                                             "{} · {state} · {}",
                                             bundle.name, bundle.availability
                                         ));
-                                        let label = if bundle.enabled {
-                                            "Disable"
-                                        } else {
-                                            "Enable"
-                                        };
+                                        let label =
+                                            if bundle.enabled { "Disable" } else { "Enable" };
                                         if ui
-                                            .add_enabled(
-                                                !busy,
-                                                egui::Button::new(label).small(),
-                                            )
+                                            .add_enabled(!busy, egui::Button::new(label).small())
                                             .clicked()
                                         {
                                             plugin_action = Some(PluginAction::SetBundle {
@@ -3241,8 +4200,15 @@ impl eframe::App for DesktopApp {
                     ui.label(status);
                 }
                 ui.horizontal(|ui| {
-                    ui.add(egui::TextEdit::singleline(&mut self.market_query).hint_text("Search text").desired_width(240.0));
-                    if ui.add_enabled(!self.market_loading, egui::Button::new("Search")).clicked() {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.market_query)
+                            .hint_text("Search text")
+                            .desired_width(240.0),
+                    );
+                    if ui
+                        .add_enabled(!self.market_loading, egui::Button::new("Search"))
+                        .clicked()
+                    {
                         self.search_market();
                     }
                 });
@@ -3282,7 +4248,9 @@ impl eframe::App for DesktopApp {
                                         }
                                     }
                                 });
-                                if let Some(description) = entry.get("description").and_then(serde_json::Value::as_str) {
+                                if let Some(description) =
+                                    entry.get("description").and_then(serde_json::Value::as_str)
+                                {
                                     ui.small(description);
                                 }
                                 ui.separator();
@@ -3327,15 +4295,11 @@ impl eframe::App for DesktopApp {
                             }
                             for skill in &skills.skills {
                                 ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(&skill.name).strong(),
-                                    )
-                                    .wrap(),
+                                    egui::Label::new(egui::RichText::new(&skill.name).strong())
+                                        .wrap(),
                                 );
                                 ui.add(
-                                    egui::Label::new(&skill.description)
-                                        .wrap()
-                                        .selectable(true),
+                                    egui::Label::new(&skill.description).wrap().selectable(true),
                                 );
                                 if let Some(when) = &skill.when_to_use {
                                     ui.add(
@@ -3377,7 +4341,10 @@ impl eframe::App for DesktopApp {
                     }
                     if Self::is_office_path(&self.preview_path)
                         && ui
-                            .add_enabled(!self.preview_loading, egui::Button::new("Render Office preview"))
+                            .add_enabled(
+                                !self.preview_loading,
+                                egui::Button::new("Render Office preview"),
+                            )
                             .clicked()
                     {
                         self.read_office_document();
@@ -3412,11 +4379,12 @@ impl eframe::App for DesktopApp {
                 ui.label(&self.status);
             } else {
                 ui.heading(self.selected_session.as_deref().unwrap_or("Session"));
-                if self.page_loading {
+                if self.page_loading && self.session_page.is_none() {
                     ui.label("Loading session…");
-                } else if let Some(error) = &self.page_error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, error);
                 } else if let Some(page) = &self.session_page {
+                    if let Some(error) = &self.page_error {
+                        ui.colored_label(egui::Color32::LIGHT_RED, error);
+                    }
                     if page.records.is_empty() {
                         ui.label("This session has no events");
                     } else {
@@ -3449,7 +4417,18 @@ impl eframe::App for DesktopApp {
                             }
                         });
                         if page.has_more {
-                            ui.label("More events are available");
+                            if self.page_loading {
+                                ui.label("Loading older events…");
+                            } else if ui.button("Load older events").clicked() {
+                                self.load_older_session_page();
+                            }
+                        }
+                    }
+                } else if let Some(error) = &self.page_error {
+                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                    if ui.button("Retry session load").clicked() {
+                        if let Some(session_id) = self.selected_session.clone() {
+                            self.load_session(session_id);
                         }
                     }
                 } else {
@@ -3473,17 +4452,12 @@ impl eframe::App for DesktopApp {
                                         let selection = ModelSelection {
                                             provider: group.id.clone(),
                                             model: model.id.clone(),
-                                            reasoning_effort: model
-                                                .reasoning
-                                                .as_ref()
-                                                .and_then(|reasoning| {
-                                                    reasoning.default_effort.clone()
-                                                }),
+                                            reasoning_effort: model.reasoning.as_ref().and_then(
+                                                |reasoning| reasoning.default_effort.clone(),
+                                            ),
                                         };
-                                        let current = self
-                                            .model_selection
-                                            .as_ref()
-                                            .is_some_and(|current| {
+                                        let current =
+                                            self.model_selection.as_ref().is_some_and(|current| {
                                                 current.provider == selection.provider
                                                     && current.model == selection.model
                                             });
@@ -3508,6 +4482,16 @@ impl eframe::App for DesktopApp {
                         .clicked()
                     {
                         self.refresh_models();
+                    }
+                    if ui
+                        .add_enabled(
+                            self.model_init_receiver.is_none()
+                                && self.model_select_receiver.is_none(),
+                            egui::Button::new("Use profile default"),
+                        )
+                        .clicked()
+                    {
+                        self.initialize_default_model();
                     }
                     let selected_model = match (&self.model_catalog, &self.model_selection) {
                         (Some(catalog), Some(selection)) => {
@@ -3560,8 +4544,7 @@ impl eframe::App for DesktopApp {
                     text_edit.has_focus(),
                     ui.input(|input| input.key_pressed(egui::Key::Enter)),
                     ui.input(|input| input.modifiers.ctrl),
-                )
-                    && !self.chat_loading
+                ) && !self.chat_loading
                     && !self.chat_text.trim().is_empty()
                     && self.attachment_receiver.is_none()
                 {
@@ -3647,12 +4630,12 @@ impl eframe::App for DesktopApp {
                         category: None,
                         if_version,
                     };
-                    let Some(transport) = self.transport.clone() else { continue };
+                    let Some(transport) = self.transport.clone() else {
+                        continue;
+                    };
                     let (sender, receiver) = mpsc::channel();
                     std::thread::spawn(move || {
-                        let _ = sender.send(
-                            MessageFeedbackClient::new(&transport).put(request),
-                        );
+                        let _ = sender.send(MessageFeedbackClient::new(&transport).put(request));
                     });
                     self.feedback_put_receiver = Some(receiver);
                     self.feedback_status = Some(format!("Rating {}…", rating));
@@ -3663,10 +4646,9 @@ impl eframe::App for DesktopApp {
                         if let Some(commands) = &self.approval_commands {
                             if let Some(pending) = card.pending().cloned() {
                                 let command = match action {
-                                    QuestionAction::Answer => ApprovalCommand::AnswerQuestion(
-                                        pending,
-                                        card.answer(),
-                                    ),
+                                    QuestionAction::Answer => {
+                                        ApprovalCommand::AnswerQuestion(pending, card.answer())
+                                    }
                                     QuestionAction::Skip => {
                                         ApprovalCommand::AnswerQuestion(pending, card.skip())
                                     }
@@ -3684,18 +4666,30 @@ impl eframe::App for DesktopApp {
                         ui.label(reason);
                     }
                     if let Some(commands) = &self.approval_commands {
-                        let mut decision = None;
+                        let mut choice = None;
                         ui.horizontal(|ui| {
                             if ui.button("Allow once").clicked() {
-                                decision = Some(ApprovalDecision::AllowedOnce);
+                                choice =
+                                    Some(ApprovalChoice::Answer(ApprovalDecision::AllowedOnce));
                             }
                             if ui.button("Reject").clicked() {
-                                decision = Some(ApprovalDecision::Rejected);
+                                choice = Some(ApprovalChoice::Answer(ApprovalDecision::Rejected));
+                            }
+                            if ui.button("Delegate").clicked() {
+                                choice = Some(ApprovalChoice::Delegate);
                             }
                         });
-                        if let Some(decision) = decision {
+                        if let Some(choice) = choice {
                             let event_id = pending.invocation.event_id.clone();
-                            let _ = commands.send(ApprovalCommand::Answer(pending, decision));
+                            let command = match choice {
+                                ApprovalChoice::Answer(decision) => {
+                                    ApprovalCommand::Answer(pending, decision)
+                                }
+                                ApprovalChoice::Delegate => {
+                                    ApprovalCommand::Delegate(pending.invocation.clone())
+                                }
+                            };
+                            let _ = commands.send(command);
                             self.pending_approvals
                                 .retain(|item| item.invocation.event_id != event_id);
                         }
@@ -3718,6 +4712,7 @@ impl eframe::App for DesktopApp {
                 central_size.y as i32
             );
         }
+        self.render_update_prompt(ui.ctx());
     }
 }
 
@@ -3738,7 +4733,9 @@ fn catalog_model<'a>(
 fn now_millis() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))
+        .map_or(0, |elapsed| {
+            i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
+        })
 }
 
 /// Appends or refreshes the files a `deliverables/presented` event declared.
@@ -3749,7 +4746,11 @@ fn record_deliverables(
     if event.event_type != "deliverables/presented" {
         return;
     }
-    let Some(files) = event.data.get("files").and_then(serde_json::Value::as_array) else {
+    let Some(files) = event
+        .data
+        .get("files")
+        .and_then(serde_json::Value::as_array)
+    else {
         return;
     };
     for file in files {
@@ -3981,15 +4982,10 @@ fn probe_approval(transport: HttpTransport, mux: RemoteStreamMux) {
             Ok(Some(RemoteEvent::Waterfall(invocation))) => {
                 if invocation.event == "user-questions/request" {
                     let answer = user_question_answer(&invocation.request);
-                    match events.submit(
-                        &invocation,
-                        RemoteEventOutcome::Result { value: answer },
-                    ) {
+                    match events.submit(&invocation, RemoteEventOutcome::Result { value: answer }) {
                         Ok(()) => {
                             eprintln!("dsh: native question=answered");
-                            if !roundtrip_reported
-                                && std::path::Path::new(&marker).exists()
-                            {
+                            if !roundtrip_reported && std::path::Path::new(&marker).exists() {
                                 eprintln!("dsh: native approval=roundtrip-ok");
                                 probe_job_follow(&mux, &session);
                             }
@@ -4053,7 +5049,9 @@ fn probe_approval(transport: HttpTransport, mux: RemoteStreamMux) {
                             if probe_decided(&mux, &session, expected) {
                                 eprintln!("dsh: native approval={label}");
                             } else {
-                                eprintln!("dsh: native approval=failed: no {expected} decision logged");
+                                eprintln!(
+                                    "dsh: native approval=failed: no {expected} decision logged"
+                                );
                             }
                             if std::path::Path::new(&marker).exists() {
                                 eprintln!(
@@ -4079,11 +5077,252 @@ fn probe_approval(transport: HttpTransport, mux: RemoteStreamMux) {
     );
 }
 
+/// Runs only when `DSH_DESKTOP_PROBE_TERMINAL=1`.
+///
+/// Exercises the terminal path the panel uses against a live Host: create a
+/// Session, create a terminal through the RPCs, attach over the shared mux,
+/// write one command, and read the streamed output back. The lane's probe reads
+/// the `dsh: native terminal=` marker.
+fn probe_terminal(transport: HttpTransport, mux: RemoteStreamMux) {
+    use std::time::Duration;
+    let session = match SessionsClient::new(&transport).create(CreateSessionRequest {
+        workspace_id: None,
+        cwd: None,
+        session_id: None,
+        agent_preset: None,
+    }) {
+        Ok(session) => session.session_id,
+        Err(error) => {
+            eprintln!("dsh: native terminal=failed: session create: {error}");
+            return;
+        }
+    };
+    let client = TerminalClient::new(&transport, session.as_str());
+    let environment = match client.environment() {
+        Ok(environment) => environment,
+        Err(error) => {
+            eprintln!("dsh: native terminal=failed: environment: {error}");
+            return;
+        }
+    };
+    if let Err(error) = client.create(TerminalCreateRequest {
+        shell_path: None,
+        id: "probe-terminal".to_owned(),
+        cols: 80,
+        rows: 24,
+    }) {
+        eprintln!("dsh: native terminal=failed: create: {error}");
+        return;
+    }
+    let (mut frames, input) = match terminal::attach(&mux, session.as_str(), "probe-terminal") {
+        Ok(attachment) => attachment,
+        Err(error) => {
+            eprintln!("dsh: native terminal=failed: attach: {error}");
+            return;
+        }
+    };
+    let command = "printf 'terminal-probe-ok\\n'\n";
+    if input
+        .send(TerminalInput::Write {
+            sequence: 1,
+            data: command.to_owned(),
+        })
+        .is_err()
+    {
+        eprintln!("dsh: native terminal=failed: input closed");
+        return;
+    }
+    let mut output = String::new();
+    let mut exit_code = None;
+    while let Some(frame) = frames.recv_timeout(Duration::from_secs(20)) {
+        match frame {
+            Ok(TerminalFrame::Output(chunk)) => output.push_str(&chunk.data),
+            Ok(TerminalFrame::State(state)) => exit_code = state.info.exit_code,
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("dsh: native terminal=failed: frame: {error}");
+                return;
+            }
+        }
+        if output.contains("terminal-probe-ok") {
+            break;
+        }
+    }
+    let _ = input.send(TerminalInput::Write {
+        sequence: 2,
+        data: "exit\n".to_owned(),
+    });
+    let _ = client.close(TerminalCloseRequest {
+        id: "probe-terminal".to_owned(),
+    });
+    if output.contains("terminal-probe-ok") {
+        eprintln!(
+            "dsh: native terminal=ok max_input={} max_cols={} exit={}",
+            environment.max_input_bytes,
+            environment.max_cols,
+            exit_code.map(|code| code.to_string()).unwrap_or_default()
+        );
+    } else {
+        eprintln!(
+            "dsh: native terminal=failed: no marker in output bytes={}",
+            output.len()
+        );
+    }
+}
+
+/// Runs only when `DSH_DESKTOP_PROBE_TIMED_QUESTION=1`.
+///
+/// Answers a timed `ask_user_question` the way the app does, but also proves the
+/// foreground wait stream the question card subscribes to. The lane's probe
+/// reads the `dsh: native timed-question=` markers.
+fn probe_timed_question(transport: HttpTransport, mux: RemoteStreamMux) {
+    use std::time::{Duration, Instant};
+    let session = match SessionsClient::new(&transport).create(CreateSessionRequest {
+        workspace_id: None,
+        cwd: None,
+        session_id: None,
+        agent_preset: None,
+    }) {
+        Ok(session) => session.session_id,
+        Err(error) => {
+            eprintln!("dsh: native timed-question=failed: session create: {error}");
+            return;
+        }
+    };
+    let model = match ModelClient::new(&transport).catalog() {
+        Ok(catalog) => match probe_model_selection(&catalog) {
+            Some(selection) => selection,
+            None => {
+                eprintln!("dsh: native timed-question=failed: empty model catalog");
+                return;
+            }
+        },
+        Err(error) => {
+            eprintln!("dsh: native timed-question=failed: model catalog: {error}");
+            return;
+        }
+    };
+    if let Err(error) = ModelClient::new(&transport).select(SelectModelRequest {
+        session_id: session.clone(),
+        selection: model,
+    }) {
+        eprintln!("dsh: native timed-question=failed: select model: {error}");
+        return;
+    }
+    let events = match RemoteEvents::connect(transport.clone(), &mux) {
+        Ok(events) => events,
+        Err(error) => {
+            eprintln!("dsh: native timed-question=failed: events: {error}");
+            return;
+        }
+    };
+    let chat = ChatClient::new(&transport);
+    let request = PromptRequest {
+        request_id: chat.next_request_id(),
+        session_id: session.clone(),
+        mode: PromptMode::Queue,
+        content: vec![PromptContentPart::Text {
+            text: "Ask the timed probe question.".to_owned(),
+        }],
+        client_time_zone: None,
+    };
+    if let Err(error) = chat.prompt(request) {
+        eprintln!("dsh: native timed-question=failed: prompt: {error}");
+        return;
+    }
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while Instant::now() < deadline {
+        match events.recv_timeout(Duration::from_millis(250)) {
+            Ok(Some(RemoteEvent::Waterfall(invocation))) => {
+                if invocation.event != "user-questions/request" {
+                    continue;
+                }
+                let pending = match PendingQuestion::from_invocation(invocation) {
+                    Ok(pending) => pending,
+                    Err(error) => {
+                        eprintln!("dsh: native timed-question=failed: decode: {error}");
+                        return;
+                    }
+                };
+                let Some(wait) = pending.request.wait.clone() else {
+                    eprintln!("dsh: native timed-question=failed: blocking question");
+                    return;
+                };
+                if !wait.timed {
+                    eprintln!("dsh: native timed-question=failed: not timed");
+                    return;
+                }
+                let Some(call_id) = wait.call_id.clone() else {
+                    eprintln!("dsh: native timed-question=failed: no call id");
+                    return;
+                };
+                let mut frames = 0_u32;
+                let mut remaining = 0_u64;
+                match streams::user_question_wait(&mux, session.as_str(), &call_id) {
+                    Ok(mut stream) => {
+                        while let Some(frame) = stream.recv_timeout(Duration::from_secs(5)) {
+                            match frame {
+                                Ok(frame) => {
+                                    frames += 1;
+                                    remaining = remaining.max(frame.remaining_ms);
+                                }
+                                Err(error) => {
+                                    eprintln!(
+                                        "dsh: native timed-question=failed: wait frame: {error}"
+                                    );
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("dsh: native timed-question=failed: attach wait: {error}");
+                        return;
+                    }
+                }
+                eprintln!("dsh: native timed-question=attached frames={frames}");
+                if frames == 0 {
+                    eprintln!("dsh: native timed-question=failed: no wait frames");
+                    return;
+                }
+                // The foreground wait ends at the model's timeout; the answer then
+                // arrives as a continued-question reply.
+                std::thread::sleep(Duration::from_secs(3));
+                let answer = AskUserQuestionAnswer {
+                    answers: pending
+                        .request
+                        .questions
+                        .iter()
+                        .map(|question| AskUserQuestionAnswerItem {
+                            id: question.id.clone(),
+                            selected: Vec::new(),
+                            custom: Some("timed probe answer".to_owned()),
+                        })
+                        .collect(),
+                };
+                match UserQuestionsClient::new(&transport).answer(&session, &call_id, answer) {
+                    Ok(true) => eprintln!(
+                        "dsh: native timed-question=ok frames={frames} remaining_ms={remaining}"
+                    ),
+                    Ok(false) => eprintln!("dsh: native timed-question=failed: not answerable"),
+                    Err(error) => {
+                        eprintln!("dsh: native timed-question=failed: answer: {error}");
+                    }
+                }
+                return;
+            }
+            Ok(Some(_)) | Ok(None) => {}
+            Err(error) => {
+                eprintln!("dsh: native timed-question=failed: events closed: {error}");
+                return;
+            }
+        }
+    }
+    eprintln!("dsh: native timed-question=failed: timeout");
+}
+
 /// Reads the current session snapshot, retrying after a failed open.
-fn probe_snapshot(
-    mux: &RemoteStreamMux,
-    session: &str,
-) -> Option<follow::SnapshotFrame> {
+fn probe_snapshot(mux: &RemoteStreamMux, session: &str) -> Option<follow::SnapshotFrame> {
     let request = FollowRequest {
         address: SessionAddress {
             kind: SessionAddressKind::Session,
@@ -4113,7 +5352,10 @@ fn probe_decided(mux: &RemoteStreamMux, session: &str, expected: &str) -> bool {
             for entry in &snapshot.records {
                 let event = &entry.event;
                 if event.event_type == "approval/decided"
-                    && event.data.get("outcome").and_then(serde_json::Value::as_str)
+                    && event
+                        .data
+                        .get("outcome")
+                        .and_then(serde_json::Value::as_str)
                         == Some(expected)
                 {
                     return true;
@@ -4126,7 +5368,9 @@ fn probe_decided(mux: &RemoteStreamMux, session: &str, expected: &str) -> bool {
 }
 
 /// Builds an answer that selects the first option of each asked question.
-fn user_question_answer(request: &serde_json::Map<String, serde_json::Value>) -> AskUserQuestionAnswer {
+fn user_question_answer(
+    request: &serde_json::Map<String, serde_json::Value>,
+) -> AskUserQuestionAnswer {
     let answers = request
         .get("questions")
         .and_then(serde_json::Value::as_array)
@@ -4362,7 +5606,11 @@ fn probe_streams(transport: HttpTransport, mux: RemoteStreamMux) {
     match ModelClient::new(&transport).catalog() {
         Ok(catalog) => eprintln!(
             "dsh: native models={} failures={}",
-            catalog.groups.iter().map(|group| group.models.len()).sum::<usize>(),
+            catalog
+                .groups
+                .iter()
+                .map(|group| group.models.len())
+                .sum::<usize>(),
             catalog.failures.len()
         ),
         Err(error) => eprintln!("dsh: native models=failed: {error}"),
@@ -4696,7 +5944,15 @@ mod transcript_render_tests {
                 egui::vec2(640.0, 480.0),
             )),
         );
-        render_transcript(&mut ui, transcript, "", &std::collections::BTreeMap::new(), false, false, &mut Vec::new());
+        render_transcript(
+            &mut ui,
+            transcript,
+            "",
+            &std::collections::BTreeMap::new(),
+            false,
+            false,
+            &mut Vec::new(),
+        );
         assert!(ui.min_rect().is_finite());
         let rect = ui.min_rect();
         let mut output = ctx.end_pass();
@@ -4738,14 +5994,26 @@ mod transcript_render_tests {
                 egui::vec2(640.0, 480.0),
             )),
         );
-        render_transcript(&mut ui, &Transcript::default(), "partial answer", &std::collections::BTreeMap::new(), false, true, &mut Vec::new());
+        render_transcript(
+            &mut ui,
+            &Transcript::default(),
+            "partial answer",
+            &std::collections::BTreeMap::new(),
+            false,
+            true,
+            &mut Vec::new(),
+        );
         let mut output = ctx.end_pass();
         output.textures_delta.clear();
         let mut texts = Vec::new();
         for clipped in output.shapes {
             collect_text(&clipped.shape, &mut texts);
         }
-        for expected in ["Waiting for assistant…", "Assistant (streaming)", "partial answer"] {
+        for expected in [
+            "Waiting for assistant…",
+            "Assistant (streaming)",
+            "partial answer",
+        ] {
             assert!(texts.iter().any(|text| text == expected), "{texts:?}");
         }
     }
