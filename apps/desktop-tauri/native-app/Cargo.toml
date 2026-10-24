@@ -31,3 +31,4 @@ semver = "1"
 base64 = "0.22"
 # ring verifies the Ed25519 feed signature before any artifact is trusted.
 ring = "0.17"
+unicode-width = "0.2"

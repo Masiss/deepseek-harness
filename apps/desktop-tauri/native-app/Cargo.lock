@@ -1015,6 +1015,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tray-icon",
+ "unicode-width",
 ]
 
 [[package]]

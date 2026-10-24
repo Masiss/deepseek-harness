@@ -195,6 +195,26 @@ impl TerminalPanel {
         self.status = "Detached (shell remains alive)".to_owned();
     }
 
+    /// Answers a program's device or cursor query through the same uplink.
+    fn reply_to_program(&mut self, replies: &str) {
+        if !self.writable || self.pending.is_some() {
+            self.status = "A terminal reply was dropped while input was unacknowledged".to_owned();
+            return;
+        }
+        let Some(writer) = &mut self.input else {
+            return;
+        };
+        match writer.write(replies) {
+            Ok(sequence) => {
+                self.pending = Some(sequence);
+                self.status = format!("Awaiting ack #{sequence} (terminal reply)");
+            }
+            Err(error) => {
+                self.error = Some(format!("A terminal reply was not queued: {error}"));
+            }
+        }
+    }
+
     fn clear_output(&mut self) {
         self.output.clear();
         self.output_revision = self.output_revision.wrapping_add(1);
@@ -667,9 +687,13 @@ impl TerminalPanel {
             "ANSI SGR colors, cursor addressing, and line erases are rendered from the stream.",
         );
         if self.parsed_revision != self.output_revision || self.parsed_width != self.cols {
-            self.parsed = terminal_ansi::parse_sized(&self.output, self.cols as usize);
+            let screen = terminal_ansi::parse_screen(&self.output, self.cols as usize);
+            self.parsed = screen.lines;
             self.parsed_revision = self.output_revision;
             self.parsed_width = self.cols;
+            if !screen.replies.is_empty() {
+                self.reply_to_program(&screen.replies);
+            }
         }
         let job = terminal_ansi::layout(&self.parsed, ui.available_width());
         egui::ScrollArea::both()
