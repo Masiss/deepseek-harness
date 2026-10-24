@@ -244,7 +244,7 @@ Lane tập trung **Linux**; **macOS và Windows để pending** cho tới khi c�
 | **M5** | Terminal (PTY): RPC + attach/retain + native panel | **Xong một phần** ◐ | Gateway mux + egui list/create/attach/input/resize; `terminal_ansi` renders SGR, carriage-return overwrite, and erase-to-end-of-line; `TerminalWriter` enforces input/frame budgets. Rust PTY provider passes the isolated probe; native panel still lacks a live PTY journey |
 | **M6** | Settings, plugins, skills, schedules, workspace files, preview | **Xong một phần** ◐ | settings editor, plugin/bundle controls, marketplace, skills/schedules, multipart previews, and Office UI are present. Packaged journey proves one settings mutation persists over restart and plugin tarball lifecycle; registry install and PDF rendering remain unverified |
 | **M7** | Native app shell, Host sidecar, packaging, system integration | **Xong một phần** ◐ | Host/auth, tray, dialogs, signed update prompts, outer-AppImage restart, self-contained runtime, and native AppImage boot pass local probes. Release-lane publication and GUI-driven signed update replacement remain pending |
-| **M8** | Cổng parity: checklist từng màn hình | **Đang làm** ◐ | `.agents/plan/desktop-tauri/PARITY.md`; headless panel geometry passes four viewports and the native shell boots/authenticates under isolated Weston. Physical-desktop visual review, UI fault injection, IME, and clipboard remain pending |
+| **M8** | Cổng parity: checklist từng màn hình | **Đang làm** ◐ | `.agents/plan/desktop-tauri/PARITY.md`; headless panel geometry passes four viewports and the native shell boots/authenticates under isolated Weston. The 2026-10-24 physical-desktop pass covers rendering, typing, Vietnamese IME, clipboard, theme packs, rebinding, Host-death degradation, and RSS; pointer-only controls (Retry, terminal TUI, update confirmation) and an independent visual review remain pending |
 | **M9** | Quy trình kịp upstream | **Xong** ✓ | `.agents/plan/desktop-tauri/UPSTREAM.md` |
 
 **Số đo sàn bộ nhớ (2026-10-22):** Host base-only (không `dsh-web-app`) **≈ 180 MiB RSS / 168 MiB PSS**; Host có webview ~190 MiB ⇒ bỏ bundle web chỉ tiết kiệm ~10 MiB ở Host, **webview ~530 MiB mới là chi phí lớn**. Ước tính native: Host 180 + shell ~30 + client 30–80 = **240–290 MiB** ⇒ đạt `< 300 MiB` nếu giữ transcript có giới hạn + tải plugin lazy.
@@ -257,7 +257,7 @@ Release-mode Linux x64 binary và AppImage 87,587,320-byte hiện có chứa UI 
 
 Trước khi coi Goal 3 là dùng hằng ngày hoặc phát hành, còn phải:
 
-- Kiểm tra GUI trên desktop thật: visual review, IME, clipboard, UI fault recovery, và cài update có ký rồi swap/restart từ giao diện.
+- Kiểm tra GUI trên desktop thật: visual review, IME, clipboard, UI fault recovery, và cài update có ký rồi swap/restart từ giao diện. (Native egui: visual review, typing, IME, clipboard, và Host-death degradation đã PASS 2026-10-24; còn Retry, terminal TUI, update confirmation vì không có pointer injection.)
 - Timed-question wait: bản compose hiện tại dùng tool blocking; bật `mode: timed` phải ghi đè `config.plugins` của preset (đổi bề mặt tool model thấy) ⇒ cần quyết định sản phẩm.
 - Hoàn tất hoặc chấp thuận rõ các thiếu hụt parity còn trong [`PARITY.md`](PARITY.md).
 - Chạy lại release lane; xác minh Linux x64/arm64 artifacts và feeds, ký bằng production key rồi mới publish khi được chủ dự án yêu cầu.

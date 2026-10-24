@@ -4,6 +4,19 @@ Cập nhật 2026-10-24. Mục đích: session mới đọc file này là biết
 
 ## Native release and Host integration — working tree 2026-10-24
 
+### Physical-desktop pass (L3) and four defects it found — 2026-10-24
+
+Every earlier GUI check ran under headless Weston. This pass drove the installed AppImage (`~/.local/bin/dsh`, 87,607,800 B) on the real Hyprland session with an isolated `DSH_HOME`, injecting keys with `wtype` and capturing windows with `grim`. It found four real defects, all fixed in the working tree:
+
+- **Composer discarded every keystroke.** The message `TextEdit` used an auto id that shifts as transcript rows grow, so the focused id pointed at a widget that no longer existed; egui reported focus while the typed text was dropped. Fixed with `.id_salt("composer")`; `composer_identity::composer_focus_survives_a_changing_transcript` fails with `the composer lost focus` when the salt is removed.
+- **`session/follow` failed on a fresh Home** with `gateway/input-invalid: wire field "request" failed boundary validation` because the client sent `assistantStream: false` and the Host schema is `assistantStream?: true`. The field is now a `bool` that is omitted when false.
+- **Vietnamese text rendered as missing-glyph boxes.** egui's bundled faces have no precomposed Vietnamese letters. `install_font_fallbacks` appends the first available system face (Liberation, Noto, DejaVu) to the proportional and monospace chains.
+- **No keyboard path to a first message.** `Ctrl+N` now creates a Session and focuses the composer, which also made real typing verifiable without pointer injection.
+
+Verified on the physical session: boot/auth/streams, session creation, typing with a visible caret, clipboard paste (`wl-copy` + `Ctrl+V`), Vietnamese IME through fcitx5 Bamboo (`vieejt` → `việt`), Solarized and high-contrast packs, and a rebound Settings chord (`Ctrl+Shift+S` opens Settings while `Ctrl+Comma` does nothing). Killing the Host pid produced a clear disconnected state without a crash, kept the session list, and hid the composer. RSS/PSS on the shipped image: 241/228 MiB after start, 253/238 connected, 260/240 with a Session and Settings open, 261/245 with composer text — under the 300 MiB gate on a real GPU.
+
+Not verified here: pointer-driven controls (Retry after Host death, terminal panel create/select, a signed update confirmation) and a full-screen TUI inside the terminal panel, because this compositor exposes no pointer injection (`ydotool`/`wlrctl` absent; `hyprctl` only moves windows). Read screenshots cropped and upscaled; the 1x thumbnails misrender small text badly enough to invent bugs.
+
 ### Terminal screen model and appearance packs — 2026-10-24
 
 `terminal_ansi.rs` keeps a bounded screen (5,000 rows) instead of assembling lines: cursor moves (`H`/`f`, `A`/`B`/`C`/`D`, `G`, `d`), save/restore (`s`/`u`), erase-in-line/display (`K`/`J`), wrapping at the terminal's column count, and scrolling all land where a full-screen program expects. The panel re-parses when the stream or the column count changes. `ui_preferences.rs` gained a `themePack` (default / high contrast / Solarized) applied over both color schemes and client-local `keybindings` (open settings, marketplace, goals) that the shell consumes; invalid or duplicate chords fail validation and surface in the preferences editor.
@@ -17,7 +30,7 @@ Cập nhật 2026-10-24. Mục đích: session mới đọc file này là biết
 
 Release source separates `manifest-native.json` from the webview `manifest.json`, signs both with the existing Host canonical bytes, and embeds shell-safe feed defaults in AppRun. Native Host startup consumes framed `ready`/`fatal` messages, forwards update prompts to egui for explicit confirmation, and schedules restart only after installation. The restart helper selects the outer `$APPIMAGE`, waits for the old process to exit, and refuses an invalid image path rather than falling back to the mounted binary. Native app headless tests are included in the Linux CI source.
 
-Validation: native-app 75/75; native release build; AppImage probe; and native GUI boot/auth/stream probe under isolated Weston pass. The UI preference file has round-trip, validation, failure-preservation, default-loading, and theme-application tests. The AppImage is 87,587,320 bytes. Its preference controls were not clicked during GUI testing; physical-desktop appearance, IME, clipboard, and visual review remain open. `test:docs` remains 20/21 because of the known `python/sdk/uv.lock:113` repository-reference failure. No production key, publication, tag, or active-desktop GUI interaction was used. Goal 3 remains open for release and the remaining live Host journeys.
+Validation: native-app 75/75; native release build; AppImage probe; and native GUI boot/auth/stream probe under isolated Weston pass. The UI preference file has round-trip, validation, failure-preservation, default-loading, and theme-application tests. The AppImage is 87,587,320 bytes at that point; the physical-desktop pass below supersedes its open GUI items. `test:docs` remains 20/21 because of the known `python/sdk/uv.lock:113` repository-reference failure. No production key, publication, tag, or active-desktop GUI interaction was used. Goal 3 remains open for release and the remaining live Host journeys.
 
 ## Native functional controls — working tree 2026-10-24
 
