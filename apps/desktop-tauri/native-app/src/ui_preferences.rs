@@ -24,21 +24,16 @@ const INVALID_CHORD: &str = "keyboard shortcuts look like Ctrl+Shift+S, or none"
 static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
 
 /// Selects an explicit theme or follows the desktop environment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThemeMode {
     /// Follow the system's current theme.
+    #[default]
     System,
     /// Use the light egui theme.
     Light,
     /// Use the dark egui theme.
     Dark,
-}
-
-impl Default for ThemeMode {
-    fn default() -> Self {
-        Self::System
-    }
 }
 
 impl From<ThemeMode> for egui::ThemePreference {
@@ -52,26 +47,22 @@ impl From<ThemeMode> for egui::ThemePreference {
 }
 
 /// Controls spacing between native interface elements.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum UiDensity {
     /// Use the default egui spacing.
+    #[default]
     Comfortable,
     /// Reduce spacing between controls and rows.
     Compact,
 }
 
-impl Default for UiDensity {
-    fn default() -> Self {
-        Self::Comfortable
-    }
-}
-
 /// Named color pack layered over the chosen light or dark theme.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ThemePack {
     /// The egui theme's own palette.
+    #[default]
     Default,
     /// Maximum text and border contrast.
     HighContrast,
@@ -79,12 +70,6 @@ pub enum ThemePack {
     Solarized,
     /// Colors chosen in the appearance editor.
     Custom,
-}
-
-impl Default for ThemePack {
-    fn default() -> Self {
-        Self::Default
-    }
 }
 
 /// One role color as written in the preferences file.

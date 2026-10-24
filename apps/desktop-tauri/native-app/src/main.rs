@@ -71,7 +71,7 @@ use host::Host;
 use question_card::{QuestionAction, QuestionCard};
 use settings_panel::{SettingsAction, SettingsPanel};
 use std::fs::{File, OpenOptions};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use transcript::{RowKind, Transcript};
@@ -148,11 +148,23 @@ struct TerminalInventory {
     selected: Option<String>,
 }
 
+/// What the running file picker is collecting.
+#[derive(Clone, Copy)]
+enum DialogPurpose {
+    Attach,
+    Open,
+    Save,
+}
+
 enum TerminalUpdate {
     Attached(mpsc::Sender<TerminalInput>),
-    Frame(TerminalFrame),
+    Frame(Box<TerminalFrame>),
     Error(String),
 }
+
+/// Snapshot, bundles, and managed plugins returned by the inventory workers.
+type PluginInventoryResult =
+    Result<(PluginInventorySnapshot, Vec<BundleInfo>, Vec<ManagedPlugin>), Error>;
 
 /// Owns workers until they settle; cancellation never joins a network worker on the egui frame.
 #[derive(Default)]
@@ -331,7 +343,7 @@ impl TerminalPanel {
                 if sender.send(TerminalUpdate::Attached(input)).is_ok() {
                     for frame in &mut stream {
                         let update = match frame {
-                            Ok(frame) => TerminalUpdate::Frame(frame),
+                            Ok(frame) => TerminalUpdate::Frame(Box::new(frame)),
                             Err(error) => TerminalUpdate::Error(error.to_string()),
                         };
                         if sender.send(update).is_err() {
@@ -431,7 +443,7 @@ impl TerminalPanel {
                     self.detach();
                     self.error = Some(format!("Terminal stream failed: {error}"));
                 }
-                Ok(TerminalUpdate::Frame(frame)) => match frame {
+                Ok(TerminalUpdate::Frame(frame)) => match *frame {
                     TerminalFrame::Snapshot(frame) => {
                         self.clear_output();
                         self.push_output(&frame.screen);
@@ -817,7 +829,12 @@ fn acquire_instance_lock() -> Option<File> {
             return None;
         }
     }
-    let file = match OpenOptions::new().create(true).write(true).open(path) {
+    let file = match OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
+    {
         Ok(file) => file,
         Err(error) => {
             eprintln!("single-instance lock open failed: {error}");
@@ -934,6 +951,7 @@ struct DesktopApp {
     chat_text: String,
     focus_composer: bool,
     cancel_receiver: Option<mpsc::Receiver<Result<AcceptedResponse, Error>>>,
+    dialog: Option<(DialogPurpose, mpsc::Receiver<Option<PathBuf>>)>,
     attachment: Option<FileUploadValue>,
     attachment_name: String,
     attachment_receiver: Option<mpsc::Receiver<Result<FileUploadValue, String>>>,
@@ -1008,16 +1026,13 @@ struct DesktopApp {
     model_selection: Option<ModelSelection>,
     model_error: Option<String>,
     model_receiver: Option<mpsc::Receiver<Result<ModelCatalog, Error>>>,
+    model_requested_at: Option<std::time::Instant>,
     model_select_receiver: Option<mpsc::Receiver<Result<SelectModelResponse, Error>>>,
     model_init_receiver: Option<mpsc::Receiver<Result<(), Error>>>,
     plugins_snapshot: Option<PluginInventorySnapshot>,
     plugins_loading: bool,
     plugins_error: Option<String>,
-    plugins_receiver: Option<
-        mpsc::Receiver<
-            Result<(PluginInventorySnapshot, Vec<BundleInfo>, Vec<ManagedPlugin>), Error>,
-        >,
-    >,
+    plugins_receiver: Option<mpsc::Receiver<PluginInventoryResult>>,
     plugin_bundles: Vec<BundleInfo>,
     managed_plugins: Vec<ManagedPlugin>,
     plugin_write_receiver: Option<mpsc::Receiver<Result<ChangeResult, Error>>>,
@@ -1097,6 +1112,7 @@ impl DesktopApp {
             chat_text: String::new(),
             focus_composer: false,
             cancel_receiver: None,
+            dialog: None,
             attachment: None,
             attachment_name: String::new(),
             attachment_receiver: None,
@@ -1171,6 +1187,7 @@ impl DesktopApp {
             model_selection: None,
             model_error: None,
             model_receiver: None,
+            model_requested_at: None,
             model_select_receiver: None,
             model_init_receiver: None,
             plugins_snapshot: None,
@@ -1310,7 +1327,7 @@ impl DesktopApp {
             let result = match operation {
                 SessionOperation::List => SessionViewer::new(&transport)
                     .list(None)
-                    .map(|items| SessionUpdate::List(items)),
+                    .map(SessionUpdate::List),
                 SessionOperation::Search(query) => client.search(query).map(SessionUpdate::Search),
                 SessionOperation::Create => client
                     .create(CreateSessionRequest {
@@ -1408,6 +1425,24 @@ impl DesktopApp {
     ///
     /// The scan runs off the first frame, so startup applies the bundled faces
     /// and this installs the chosen families as soon as the catalog arrives.
+    /// Whether no catalog request is running and no provider offers a model.
+    fn model_catalog_empty(&self) -> bool {
+        self.model_receiver.is_none()
+            && self.model_catalog.as_ref().is_none_or(|catalog| {
+                catalog.groups.iter().all(|group| group.models.is_empty())
+            })
+    }
+
+    /// Labels the model picker with the chosen model or the reason there is none.
+    fn model_picker_label(&self) -> String {
+        model_picker_label(
+            self.model_selection.as_ref(),
+            self.model_error.as_deref(),
+            self.model_catalog.as_ref(),
+            self.model_receiver.is_some(),
+        )
+    }
+
     fn apply_fonts(&mut self, ctx: &egui::Context) {
         let Some(catalog) = self.font_catalog_snapshot.clone() else {
             return;
@@ -1433,6 +1468,7 @@ impl DesktopApp {
             let _ = sender.send(ModelClient::new(&transport).catalog());
         });
         self.model_receiver = Some(receiver);
+        self.model_requested_at = Some(std::time::Instant::now());
         self.model_error = None;
     }
 
@@ -2296,9 +2332,21 @@ impl DesktopApp {
     }
 
     fn pick_attachment(&mut self) {
-        let Some(path) = dialog::open_file() else {
+        if self.transport.is_none() {
+            self.attachment_error = Some("Connect before attaching a file".to_owned());
             return;
-        };
+        }
+        if self.selected_session.is_none() {
+            self.attachment_error = Some("Select a Session before attaching a file".to_owned());
+            return;
+        }
+        self.dialog = Some((DialogPurpose::Attach, dialog::open_file_async()));
+        self.attachment_error = None;
+        self.status = "Choose a file to attach…".to_owned();
+    }
+
+    /// Uploads the file the picker returned; the picker itself never runs here.
+    fn attach_path(&mut self, path: PathBuf) {
         let Some(transport) = self.transport.clone() else {
             self.attachment_error = Some("Connect before attaching a file".to_owned());
             return;
@@ -2325,6 +2373,54 @@ impl DesktopApp {
                 });
             let _ = sender.send(result);
         });
+    }
+
+    /// Applies a picked path to the document preview, which reads Host paths.
+    fn open_preview_path(&mut self, path: &Path) {
+        self.preview_path = path.display().to_string();
+        if self.selected_session.is_some() && self.transport.is_some() {
+            self.read_document();
+        } else {
+            self.preview_error =
+                Some("Select a connected Session before reading a file.".to_owned());
+        }
+    }
+
+    /// Writes the previewed text to a local path chosen through the save picker.
+    fn save_preview_path(&mut self, path: PathBuf) {
+        let Some(document) = self.preview_document.clone() else {
+            self.status = "Save a document after previewing one".to_owned();
+            return;
+        };
+        let text = document.text;
+        let name = path.display().to_string();
+        match std::fs::write(&path, text) {
+            Ok(()) => self.status = format!("Saved preview to {name}"),
+            Err(error) => self.status = format!("Could not save {name}: {error}"),
+        }
+    }
+
+    fn poll_dialog(&mut self) {
+        let Some((purpose, receiver)) = &self.dialog else {
+            return;
+        };
+        let purpose = *purpose;
+        match receiver.try_recv() {
+            Ok(path) => {
+                self.dialog = None;
+                match (purpose, path) {
+                    (DialogPurpose::Attach, Some(path)) => self.attach_path(path),
+                    (DialogPurpose::Open, Some(path)) => self.open_preview_path(&path),
+                    (DialogPurpose::Save, Some(path)) => self.save_preview_path(path),
+                    (_, None) => self.status = "File picker cancelled".to_owned(),
+                }
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.dialog = None;
+                self.status = "File picker stopped unexpectedly".to_owned();
+            }
+        }
     }
 
     fn poll_attachment(&mut self) {
@@ -2714,7 +2810,9 @@ impl DesktopApp {
             }
         }
         if let Some(chord) = new_session {
-            if ctx.input_mut(|input| chord.consume(input)) {
+            // Creating a Session replaces the view, so it must not fire while a
+            // text editor owns the keyboard and would lose the draft.
+            if !ctx.text_edit_focused() && ctx.input_mut(|input| chord.consume(input)) {
                 self.request_sessions(SessionOperation::Create);
                 self.focus_composer = true;
             }
@@ -2728,10 +2826,12 @@ impl eframe::App for DesktopApp {
         if let Ok(mut viewport) = self.viewport.lock() {
             *viewport = Some(ctx.clone());
         }
+        self.poll_dialog();
         self.poll_attachment();
         self.poll_jobs();
         self.poll_schedules();
-        if self.jobs_receiver.is_some()
+        if self.dialog.is_some()
+            || self.jobs_receiver.is_some()
             || self.job_receiver.is_some()
             || self.schedules_receiver.is_some()
             || self.schedule_delete_receiver.is_some()
@@ -3184,16 +3284,32 @@ impl eframe::App for DesktopApp {
                     self.model_catalog = Some(catalog);
                     self.model_error = None;
                     self.model_receiver = None;
+                    self.model_requested_at = None;
                 }
                 Ok(Err(error)) => {
                     self.model_error = Some(format!("Could not load models: {error}"));
                     self.model_receiver = None;
+                    self.model_requested_at = None;
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.model_error = Some("Model catalog worker stopped unexpectedly".into());
                     self.model_receiver = None;
+                    self.model_requested_at = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {
+                    // A Host without a configured provider can leave this call
+                    // unanswered; stop waiting so the picker can say why.
+                    if self
+                        .model_requested_at
+                        .is_some_and(|started| started.elapsed() > std::time::Duration::from_secs(10))
+                    {
+                        self.model_receiver = None;
+                        self.model_requested_at = None;
+                        self.model_error = Some(
+                            "The Host did not answer the model catalog; check provider settings"
+                                .to_owned(),
+                        );
+                    }
                     ctx.request_repaint_after(std::time::Duration::from_millis(30));
                 }
             }
@@ -3891,10 +4007,10 @@ impl eframe::App for DesktopApp {
                     }
                 });
                 if ui.button("Open file").clicked() {
-                    let _ = dialog::open_file();
+                    self.dialog = Some((DialogPurpose::Open, dialog::open_file_async()));
                 }
                 if ui.button("Save file").clicked() {
-                    let _ = dialog::save_file();
+                    self.dialog = Some((DialogPurpose::Save, dialog::save_file_async()));
                 }
             });
         egui::Panel::bottom("status").show(ui, |ui| {
@@ -4508,10 +4624,7 @@ impl eframe::App for DesktopApp {
                 ui.separator();
                 ui.heading("Chat");
                 ui.horizontal_wrapped(|ui| {
-                    let selected = self.model_selection.as_ref().map_or_else(
-                        || "Model: loading…".to_owned(),
-                        |selection| format!("{} / {}", selection.provider, selection.model),
-                    );
+                    let selected = self.model_picker_label();
                     egui::ComboBox::from_id_salt("model-selection")
                         .selected_text(selected)
                         .show_ui(ui, |ui| {
@@ -4602,7 +4715,19 @@ impl eframe::App for DesktopApp {
                         }
                     }
                 });
-                if let Some(error) = &self.model_error {
+                if self.model_selection.is_none() {
+                    if let Some(error) = &self.model_error {
+                        ui.colored_label(egui::Color32::LIGHT_RED, error);
+                        if ui.button("Open Settings").clicked() {
+                            self.show_settings = true;
+                        }
+                    } else if self.model_catalog_empty() {
+                        ui.label("Add a provider key in Settings to choose a model.");
+                        if ui.button("Open Settings").clicked() {
+                            self.show_settings = true;
+                        }
+                    }
+                } else if let Some(error) = &self.model_error {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
                 }
                 let text_edit = ui.add_enabled(
@@ -4936,6 +5061,37 @@ fn decode_preview_image(
         size: [rgba.width() as usize, rgba.height() as usize],
         rgba: rgba.into_raw(),
     }))
+}
+
+/// Labels the model picker: the chosen model, or why there is nothing to pick.
+///
+/// @param selection - Model already chosen for this Session.
+/// @param error - Last catalog or selection failure.
+/// @param catalog - Loaded catalog, or `None` when none loaded.
+/// @param pending - Whether a catalog request is still in flight.
+/// @returns Text for the picker and for its empty-state hint.
+fn model_picker_label(
+    selection: Option<&ModelSelection>,
+    error: Option<&str>,
+    catalog: Option<&ModelCatalog>,
+    pending: bool,
+) -> String {
+    if let Some(selection) = selection {
+        return format!("{} / {}", selection.provider, selection.model);
+    }
+    if error.is_some() {
+        return "Model unavailable".to_owned();
+    }
+    if pending {
+        return "Model: loading…".to_owned();
+    }
+    match catalog {
+        Some(catalog) if catalog.groups.iter().all(|group| group.models.is_empty()) => {
+            "No provider configured".to_owned()
+        }
+        Some(_) => "Choose a model".to_owned(),
+        None => "No provider configured".to_owned(),
+    }
 }
 
 /// Model the probe requests: the DeepSeek API-key route when it exists, else the catalog default.
@@ -5742,36 +5898,35 @@ fn main() -> eframe::Result {
     let event_hide = Arc::clone(&hide_requested);
     let event_hidden = Arc::clone(&hidden);
     let event_viewport = Arc::clone(&viewport);
-    let _menu_listener =
-        MenuEvent::set_event_handler(Some(move |event: tray_icon::menu::MenuEvent| {
-            if Some(event.id.clone()) == quit_id {
-                event_quitting.store(true, Ordering::Release);
-                if let Ok(viewport) = event_viewport.lock() {
-                    if let Some(ctx) = viewport.as_ref() {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
+    MenuEvent::set_event_handler(Some(move |event: tray_icon::menu::MenuEvent| {
+        if Some(event.id.clone()) == quit_id {
+            event_quitting.store(true, Ordering::Release);
+            if let Ok(viewport) = event_viewport.lock() {
+                if let Some(ctx) = viewport.as_ref() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
-            } else if Some(event.id) == show_id {
-                let currently_hidden = event_hidden.load(Ordering::Acquire);
-                if let Ok(viewport) = event_viewport.lock() {
-                    if let Some(ctx) = viewport.as_ref() {
-                        if currently_hidden {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                        } else {
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
-                        }
-                        ctx.request_repaint();
-                    }
-                }
-                event_show.store(currently_hidden, Ordering::Release);
-                event_hide.store(!currently_hidden, Ordering::Release);
-                event_hidden.store(!currently_hidden, Ordering::Release);
             }
-        }));
+        } else if Some(event.id) == show_id {
+            let currently_hidden = event_hidden.load(Ordering::Acquire);
+            if let Ok(viewport) = event_viewport.lock() {
+                if let Some(ctx) = viewport.as_ref() {
+                    if currently_hidden {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                    } else {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+                    }
+                    ctx.request_repaint();
+                }
+            }
+            event_show.store(currently_hidden, Ordering::Release);
+            event_hide.store(!currently_hidden, Ordering::Release);
+            event_hidden.store(!currently_hidden, Ordering::Release);
+        }
+    }));
     let tray_show = Arc::clone(&show_requested);
     let tray_viewport = Arc::clone(&viewport);
-    let _tray_listener = TrayIconEvent::set_event_handler(Some(move |event| {
+    TrayIconEvent::set_event_handler(Some(move |event| {
         if let TrayIconEvent::Click { .. } = event {
             tray_show.store(true, Ordering::Release);
             if let Ok(viewport) = tray_viewport.lock() {
@@ -6200,5 +6355,67 @@ mod composer_identity {
         }
         assert_eq!(ids[0], ids[1]);
         assert_eq!(text, "hi");
+    }
+}
+
+#[cfg(test)]
+mod model_status_tests {
+    use super::*;
+    use dsh_client_core::models::ModelProviderGroup;
+
+    fn selection() -> ModelSelection {
+        ModelSelection {
+            provider: "deepseek-official".to_owned(),
+            model: "deepseek-chat".to_owned(),
+            reasoning_effort: None,
+        }
+    }
+
+    fn catalog(models: usize) -> ModelCatalog {
+        ModelCatalog {
+            default: selection(),
+            routable_providers: Vec::new(),
+            groups: vec![ModelProviderGroup {
+                id: "deepseek-official".to_owned(),
+                name: "DeepSeek".to_owned(),
+                models: (0..models)
+                    .map(|index| ModelCatalogModel {
+                        id: format!("model-{index}"),
+                        name: format!("Model {index}"),
+                        description: None,
+                        reasoning: None,
+                    })
+                    .collect(),
+            }],
+            failures: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn picker_states_name_the_selected_model_or_the_blocker() {
+        assert_eq!(
+            model_picker_label(Some(&selection()), None, None, false),
+            "deepseek-official / deepseek-chat"
+        );
+        assert_eq!(
+            model_picker_label(None, Some("offline"), Some(&catalog(1)), false),
+            "Model unavailable"
+        );
+        assert_eq!(
+            model_picker_label(None, None, None, true),
+            "Model: loading…"
+        );
+        assert_eq!(
+            model_picker_label(None, None, Some(&catalog(0)), false),
+            "No provider configured"
+        );
+        assert_eq!(
+            model_picker_label(None, None, Some(&catalog(2)), false),
+            "Choose a model"
+        );
+        assert_eq!(
+            model_picker_label(None, None, None, false),
+            "No provider configured"
+        );
     }
 }

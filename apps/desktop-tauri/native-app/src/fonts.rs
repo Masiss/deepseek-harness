@@ -12,17 +12,19 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// Faces appended after the bundled ones so uncommon scripts still render.
-const PROPORTIONAL_FALLBACKS: [&str; 4] = [
+const PROPORTIONAL_FALLBACKS: [&str; 5] = [
     "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
     "/usr/share/fonts/noto/NotoSans-Regular.ttf",
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
     "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
 ];
-const MONOSPACE_FALLBACKS: [&str; 4] = [
+const MONOSPACE_FALLBACKS: [&str; 5] = [
     "/usr/share/fonts/liberation/LiberationMono-Regular.ttf",
     "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
     "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
     "/usr/share/fonts/dejavu/DejaVuSansMono.ttf",
+    "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
 ];
 
 /// One installed family and the file egui can load for it.
@@ -43,8 +45,8 @@ pub struct FontCatalog {
 impl FontCatalog {
     /// Parses `fc-list --format '%{family}\t%{file}\n'` output.
     ///
-    /// Font collections (`.ttc`) are skipped because egui loads single faces,
-    /// and a family that appears in several files keeps its first regular file.
+    /// A family that appears in several files keeps its first file; collections
+    /// are kept because egui loads face 0 of a `.ttc`.
     pub fn parse(text: &str) -> Self {
         let mut families: Vec<FontFamily> = Vec::new();
         for line in text.lines() {
@@ -52,7 +54,7 @@ impl FontCatalog {
                 continue;
             };
             let file = file.trim();
-            if !is_single_face(file) {
+            if !is_loadable_face(file) {
                 continue;
             }
             let Some(name) = names.split(',').map(str::trim).find(|name| !name.is_empty()) else {
@@ -141,9 +143,13 @@ impl FontCatalog {
     }
 }
 
-fn is_single_face(file: &str) -> bool {
+/// Whether egui can load this path as a font.
+///
+/// Collections load their first face, which is enough for the CJK faces shipped
+/// as `.ttc` and is why they are no longer skipped.
+fn is_loadable_face(file: &str) -> bool {
     let lower = file.to_lowercase();
-    lower.ends_with(".ttf") || lower.ends_with(".otf")
+    lower.ends_with(".ttf") || lower.ends_with(".otf") || lower.ends_with(".ttc")
 }
 
 /// Catalog shared between the startup scan and the settings editor.
@@ -263,17 +269,21 @@ mod tests {
     const SAMPLE: &str = "JetBrains Mono,JetBrains Mono NL\t/usr/share/fonts/TTF/JetBrainsMono-Regular.ttf\n\
 Noto Sans CJK JP\t/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc\n\
 Liberation Sans\t/usr/share/fonts/liberation/LiberationSans-Regular.ttf\n\
-Liberation Sans\t/usr/share/fonts/liberation/LiberationSans-Bold.ttf\n";
+Liberation Sans\t/usr/share/fonts/liberation/LiberationSans-Bold.ttf\n\
+Broken Family\t/usr/share/fonts/x.pfb\n";
 
     #[test]
-    fn parses_single_faces_and_skips_collections() {
+    fn parses_loadable_faces_including_collections() {
         let catalog = FontCatalog::parse(SAMPLE);
         let names: Vec<&str> = catalog
             .families()
             .iter()
             .map(|family| family.name.as_str())
             .collect();
-        assert_eq!(names, ["JetBrains Mono", "Liberation Sans"]);
+        assert_eq!(
+            names,
+            ["JetBrains Mono", "Liberation Sans", "Noto Sans CJK JP"]
+        );
         assert_eq!(
             catalog.file_for("Liberation Sans"),
             Some(&PathBuf::from(
