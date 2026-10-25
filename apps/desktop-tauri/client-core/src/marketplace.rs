@@ -1,8 +1,18 @@
 //! Typed marketplace and install RPCs for the Desktop plugin surface.
 
 use crate::{transport::HttpTransport, Error};
+use serde::Serialize;
 use serde_json::{json, Value};
 use std::sync::atomic::AtomicBool;
+
+/// Registry selection attached to a market entry's exact install target.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketplaceInstallOptions {
+    /// The registry declared by the selected market version, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
+}
 
 /// Native client for marketplace search and bundle installation.
 pub struct MarketplaceClient<'a> {
@@ -36,30 +46,54 @@ impl<'a> MarketplaceClient<'a> {
         )
     }
 
-    /// Inspects one install spec.
-    pub fn inspect(&self, spec: &str) -> Result<Value, Error> {
-        self.call("pluginManager/inspect", json!({"spec": spec}))
+    /// Inspects one install spec using its selected registry.
+    ///
+    /// @param spec - Exact package install spec from the selected market version.
+    /// @param options - Registry selected by that market version.
+    /// @returns The Host's inspection result.
+    pub fn inspect(&self, spec: &str, options: &MarketplaceInstallOptions) -> Result<Value, Error> {
+        let mut payload = json!({"spec": spec});
+        if let Some(registry) = &options.registry {
+            payload["options"] = json!({"registry": registry});
+        }
+        self.call("pluginManager/inspect", payload)
     }
 
-    /// Starts installing one spec.
-    pub fn install_bundle(&self, spec: &str) -> Result<Value, Error> {
+    /// Starts installing one spec from its selected registry.
+    ///
+    /// @param spec - Exact package install spec from the selected market version.
+    /// @param options - Registry selected by that market version.
+    /// @returns The Host's completed install result.
+    pub fn install_bundle(
+        &self,
+        spec: &str,
+        options: &MarketplaceInstallOptions,
+    ) -> Result<Value, Error> {
         self.call(
             "pluginManager/installBundle",
-            json!({"spec": spec, "options": {}}),
+            json!({"spec": spec, "options": options}),
         )
     }
 
     /// Waits for an installation to finish.
     pub fn wait_for_install(&self, request_id: &str) -> Result<Value, Error> {
-        self.call("pluginManager/waitForInstall", json!({"requestId": request_id}))
+        self.call(
+            "pluginManager/waitForInstall",
+            json!({"requestId": request_id}),
+        )
     }
 
     /// Cancels an installation.
     pub fn cancel_install(&self, request_id: &str) -> Result<Value, Error> {
-        self.call("pluginManager/cancelInstall", json!({"requestId": request_id}))
+        self.call(
+            "pluginManager/cancelInstall",
+            json!({"requestId": request_id}),
+        )
     }
 
     fn call(&self, method: &str, payload: Value) -> Result<Value, Error> {
-        Ok(self.transport.request(method, payload, &AtomicBool::new(false))?)
+        Ok(self
+            .transport
+            .request(method, payload, &AtomicBool::new(false))?)
     }
 }

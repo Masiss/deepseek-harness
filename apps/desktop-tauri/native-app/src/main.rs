@@ -3,6 +3,7 @@
 mod composer_input;
 mod dialog;
 mod document_preview;
+mod explorer;
 mod fonts;
 mod host;
 mod layout;
@@ -29,7 +30,7 @@ use dsh_client_core::{
         CreateGoalRequest, EditGoalRequest, GoalActivation, GoalPhase, GoalRef, GoalView,
         GoalsClient,
     },
-    marketplace::MarketplaceClient,
+    marketplace::{MarketplaceClient, MarketplaceInstallOptions},
     message_feedback::{MessageFeedbackClient, MessageFeedbackItem, MessageFeedbackPutRequest},
     models::{
         ModelCatalog, ModelCatalogModel, ModelClient, ModelSelection, SelectModelRequest,
@@ -69,6 +70,7 @@ use dsh_client_core::{
     Error,
 };
 use eframe::egui;
+use explorer::WorkspaceExplorer;
 use fs2::FileExt;
 use host::Host;
 use question_card::{QuestionAction, QuestionCard};
@@ -623,7 +625,9 @@ impl TerminalPanel {
             let Some(writer) = &mut self.input else {
                 return false;
             };
-            writer.write(data).map(|sequence| (sequence, writer.is_closed()))
+            writer
+                .write(data)
+                .map(|sequence| (sequence, writer.is_closed()))
         };
         match result {
             Ok((_, true)) => {
@@ -821,7 +825,7 @@ impl TerminalPanel {
             }
         }
         if let Some(error) = &self.error {
-            ui.colored_label(egui::Color32::LIGHT_RED, error);
+            ui.colored_label(ui.visuals().error_fg_color, error);
         }
         ui.small(
             "ANSI SGR colors, cursor addressing, and line erases are rendered from the stream.",
@@ -1209,7 +1213,10 @@ mod terminal_panel_tests {
         panel.send_mouse(&[MouseAction::Wheel(true)], (3, 2));
         assert!(panel.queued_input.is_empty());
         assert_eq!(panel.queued_input_bytes, 0);
-        assert!(panel.error.as_deref().is_some_and(|error| error.contains("queue is full")));
+        assert!(panel
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("queue is full")));
         assert_eq!(inputs.try_recv(), Err(mpsc::TryRecvError::Empty));
     }
 
@@ -1347,12 +1354,227 @@ enum SessionUpdate {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ActiveView {
     Sessions,
+    Explorer,
     Settings,
     Document,
     Plugins,
     Skills,
     Marketplace,
     Goals,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BottomTool {
+    Terminal,
+    Jobs,
+    Schedules,
+    Deliverables,
+}
+
+fn paint_nav_icon(
+    painter: &egui::Painter,
+    button: egui::Rect,
+    view: ActiveView,
+    color: egui::Color32,
+) {
+    let center = egui::pos2(button.center().x, button.top() + 12.0);
+    let stroke = egui::Stroke::new(1.35, color);
+    let line = |from: egui::Pos2, to: egui::Pos2| painter.line_segment([from, to], stroke);
+    match view {
+        ActiveView::Sessions => {
+            for y in [-4.0, 0.0, 4.0] {
+                line(
+                    egui::pos2(center.x - 5.5, center.y + y),
+                    egui::pos2(center.x + 6.0, center.y + y),
+                );
+            }
+        }
+        ActiveView::Explorer => {
+            let points = [
+                egui::pos2(center.x - 7.0, center.y - 4.5),
+                egui::pos2(center.x - 1.5, center.y - 4.5),
+                egui::pos2(center.x + 0.5, center.y - 2.5),
+                egui::pos2(center.x + 7.0, center.y - 2.5),
+                egui::pos2(center.x + 5.5, center.y + 5.0),
+                egui::pos2(center.x - 7.0, center.y + 5.0),
+                egui::pos2(center.x - 7.0, center.y - 4.5),
+            ];
+            for pair in points.windows(2) {
+                line(pair[0], pair[1]);
+            }
+        }
+        ActiveView::Document => {
+            let left = center.x - 5.0;
+            let right = center.x + 5.0;
+            let top = center.y - 6.0;
+            let bottom = center.y + 6.0;
+            line(egui::pos2(left, top), egui::pos2(right - 2.0, top));
+            line(egui::pos2(right - 2.0, top), egui::pos2(right, top + 2.0));
+            line(egui::pos2(right, top + 2.0), egui::pos2(right, bottom));
+            line(egui::pos2(right, bottom), egui::pos2(left, bottom));
+            line(egui::pos2(left, bottom), egui::pos2(left, top));
+            line(
+                egui::pos2(right - 2.0, top),
+                egui::pos2(right - 2.0, top + 2.0),
+            );
+            line(
+                egui::pos2(right - 2.0, top + 2.0),
+                egui::pos2(right, top + 2.0),
+            );
+        }
+        ActiveView::Plugins => {
+            let left = egui::pos2(center.x - 5.0, center.y);
+            let top = egui::pos2(center.x + 4.0, center.y - 5.0);
+            let bottom = egui::pos2(center.x + 4.0, center.y + 5.0);
+            line(left, top);
+            line(left, bottom);
+            for point in [left, top, bottom] {
+                painter.circle_filled(point, 1.8, color);
+            }
+        }
+        ActiveView::Skills => {
+            for y in [-4.0, 0.0, 4.0] {
+                line(
+                    egui::pos2(center.x - 5.0, center.y + y),
+                    egui::pos2(center.x + 5.0, center.y + y),
+                );
+            }
+            line(
+                egui::pos2(center.x - 7.0, center.y - 6.0),
+                egui::pos2(center.x - 7.0, center.y + 6.0),
+            );
+        }
+        ActiveView::Marketplace => {
+            painter.circle_stroke(egui::pos2(center.x - 1.0, center.y - 1.0), 4.5, stroke);
+            line(
+                egui::pos2(center.x + 2.5, center.y + 2.5),
+                egui::pos2(center.x + 6.5, center.y + 6.5),
+            );
+        }
+        ActiveView::Goals => {
+            painter.circle_stroke(center, 6.0, stroke);
+            painter.circle_stroke(center, 2.5, stroke);
+        }
+        ActiveView::Settings => {
+            painter.circle_stroke(center, 4.5, stroke);
+            for (from, to) in [
+                (
+                    egui::pos2(center.x, center.y - 7.0),
+                    egui::pos2(center.x, center.y - 5.0),
+                ),
+                (
+                    egui::pos2(center.x, center.y + 5.0),
+                    egui::pos2(center.x, center.y + 7.0),
+                ),
+                (
+                    egui::pos2(center.x - 7.0, center.y),
+                    egui::pos2(center.x - 5.0, center.y),
+                ),
+                (
+                    egui::pos2(center.x + 5.0, center.y),
+                    egui::pos2(center.x + 7.0, center.y),
+                ),
+            ] {
+                line(from, to);
+            }
+        }
+    }
+}
+
+fn paint_bottom_tool_icon(
+    painter: &egui::Painter,
+    button: egui::Rect,
+    tool: BottomTool,
+    color: egui::Color32,
+) {
+    let center = button.center();
+    let stroke = egui::Stroke::new(1.25, color);
+    let line = |from, to| painter.line_segment([from, to], stroke);
+    match tool {
+        BottomTool::Terminal => {
+            let rect = egui::Rect::from_center_size(center, egui::vec2(13.0, 10.0));
+            painter.rect_stroke(rect, 2.0, stroke, egui::StrokeKind::Inside);
+            line(
+                egui::pos2(rect.left() + 3.0, rect.top() + 3.0),
+                egui::pos2(rect.left() + 5.0, rect.top() + 5.0),
+            );
+            line(
+                egui::pos2(rect.left() + 5.0, rect.top() + 5.0),
+                egui::pos2(rect.left() + 3.0, rect.top() + 7.0),
+            );
+            line(
+                egui::pos2(rect.left() + 7.0, rect.top() + 7.0),
+                egui::pos2(rect.left() + 10.0, rect.top() + 7.0),
+            );
+        }
+        BottomTool::Jobs => {
+            painter.circle_stroke(center, 6.0, stroke);
+            line(center, egui::pos2(center.x, center.y - 3.5));
+            line(center, egui::pos2(center.x + 3.0, center.y + 1.5));
+        }
+        BottomTool::Schedules => {
+            let rect = egui::Rect::from_center_size(center, egui::vec2(12.0, 11.0));
+            painter.rect_stroke(rect, 1.5, stroke, egui::StrokeKind::Inside);
+            line(
+                egui::pos2(rect.left() + 0.5, rect.top() + 3.0),
+                egui::pos2(rect.right() - 0.5, rect.top() + 3.0),
+            );
+            for x in [-2.5, 2.5] {
+                line(
+                    egui::pos2(center.x + x, rect.top() - 1.5),
+                    egui::pos2(center.x + x, rect.top() + 1.5),
+                );
+            }
+            painter.circle_filled(egui::pos2(center.x - 2.5, center.y + 0.5), 0.7, color);
+            painter.circle_filled(egui::pos2(center.x + 2.5, center.y + 0.5), 0.7, color);
+            painter.circle_filled(egui::pos2(center.x - 2.5, center.y + 3.5), 0.7, color);
+            painter.circle_filled(egui::pos2(center.x + 2.5, center.y + 3.5), 0.7, color);
+        }
+        BottomTool::Deliverables => {
+            let left = center.x - 5.0;
+            let right = center.x + 5.0;
+            let top = center.y - 5.0;
+            let bottom = center.y + 5.0;
+            line(egui::pos2(left, top), egui::pos2(right, top));
+            line(egui::pos2(right, top), egui::pos2(right, bottom));
+            line(egui::pos2(right, bottom), egui::pos2(left, bottom));
+            line(egui::pos2(left, bottom), egui::pos2(left, top));
+            line(
+                egui::pos2(center.x, center.y + 2.5),
+                egui::pos2(center.x, center.y - 2.5),
+            );
+            line(
+                egui::pos2(center.x, center.y - 2.5),
+                egui::pos2(center.x - 2.0, center.y - 0.5),
+            );
+            line(
+                egui::pos2(center.x, center.y - 2.5),
+                egui::pos2(center.x + 2.0, center.y - 0.5),
+            );
+        }
+    }
+}
+
+fn utility_panel_header(ui: &mut egui::Ui, title: &str, close_label: &str) -> bool {
+    let mut close_panel = false;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(title).size(12.0).strong());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let close = ui.small_button("×");
+            accessible_button_label(&close, close_label);
+            if close.on_hover_text(close_label).clicked() {
+                close_panel = true;
+            }
+        });
+    });
+    close_panel
+}
+
+fn app_page_header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new(title).size(16.0).strong());
+    ui.label(egui::RichText::new(subtitle).size(10.0).weak());
+    ui.add_space(8.0);
 }
 
 struct DesktopApp {
@@ -1449,6 +1671,8 @@ struct DesktopApp {
     plan_command_status: Option<String>,
     active_view: ActiveView,
     skills: Option<SkillListResponse>,
+    skills_query: String,
+    selected_skill: Option<String>,
     skills_receiver: Option<mpsc::Receiver<Result<SkillListResponse, Error>>>,
     skills_loading: bool,
     skills_error: Option<String>,
@@ -1468,6 +1692,10 @@ struct DesktopApp {
     plugin_write_receiver: Option<mpsc::Receiver<Result<ChangeResult, Error>>>,
     plugin_write_status: Option<String>,
     terminal: TerminalPanel,
+    bottom_tool: Option<BottomTool>,
+    explorer: WorkspaceExplorer,
+    show_explorer: bool,
+    explorer_fullscreen: bool,
     schedules: Vec<serde_json::Value>,
     schedules_session: Option<String>,
     schedules_receiver: Option<mpsc::Receiver<Result<Vec<serde_json::Value>, String>>>,
@@ -1484,6 +1712,9 @@ struct DesktopApp {
     status: String,
     update_prompt: Option<host::UpdatePrompt>,
     update_error: Option<String>,
+    update_open_receiver: Option<mpsc::Receiver<Result<(), Error>>>,
+    update_status: Option<String>,
+    retry_after_host_start: bool,
     quitting: Arc<AtomicBool>,
     show_requested: Arc<AtomicBool>,
     hide_requested: Arc<AtomicBool>,
@@ -1528,6 +1759,7 @@ impl DesktopApp {
             };
         let ui_preferences_panel =
             UiPreferencesPanel::new(ui_preferences.clone(), ui_preferences_load_error);
+        let show_explorer = ui_preferences.show_workspace_explorer;
         // A windowless harness supplies its own transport and must not start a Host.
         let host_receiver = if spawn_host {
             let (host_sender, host_receiver) = mpsc::channel();
@@ -1632,6 +1864,8 @@ impl DesktopApp {
             plan_command_status: None,
             active_view: ActiveView::Sessions,
             skills: None,
+            skills_query: String::new(),
+            selected_skill: None,
             skills_receiver: None,
             skills_loading: false,
             skills_error: None,
@@ -1651,6 +1885,10 @@ impl DesktopApp {
             plugin_write_receiver: None,
             plugin_write_status: None,
             terminal: TerminalPanel::default(),
+            bottom_tool: None,
+            explorer: WorkspaceExplorer::default(),
+            show_explorer,
+            explorer_fullscreen: false,
             schedules: Vec::new(),
             schedules_session: None,
             schedules_receiver: None,
@@ -1667,6 +1905,9 @@ impl DesktopApp {
             status: "Starting Host sidecar…".to_owned(),
             update_prompt: None,
             update_error: None,
+            update_open_receiver: None,
+            update_status: None,
+            retry_after_host_start: false,
             quitting,
             show_requested,
             hide_requested,
@@ -1678,12 +1919,22 @@ impl DesktopApp {
     }
 
     fn connect(&mut self) {
-        let Some(launch_url) = self
+        if self.host_receiver.is_some() || self.connect_receiver.is_some() {
+            return;
+        }
+        let launch_url = self
             .host
             .as_ref()
             .and_then(Host::launch_url)
-            .map(str::to_owned)
-        else {
+            .map(str::to_owned);
+        let Some(launch_url) = launch_url else {
+            if self
+                .host
+                .as_ref()
+                .is_some_and(|host| host.error().is_some())
+            {
+                self.restart_host();
+            }
             return;
         };
         let (sender, receiver) = mpsc::channel();
@@ -1692,6 +1943,25 @@ impl DesktopApp {
         });
         self.connect_receiver = Some(receiver);
         self.status = "Authenticating with Host…".to_owned();
+    }
+
+    /// Replaces a failed Host before exchanging a new launch token.
+    fn restart_host(&mut self) {
+        if self.host_receiver.is_some() || self.connect_receiver.is_some() {
+            return;
+        }
+        let previous = self.host.take();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            drop(previous);
+            let _ = sender.send(Host::start());
+        });
+        self.host_receiver = Some(receiver);
+        self.retry_after_host_start = true;
+        self.host_url = None;
+        self.transport = None;
+        self.streams = None;
+        self.status = "Restarting Host sidecar…".to_owned();
     }
 
     fn start_remote_events(&mut self, transport: HttpTransport, streams: RemoteStreamMux) {
@@ -1809,6 +2079,32 @@ impl DesktopApp {
         self.refresh_settings();
     }
 
+    /// Starts the Host-owned signed update flow from the native Settings page.
+    fn open_updates(&mut self) {
+        if self.update_open_receiver.is_some() {
+            return;
+        }
+        let Some(transport) = self.transport.clone() else {
+            self.update_status = Some("Connect to the Host before checking for updates.".into());
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = transport
+                .post_json_with_timeout(
+                    "/__dsh-desktop/updates-open",
+                    "application/json",
+                    b"null".to_vec(),
+                    std::time::Duration::from_secs(20 * 60),
+                    &AtomicBool::new(false),
+                )
+                .map(|_| ());
+            let _ = sender.send(result);
+        });
+        self.update_open_receiver = Some(receiver);
+        self.update_status = Some("Checking for desktop updates…".into());
+    }
+
     fn handle_ui_preferences_action(&mut self, action: UiPreferencesAction, ctx: &egui::Context) {
         match action {
             UiPreferencesAction::Preview(preferences) => {
@@ -1869,6 +2165,7 @@ impl DesktopApp {
 
     fn apply_ui_preferences(&mut self, ctx: &egui::Context) {
         ui_preferences::apply(ctx, &self.ui_preferences);
+        self.show_explorer = self.ui_preferences.show_workspace_explorer;
         self.applied_ui_preferences = Some(self.ui_preferences.clone());
         self.apply_fonts(ctx);
     }
@@ -2093,7 +2390,7 @@ impl DesktopApp {
         self.market_status = None;
     }
 
-    fn install_market_entry(&mut self, spec: String) {
+    fn install_market_entry(&mut self, spec: String, options: MarketplaceInstallOptions) {
         if self.market_loading {
             return;
         }
@@ -2106,19 +2403,27 @@ impl DesktopApp {
         std::thread::spawn(move || {
             let client = MarketplaceClient::new(&transport);
             let result = (|| -> Result<String, Error> {
-                let inspect = client.inspect(&spec)?;
+                let inspect = client.inspect(&spec, &options)?;
                 let status = inspect
                     .get("status")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("");
                 if status != "accepted" {
+                    let problem = inspect
+                        .get("problem")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unknown");
+                    let reason = inspect
+                        .get("reason")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("the Host refused this install target");
                     return Err(Error::Remote {
                         code: "inspect-rejected".into(),
-                        message: format!("inspect status: {status}"),
+                        message: format!("inspect refused {spec}: {problem}: {reason}"),
                         details: serde_json::Map::new(),
                     });
                 }
-                let install = client.install_bundle(&spec)?;
+                let install = client.install_bundle(&spec, &options)?;
                 let application = install
                     .get("application")
                     .and_then(serde_json::Value::as_str)
@@ -2324,10 +2629,38 @@ impl DesktopApp {
     }
 
     fn load_session(&mut self, session_id: String) {
-        self.session_title.clear();
-        self.show_settings = false;
-        self.show_plugins = false;
+        self.load_session_with_policy(session_id, false);
+    }
+
+    fn reload_session_after_reconnect(&mut self, session_id: String) {
+        self.load_session_with_policy(session_id, true);
+    }
+
+    fn load_session_with_policy(&mut self, session_id: String, retain_loaded_view: bool) {
+        let retain_loaded_view =
+            retain_loaded_view && self.selected_session.as_deref() == Some(session_id.as_str());
+        if !retain_loaded_view {
+            self.session_title.clear();
+            self.active_view = ActiveView::Sessions;
+            self.show_settings = false;
+            self.show_plugins = false;
+            self.show_skills = false;
+            self.show_market = false;
+            self.show_goals = false;
+            self.show_document = false;
+            self.skills = None;
+            self.skills_receiver = None;
+            self.skills_loading = false;
+            self.skills_error = None;
+            self.skills_query.clear();
+            self.selected_skill = None;
+        }
         self.selected_session = Some(session_id.clone());
+        self.explorer
+            .select_session(Some(&session_id), self.transport.as_ref());
+        if retain_loaded_view {
+            self.terminal.select_session(None, None, None);
+        }
         self.goal = None;
         self.goal_receiver = None;
         self.goal_mutation_receiver = None;
@@ -2361,21 +2694,26 @@ impl DesktopApp {
         self.page_before_seq = None;
         self.chat_receiver = None;
         self.chat_loading = false;
-        self.transcript.reset();
         self.assistant_streaming = false;
         self.assistant_draft.clear();
-        self.deliverables.clear();
-        self.feedback_items.clear();
+        if !retain_loaded_view {
+            self.transcript.reset();
+            self.deliverables.clear();
+            self.feedback_items.clear();
+            self.preview_document = None;
+            self.preview_image = None;
+            self.preview_error = None;
+        }
         self.refresh_feedback();
-        self.preview_document = None;
-        self.preview_error = None;
-        self.show_document = false;
         self.page_loading = true;
         let Some(transport) = self.transport.clone() else {
             self.page_loading = false;
             self.page_error = Some("Connect to load this session".to_owned());
             return;
         };
+        if retain_loaded_view {
+            self.explorer.refresh_root(&transport);
+        }
         let Some(streams) = self.streams.clone() else {
             self.page_loading = false;
             self.page_error = Some("Remote streams are not connected".to_owned());
@@ -2572,8 +2910,12 @@ impl DesktopApp {
     }
 
     fn render_goals_panel(&mut self, ui: &mut egui::Ui) {
+        app_page_header(
+            ui,
+            "Session goal",
+            "Keep the task, completion state, and recent plan activity together.",
+        );
         ui.horizontal(|ui| {
-            ui.heading("Goal");
             if ui
                 .add_enabled(
                     !self.goal_loading && !self.goal_mutation_loading,
@@ -2588,12 +2930,16 @@ impl DesktopApp {
             ui.label("Select a Session to manage its goal.");
             return;
         };
-        ui.label(format!("Session: {session_id}"));
+        ui.label(
+            egui::RichText::new(format!("Session: {session_id}"))
+                .size(10.0)
+                .weak(),
+        );
         if let Some(status) = &self.goal_status {
             ui.small(status);
         }
         if let Some(error) = &self.goal_error {
-            ui.colored_label(egui::Color32::LIGHT_RED, error);
+            ui.colored_label(ui.visuals().error_fg_color, error);
         }
         if self.goal_loading && self.goal.is_none() {
             ui.spinner();
@@ -2610,14 +2956,17 @@ impl DesktopApp {
                 "{} of {} rounds used",
                 goal.rounds_started, goal.max_goal_rounds
             ));
-            ui.add(
+            let objective = ui.add(
                 egui::TextEdit::multiline(&mut self.goal_objective)
                     .hint_text("Goal objective")
                     .desired_rows(3),
             );
+            accessible_label(&objective, "Goal objective");
             ui.horizontal(|ui| {
                 ui.label("Maximum rounds");
-                ui.add(egui::TextEdit::singleline(&mut self.goal_max_rounds).desired_width(80.0));
+                let rounds = ui
+                    .add(egui::TextEdit::singleline(&mut self.goal_max_rounds).desired_width(80.0));
+                accessible_label(&rounds, "Maximum goal rounds");
             });
             let reference = GoalRef {
                 id: goal.id.clone(),
@@ -2696,14 +3045,17 @@ impl DesktopApp {
             } else {
                 ui.label("No goal is active for this Session.");
             }
-            ui.add(
+            let objective = ui.add(
                 egui::TextEdit::multiline(&mut self.goal_objective)
                     .hint_text("What should the agent accomplish?")
                     .desired_rows(3),
             );
+            accessible_label(&objective, "Goal objective");
             ui.horizontal(|ui| {
                 ui.label("Maximum rounds (optional)");
-                ui.add(egui::TextEdit::singleline(&mut self.goal_max_rounds).desired_width(80.0));
+                let rounds = ui
+                    .add(egui::TextEdit::singleline(&mut self.goal_max_rounds).desired_width(80.0));
+                accessible_label(&rounds, "Maximum goal rounds");
             });
             if ui
                 .add_enabled(
@@ -2740,12 +3092,7 @@ impl DesktopApp {
             .rows()
             .iter()
             .rev()
-            .filter(|row| {
-                matches!(
-                    row.kind,
-                    RowKind::Todo | RowKind::Goal | RowKind::Notice
-                )
-            })
+            .filter(|row| matches!(row.kind, RowKind::Todo | RowKind::Goal | RowKind::Notice))
             .take(12)
             .collect();
         if work_rows.is_empty() {
@@ -3216,7 +3563,7 @@ impl DesktopApp {
             });
             ui.label(format!("Version {} is available.", prompt.version));
             if let Some(error) = &self.update_error {
-                ui.colored_label(egui::Color32::LIGHT_RED, error);
+                ui.colored_label(ui.visuals().error_fg_color, error);
             }
             ui.horizontal(|ui| {
                 if ui
@@ -3316,6 +3663,7 @@ impl DesktopApp {
         }
         self.poll_dialog();
         self.poll_attachment();
+        self.explorer.poll();
         self.poll_jobs();
         self.poll_schedules();
         if self.dialog.is_some()
@@ -3343,11 +3691,21 @@ impl DesktopApp {
                         self.transport = None;
                         self.streams = None;
                         self.connect_receiver = None;
+                        if self.chat_loading {
+                            self.chat_loading = false;
+                            self.chat_receiver = None;
+                            self.assistant_streaming = false;
+                            self.assistant_draft.clear();
+                            self.page_error = Some(
+                                "The Host connection was lost during this turn. Reload the Session to confirm its state before retrying.".to_owned(),
+                            );
+                        }
                         self.terminal.detach();
                     }
                     host::HostEvent::UpdatePrompt(prompt) => {
                         self.update_prompt = Some(prompt);
                         self.update_error = None;
+                        self.update_status = None;
                         ctx.request_repaint();
                     }
                     host::HostEvent::Restart => {
@@ -3373,6 +3731,8 @@ impl DesktopApp {
         if let Some(receiver) = &self.host_receiver {
             match receiver.try_recv() {
                 Ok(host) => {
+                    let retry_after_start = self.retry_after_host_start;
+                    self.retry_after_host_start = false;
                     self.host_url = host.host_url().map(str::to_owned);
                     self.status = host.error().map_or_else(
                         || {
@@ -3388,13 +3748,14 @@ impl DesktopApp {
                     if self.host_url.is_some() {
                         eprintln!("dsh: native host=ready");
                     }
-                    if self.auto_connect && self.host_url.is_some() {
+                    if (self.auto_connect || retry_after_start) && self.host_url.is_some() {
                         self.connect();
                     }
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.status = "Host startup worker stopped unexpectedly".to_owned();
                     self.host_receiver = None;
+                    self.retry_after_host_start = false;
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     ctx.request_repaint_after(std::time::Duration::from_millis(30))
@@ -3458,6 +3819,10 @@ impl DesktopApp {
                     self.connect_receiver = None;
                     self.status = "Connected — loading sessions…".to_owned();
                     self.refresh_sessions();
+                    self.refresh_models();
+                    if let Some(session_id) = self.selected_session.clone() {
+                        self.reload_session_after_reconnect(session_id);
+                    }
                 }
                 Ok(Err(error)) => {
                     self.connect_receiver = None;
@@ -3710,6 +4075,27 @@ impl DesktopApp {
                     self.settings_error = Some("Settings request stopped unexpectedly".to_owned());
                     self.settings_loading = false;
                     self.settings_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30));
+                }
+            }
+        }
+        if let Some(receiver) = &self.update_open_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(())) => {
+                    self.update_open_receiver = None;
+                    self.update_status = Some("Update check completed.".into());
+                }
+                Ok(Err(_)) => {
+                    self.update_open_receiver = None;
+                    self.update_status = Some(
+                        "Could not check for updates. Check the Host connection and retry.".into(),
+                    );
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.update_open_receiver = None;
+                    self.update_status = Some("The update request stopped unexpectedly.".into());
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     ctx.request_repaint_after(std::time::Duration::from_millis(30));
@@ -4000,6 +4386,11 @@ impl DesktopApp {
         if let Some(receiver) = &self.skills_receiver {
             match receiver.try_recv() {
                 Ok(Ok(skills)) => {
+                    if !self.selected_skill.as_ref().is_some_and(|selected| {
+                        skills.skills.iter().any(|skill| &skill.name == selected)
+                    }) {
+                        self.selected_skill = skills.skills.first().map(|skill| skill.name.clone());
+                    }
                     self.skills = Some(skills);
                     self.skills_loading = false;
                     self.skills_error = None;
@@ -4179,34 +4570,78 @@ impl DesktopApp {
                 nav_rail_width = ui.max_rect().width();
                 ui.vertical_centered(|ui| {
                     ui.add_space(8.0);
-                    ui.label(egui::RichText::new("DSH").strong().size(11.0));
+                    ui.label(
+                        egui::RichText::new("DSH")
+                            .strong()
+                            .size(11.0)
+                            .color(ui.visuals().hyperlink_color),
+                    );
                     ui.add_space(8.0);
                     let items = [
-                        ("S", "Sessions", ActiveView::Sessions),
-                        ("D", "Document", ActiveView::Document),
-                        ("P", "Plugins", ActiveView::Plugins),
-                        ("K", "Skills", ActiveView::Skills),
-                        ("M", "Market", ActiveView::Marketplace),
-                        ("G", "Goals", ActiveView::Goals),
-                        ("T", "Settings", ActiveView::Settings),
+                        ("Sessions", "Sessions", ActiveView::Sessions),
+                        ("Explorer", "Explorer", ActiveView::Explorer),
+                        ("Files", "Document", ActiveView::Document),
+                        ("Plugins", "Plugins", ActiveView::Plugins),
+                        ("Skills", "Skills", ActiveView::Skills),
+                        ("Market", "Marketplace", ActiveView::Marketplace),
+                        ("Goals", "Goals", ActiveView::Goals),
+                        ("Settings", "Settings", ActiveView::Settings),
                     ];
-                    for (icon, tooltip, view) in items {
+                    for (visible_label, accessible_name, view) in items {
                         let selected = self.active_view == view;
-                        let btn = ui.add(
-                            egui::Button::new(egui::RichText::new(icon).size(16.0).strong())
-                                .min_size(egui::vec2(40.0, 40.0)),
+                        let color = if selected {
+                            ui.visuals().hyperlink_color
+                        } else {
+                            ui.visuals().weak_text_color()
+                        };
+                        let mut label = egui::text::LayoutJob::default();
+                        label.append(
+                            "●",
+                            0.0,
+                            egui::TextFormat {
+                                font_id: egui::FontId::proportional(15.0),
+                                color: egui::Color32::TRANSPARENT,
+                                ..Default::default()
+                            },
                         );
-                        let rect = btn.rect;
-                        let clicked = btn.clicked();
-                        btn.on_hover_text(tooltip);
-                        if selected {
-                            ui.painter()
-                                .rect_filled(rect, 8.0, ui.visuals().selection.bg_fill);
-                        }
+                        label.append(
+                            &format!("\n{visible_label}"),
+                            0.0,
+                            egui::TextFormat {
+                                font_id: egui::FontId::proportional(9.0),
+                                color,
+                                ..Default::default()
+                            },
+                        );
+                        let button = ui.add(
+                            egui::Button::new(label)
+                                .min_size(egui::vec2(50.0, 44.0))
+                                .fill(if selected {
+                                    ui.visuals().selection.bg_fill
+                                } else {
+                                    egui::Color32::TRANSPARENT
+                                })
+                                .stroke(egui::Stroke::NONE)
+                                .corner_radius(6.0),
+                        );
+                        paint_nav_icon(ui.painter(), button.rect, view, color);
+                        accessible_button_label(&button, accessible_name);
+                        let clicked = button.clicked();
+                        button.on_hover_text(accessible_name);
                         if clicked {
                             self.active_view = view;
                             match view {
                                 ActiveView::Sessions => {
+                                    self.explorer_fullscreen = false;
+                                    self.show_settings = false;
+                                    self.show_document = false;
+                                    self.show_plugins = false;
+                                    self.show_skills = false;
+                                    self.show_market = false;
+                                    self.show_goals = false;
+                                }
+                                ActiveView::Explorer => {
+                                    self.explorer_fullscreen = true;
                                     self.show_settings = false;
                                     self.show_document = false;
                                     self.show_plugins = false;
@@ -4215,6 +4650,7 @@ impl DesktopApp {
                                     self.show_goals = false;
                                 }
                                 ActiveView::Settings => {
+                                    self.explorer_fullscreen = false;
                                     self.open_settings();
                                     self.show_document = false;
                                     self.show_plugins = false;
@@ -4223,6 +4659,7 @@ impl DesktopApp {
                                     self.show_goals = false;
                                 }
                                 ActiveView::Document => {
+                                    self.explorer_fullscreen = false;
                                     self.show_document = true;
                                     self.show_settings = false;
                                     self.show_plugins = false;
@@ -4231,6 +4668,7 @@ impl DesktopApp {
                                     self.show_goals = false;
                                 }
                                 ActiveView::Plugins => {
+                                    self.explorer_fullscreen = false;
                                     self.show_plugins = true;
                                     self.show_settings = false;
                                     self.show_document = false;
@@ -4242,6 +4680,7 @@ impl DesktopApp {
                                     }
                                 }
                                 ActiveView::Skills => {
+                                    self.explorer_fullscreen = false;
                                     self.show_skills = true;
                                     self.show_settings = false;
                                     self.show_document = false;
@@ -4253,6 +4692,7 @@ impl DesktopApp {
                                     }
                                 }
                                 ActiveView::Marketplace => {
+                                    self.explorer_fullscreen = false;
                                     self.show_market = true;
                                     self.show_settings = false;
                                     self.show_document = false;
@@ -4264,6 +4704,7 @@ impl DesktopApp {
                                     }
                                 }
                                 ActiveView::Goals => {
+                                    self.explorer_fullscreen = false;
                                     self.show_goals = true;
                                     self.show_settings = false;
                                     self.show_document = false;
@@ -4277,414 +4718,564 @@ impl DesktopApp {
                     }
                 });
             });
-        egui::Panel::left("sessions")
-            .resizable(true)
-            .default_size(self.ui_preferences.session_panel_width)
-            .min_size(layout::SIDEBAR_MIN)
-            .max_size(layout::SIDEBAR_MAX)
-            .show(ui, |ui| {
-                sessions_width = ui.max_rect().width();
-                if ui
-                    .selectable_label(self.active_view == ActiveView::Sessions, "Sessions")
-                    .clicked()
-                {
-                    self.active_view = ActiveView::Sessions;
-                    self.show_settings = false;
-                    self.show_document = false;
-                    self.show_plugins = false;
-                    self.show_skills = false;
-                    self.show_market = false;
-                    self.show_goals = false;
-                }
-                if ui
-                    .selectable_label(self.active_view == ActiveView::Settings, "Settings")
-                    .clicked()
-                {
-                    self.active_view = ActiveView::Settings;
-                    self.open_settings();
-                    self.show_document = false;
-                    self.show_plugins = false;
-                    self.show_skills = false;
-                    self.show_market = false;
-                    self.show_goals = false;
-                }
-                if ui
-                    .selectable_label(self.active_view == ActiveView::Document, "Document")
-                    .clicked()
-                {
-                    self.active_view = ActiveView::Document;
-                    self.show_document = true;
-                    self.show_settings = false;
-                    self.show_plugins = false;
-                    self.show_skills = false;
-                    self.show_market = false;
-                    self.show_goals = false;
-                }
-                if ui
-                    .selectable_label(self.active_view == ActiveView::Plugins, "Plugins")
-                    .clicked()
-                {
-                    self.active_view = ActiveView::Plugins;
-                    self.show_plugins = true;
-                    self.show_settings = false;
-                    self.show_document = false;
-                    self.show_skills = false;
-                    self.show_market = false;
-                    self.show_goals = false;
-                    if self.plugins_snapshot.is_none() {
-                        self.refresh_plugins();
-                    }
-                }
-                if ui
-                    .selectable_label(self.active_view == ActiveView::Skills, "Skills")
-                    .clicked()
-                {
-                    self.active_view = ActiveView::Skills;
-                    self.show_skills = true;
-                    self.show_settings = false;
-                    self.show_document = false;
-                    self.show_plugins = false;
-                    self.show_market = false;
-                    self.show_goals = false;
-                    if self.skills.is_none() {
-                        self.refresh_skills();
-                    }
-                }
-                if ui
-                    .selectable_label(self.active_view == ActiveView::Marketplace, "Marketplace")
-                    .clicked()
-                {
-                    self.active_view = ActiveView::Marketplace;
-                    self.show_market = true;
-                    self.show_settings = false;
-                    self.show_document = false;
-                    self.show_plugins = false;
-                    self.show_skills = false;
-                    self.show_goals = false;
-                    if self.market_indexes.is_empty() {
-                        self.refresh_market_indexes();
-                    }
-                }
-                if ui
-                    .selectable_label(self.active_view == ActiveView::Goals, "Goals")
-                    .clicked()
-                {
-                    self.active_view = ActiveView::Goals;
-                    self.show_goals = true;
-                    self.show_settings = false;
-                    self.show_document = false;
-                    self.show_plugins = false;
-                    self.show_skills = false;
-                    self.show_market = false;
-                    self.refresh_goal();
-                }
-                ui.heading("Sessions");
-                let connected = self.transport.is_some();
-                let busy = self.sessions_receiver.is_some();
-                ui.add_enabled_ui(connected && !busy, |ui| {
-                    ui.horizontal_wrapped(|ui| {
-                        if ui.button("Refresh").clicked() {
-                            self.session_query.clear();
-                            self.refresh_sessions();
-                        }
-                        if ui.button("New Session").clicked() {
-                            self.request_sessions(SessionOperation::Create);
-                        }
-                    });
-                    let search = ui.add(
-                        egui::TextEdit::singleline(&mut self.session_query)
-                            .hint_text("Search sessions")
-                            .desired_width(170.0),
-                    );
-                    if ui.button("Search").clicked()
-                        || (search.lost_focus()
-                            && ui.input(|input| input.key_pressed(egui::Key::Enter)))
-                    {
-                        if self.session_query.trim().is_empty() {
-                            self.refresh_sessions();
-                        } else {
-                            self.request_sessions(SessionOperation::Search(
-                                self.session_query.clone(),
-                            ));
-                        }
-                    }
-                    if let Some(session_id) = self.selected_session.clone() {
-                        let title_field = ui.add(
-                            egui::TextEdit::singleline(&mut self.session_title)
-                                .hint_text("New session title")
-                                .desired_width(170.0),
-                        );
-                        accessible_label(&title_field, "Session title");
-                        ui.horizontal_wrapped(|ui| {
-                            if ui
-                                .add_enabled(
-                                    !self.session_title.trim().is_empty(),
-                                    egui::Button::new("Rename selected"),
-                                )
-                                .clicked()
+        if !self.explorer_fullscreen {
+            egui::Panel::left("sessions")
+                .resizable(true)
+                .default_size(self.ui_preferences.session_panel_width)
+                .min_size(layout::SIDEBAR_MIN)
+                .max_size(layout::SIDEBAR_MAX)
+                .show(ui, |ui| {
+                    sessions_width = ui.max_rect().width();
+                    let connected = self.transport.is_some();
+                    let busy = self.sessions_receiver.is_some();
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new("Sessions").size(15.0).strong());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let refresh = ui.small_button("↻");
+                            accessible_button_label(&refresh, "Refresh sessions");
+                            if refresh.on_hover_text("Refresh sessions").clicked()
+                                && connected
+                                && !busy
                             {
-                                self.request_sessions(SessionOperation::Rename(
-                                    RenameSessionRequest {
-                                        session_id: session_id.clone(),
-                                        title: self.session_title.trim().to_owned(),
-                                    },
-                                ));
-                            }
-                            if ui.button("Fork selected").clicked() {
-                                self.request_sessions(SessionOperation::Fork(ForkSessionRequest {
-                                    session_id,
-                                    at_seq: None,
-                                    allow_migration: None,
-                                }));
+                                self.session_query.clear();
+                                self.refresh_sessions();
                             }
                         });
-                    }
-                });
-                if !connected {
-                    ui.label("Connect to enable sessions");
-                }
-                if busy {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label("Loading sessions…");
+                        ui.add_space(8.0);
                     });
-                }
-                if !self.sessions_status.is_empty() {
-                    ui.small(&self.sessions_status);
-                }
-                if self.sessions.is_empty() && self.session_search.is_none() && !busy && connected {
                     ui.add_space(8.0);
-                    ui.label("No sessions yet.");
-                    ui.small("Create one to start chatting.");
-                }
-                if let Some(error) = &self.sessions_error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, error);
-                    if ui.button("Retry").clicked() {
-                        self.session_query.clear();
-                        self.refresh_sessions();
-                    }
-                }
-                ui.add_enabled_ui(!busy, |ui| {
-                    let mut selected = session_list::render(
-                        ui,
-                        &self.sessions,
-                        self.session_search.as_ref(),
-                        self.selected_session.as_deref(),
-                        now_millis(),
-                    );
-                    // Keyboard navigation in session list
-                    if !ui.ctx().egui_wants_keyboard_input()
-                        && ui.input(|i| {
-                            i.key_pressed(egui::Key::ArrowDown) || i.key_pressed(egui::Key::ArrowUp)
-                        })
-                    {
-                        let direction = if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
-                            1
-                        } else {
-                            -1
-                        };
-                        let sessions = if self.session_search.is_some() {
-                            self.session_search
-                                .as_ref()
-                                .map(|r| {
-                                    r.items
-                                        .iter()
-                                        .map(|i| i.session_id.clone())
-                                        .collect::<Vec<_>>()
-                                })
-                                .unwrap_or_default()
-                        } else {
-                            self.sessions.iter().map(|s| s.session_id.clone()).collect()
-                        };
-                        let current_idx = self
-                            .selected_session
-                            .as_ref()
-                            .and_then(|id| sessions.iter().position(|session| session == id));
-                        selected = session_list::next_index(current_idx, direction, sessions.len())
-                            .map(|index| sessions[index].clone());
-                    }
-                    if let Some(session_id) = selected {
-                        self.load_session(session_id);
-                    }
-                });
-                if ui.button("Open file").clicked() {
-                    self.dialog = Some((DialogPurpose::Open, dialog::open_file_async()));
-                }
-                if ui.button("Save file").clicked() {
-                    self.dialog = Some((DialogPurpose::Save, dialog::save_file_async()));
-                }
-            });
-        egui::Panel::bottom("status").show(ui, |ui| {
-            ui.label(&self.status);
-        });
-        if self.selected_session.is_some() {
-            egui::Panel::bottom("schedules-panel").show(ui, |ui| {
-                egui::CollapsingHeader::new(format!("Schedules ({})", self.schedules.len()))
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        if let Some(error) = &self.schedules_error {
-                            ui.colored_label(egui::Color32::LIGHT_RED, error);
-                        }
-                        let mut deleted = None;
-                        egui::ScrollArea::vertical()
-                            .id_salt("schedule-list")
-                            .max_height(120.0)
-                            .show(ui, |ui| {
-                                for record in &self.schedules {
-                                    let id = record
-                                        .get("id")
-                                        .and_then(serde_json::Value::as_str)
-                                        .unwrap_or_default()
-                                        .to_owned();
-                                    let title = record
-                                        .get("title")
-                                        .and_then(serde_json::Value::as_str)
-                                        .unwrap_or(&id);
-                                    let kind = record
-                                        .get("kind")
-                                        .and_then(serde_json::Value::as_str)
-                                        .unwrap_or("schedule");
-                                    let next = record
-                                        .get("scheduledAt")
-                                        .and_then(serde_json::Value::as_str)
-                                        .unwrap_or("");
+                    ui.add_enabled_ui(connected && !busy, |ui| {
+                        ui.horizontal(|ui| {
+                            let create = ui.add(
+                                egui::Button::new(
+                                    egui::RichText::new("＋ New session")
+                                        .color(ui.visuals().hyperlink_color)
+                                        .size(12.0),
+                                )
+                                .min_size(egui::vec2(ui.available_width(), 36.0))
+                                .fill(ui.visuals().extreme_bg_color)
+                                .stroke(egui::Stroke::new(1.0, ui.visuals().hyperlink_color))
+                                .corner_radius(6.0),
+                            );
+                            accessible_button_label(&create, "New Session");
+                            if create.clicked() {
+                                self.request_sessions(SessionOperation::Create);
+                            }
+                        });
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            let search = ui.add(
+                                egui::TextEdit::singleline(&mut self.session_query)
+                                    .hint_text("⌕  Search sessions")
+                                    .desired_width(ui.available_width() - 48.0),
+                            );
+                            accessible_label(&search, "Search sessions");
+                            let submit_search = ui.small_button("↵");
+                            accessible_button_label(&submit_search, "Search");
+                            if submit_search.on_hover_text("Search sessions").clicked()
+                                || (search.lost_focus()
+                                    && ui.input(|input| input.key_pressed(egui::Key::Enter)))
+                            {
+                                if self.session_query.trim().is_empty() {
+                                    self.refresh_sessions();
+                                } else {
+                                    self.request_sessions(SessionOperation::Search(
+                                        self.session_query.clone(),
+                                    ));
+                                }
+                            }
+                        });
+                        if let Some(session_id) = self.selected_session.clone() {
+                            egui::CollapsingHeader::new("Session actions")
+                                .id_salt("session-actions")
+                                .default_open(false)
+                                .show(ui, |ui| {
+                                    let title_field = ui.add(
+                                        egui::TextEdit::singleline(&mut self.session_title)
+                                            .hint_text("New session title")
+                                            .desired_width(ui.available_width()),
+                                    );
+                                    accessible_label(&title_field, "Session title");
                                     ui.horizontal_wrapped(|ui| {
-                                        ui.label(format!("{title} · {kind} · {next}"));
                                         if ui
                                             .add_enabled(
-                                                self.schedule_delete_receiver.is_none(),
-                                                egui::Button::new("Delete"),
+                                                !self.session_title.trim().is_empty(),
+                                                egui::Button::new("Rename selected"),
                                             )
                                             .clicked()
                                         {
-                                            deleted = Some(id.clone());
+                                            self.request_sessions(SessionOperation::Rename(
+                                                RenameSessionRequest {
+                                                    session_id: session_id.clone(),
+                                                    title: self.session_title.trim().to_owned(),
+                                                },
+                                            ));
+                                        }
+                                        if ui.button("Fork selected").clicked() {
+                                            self.request_sessions(SessionOperation::Fork(
+                                                ForkSessionRequest {
+                                                    session_id,
+                                                    at_seq: None,
+                                                    allow_migration: None,
+                                                },
+                                            ));
                                         }
                                     });
-                                }
-                                if self.schedules.is_empty() && self.schedules_receiver.is_none() {
-                                    ui.label("No schedules for this Session.");
-                                }
-                            });
-                        if let Some(id) = deleted {
-                            self.delete_schedule(id);
-                        }
-                    });
-            });
-        }
-        if self.selected_session.is_some() {
-            egui::Panel::bottom("jobs-panel").show(ui, |ui| {
-                egui::CollapsingHeader::new(format!("Jobs ({})", self.jobs.len()))
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        if let Some(error) = &self.jobs_error {
-                            ui.colored_label(egui::Color32::LIGHT_RED, error);
-                        }
-                        let mut next = None;
-                        egui::ScrollArea::vertical()
-                            .id_salt("jobs-list")
-                            .max_height(90.0)
-                            .show(ui, |ui| {
-                                for job in &self.jobs {
-                                    let selected =
-                                        self.job_selected.as_deref() == Some(job.id.as_str());
-                                    if ui
-                                        .selectable_label(
-                                            selected,
-                                            format!(
-                                                "{} · {} · {}",
-                                                job.label, job.kind, job.status
-                                            ),
-                                        )
-                                        .clicked()
-                                    {
-                                        next = Some(job.id.clone());
-                                    }
-                                }
-                            });
-                        if let Some(id) = next {
-                            self.start_job_follow(id);
-                        }
-                        if !self.job_status.is_empty() {
-                            ui.small(&self.job_status);
-                        }
-                        if !self.job_output.is_empty() {
-                            egui::ScrollArea::vertical()
-                                .id_salt("job-output")
-                                .max_height(140.0)
-                                .stick_to_bottom(true)
-                                .show(ui, |ui| {
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(&self.job_output).monospace(),
-                                        )
-                                        .selectable(true)
-                                        .wrap_mode(egui::TextWrapMode::Extend),
-                                    );
                                 });
                         }
                     });
-            });
-        }
-        if !self.deliverables.is_empty() {
-            egui::Panel::bottom("deliverables-panel").show(ui, |ui| {
-                egui::CollapsingHeader::new(format!("Deliverables ({})", self.deliverables.len()))
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        let mut preview = None;
-                        for file in &self.deliverables {
-                            let label = egui::RichText::new(&file.path).monospace();
-                            if ui
-                                .link(label)
-                                .on_hover_text(
-                                    file.description
-                                        .as_deref()
-                                        .unwrap_or("Open this deliverable"),
-                                )
-                                .clicked()
-                            {
-                                preview = Some(file.path.clone());
-                            }
-                            if let Some(description) = &file.description {
-                                ui.small(description);
-                            }
+                    if !connected {
+                        ui.label("Connect to enable sessions");
+                    }
+                    if busy {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Loading sessions…");
+                        });
+                    }
+                    if !self.sessions_status.is_empty() {
+                        ui.small(&self.sessions_status);
+                    }
+                    if self.sessions.is_empty()
+                        && self.session_search.is_none()
+                        && !busy
+                        && connected
+                    {
+                        ui.add_space(8.0);
+                        ui.label("No sessions yet.");
+                        ui.small("Create one to start chatting.");
+                    }
+                    if let Some(error) = &self.sessions_error {
+                        ui.colored_label(ui.visuals().error_fg_color, error);
+                        if ui.button("Retry").clicked() {
+                            self.session_query.clear();
+                            self.refresh_sessions();
                         }
-                        if let Some(path) = preview {
-                            self.preview_path = path.clone();
-                            self.show_document = true;
-                            self.show_settings = false;
-                            self.show_plugins = false;
-                            self.show_skills = false;
-                            if Self::is_office_path(&path) {
-                                self.read_office_document();
+                    }
+                    ui.add_enabled_ui(!busy, |ui| {
+                        let mut selected = session_list::render(
+                            ui,
+                            &self.sessions,
+                            self.session_search.as_ref(),
+                            self.selected_session.as_deref(),
+                            now_millis(),
+                        );
+                        // Keyboard navigation in session list
+                        if !ui.ctx().egui_wants_keyboard_input()
+                            && ui.input(|i| {
+                                i.key_pressed(egui::Key::ArrowDown)
+                                    || i.key_pressed(egui::Key::ArrowUp)
+                            })
+                        {
+                            let direction = if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+                                1
                             } else {
-                                self.read_document();
-                            }
+                                -1
+                            };
+                            let sessions = if self.session_search.is_some() {
+                                self.session_search
+                                    .as_ref()
+                                    .map(|r| {
+                                        r.items
+                                            .iter()
+                                            .map(|i| i.session_id.clone())
+                                            .collect::<Vec<_>>()
+                                    })
+                                    .unwrap_or_default()
+                            } else {
+                                self.sessions.iter().map(|s| s.session_id.clone()).collect()
+                            };
+                            let current_idx = self
+                                .selected_session
+                                .as_ref()
+                                .and_then(|id| sessions.iter().position(|session| session == id));
+                            selected =
+                                session_list::next_index(current_idx, direction, sessions.len())
+                                    .map(|index| sessions[index].clone());
+                        }
+                        if let Some(session_id) = selected {
+                            self.load_session(session_id);
                         }
                     });
-            });
-        }
-        if self.selected_session.is_some() {
-            egui::Panel::bottom("terminal-panel").show(ui, |ui| {
-                egui::CollapsingHeader::new("Session terminals")
-                    .default_open(true)
-                    .show(ui, |ui| {
-                        self.terminal
-                            .ui(ui, self.transport.clone(), self.streams.clone());
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new("DH")
+                                .strong()
+                                .size(11.0)
+                                .color(ui.visuals().hyperlink_color),
+                        );
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new("DeepSeek Harness").size(11.0).strong());
+                            ui.label(
+                                egui::RichText::new("Native desktop client")
+                                    .size(9.0)
+                                    .weak(),
+                            );
+                        });
                     });
+                    ui.small(egui::RichText::new(&self.status).weak());
+                    ui.menu_button("File actions", |ui| {
+                        if ui.button("Open file…").clicked() {
+                            self.dialog = Some((DialogPurpose::Open, dialog::open_file_async()));
+                            ui.close();
+                        }
+                        if ui.button("Save file…").clicked() {
+                            self.dialog = Some((DialogPurpose::Save, dialog::save_file_async()));
+                            ui.close();
+                        }
+                    });
+                });
+        }
+        if self.selected_session.is_some() && self.bottom_tool == Some(BottomTool::Schedules) {
+            let mut close_panel = false;
+            egui::Panel::bottom("schedules-panel").show(ui, |ui| {
+                ui.vertical(|ui| {
+                    close_panel = utility_panel_header(
+                        ui,
+                        &format!("Schedules ({})", self.schedules.len()),
+                        "Close Schedules panel",
+                    );
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("Scheduled actions for this Session")
+                                .size(10.0)
+                                .weak(),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let mut refresh_requested = false;
+                            ui.add_enabled_ui(self.schedules_receiver.is_none(), |ui| {
+                                let refresh = ui.small_button("↻");
+                                accessible_button_label(&refresh, "Refresh schedules");
+                                if refresh.on_hover_text("Refresh schedules").clicked() {
+                                    refresh_requested = true;
+                                }
+                            });
+                            if refresh_requested {
+                                self.schedules_session = None;
+                                self.start_schedules();
+                            }
+                        });
+                    });
+                    if self.schedules_receiver.is_some() {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Loading schedules…");
+                        });
+                    }
+                    if let Some(error) = &self.schedules_error {
+                        ui.colored_label(ui.visuals().error_fg_color, error);
+                    }
+                    let mut deleted = None;
+                    egui::ScrollArea::vertical()
+                        .id_salt("schedule-list")
+                        .max_height(120.0)
+                        .show(ui, |ui| {
+                            for record in &self.schedules {
+                                let id = record
+                                    .get("id")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_owned();
+                                let title = record
+                                    .get("title")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or(&id);
+                                let kind = record
+                                    .get("kind")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or("schedule");
+                                let next = record
+                                    .get("scheduledAt")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or("");
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(format!("{title} · {kind} · {next}"));
+                                    let delete = ui.add_enabled(
+                                        self.schedule_delete_receiver.is_none(),
+                                        egui::Button::new("Delete"),
+                                    );
+                                    accessible_button_label(
+                                        &delete,
+                                        &format!("Delete schedule {title}"),
+                                    );
+                                    if delete.clicked() {
+                                        deleted = Some(id.clone());
+                                    }
+                                });
+                            }
+                            if self.schedules.is_empty() && self.schedules_receiver.is_none() {
+                                ui.label(
+                                    egui::RichText::new("No schedules for this Session.").weak(),
+                                );
+                            }
+                        });
+                    if let Some(id) = deleted {
+                        self.delete_schedule(id);
+                    }
+                });
             });
+            if close_panel {
+                self.bottom_tool = None;
+            }
+        }
+        if self.selected_session.is_some() && self.bottom_tool == Some(BottomTool::Jobs) {
+            let mut close_panel = false;
+            egui::Panel::bottom("jobs-panel").show(ui, |ui| {
+                ui.vertical(|ui| {
+                    close_panel = utility_panel_header(
+                        ui,
+                        &format!("Jobs ({})", self.jobs.len()),
+                        "Close Jobs panel",
+                    );
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("Background work for this Session")
+                                .size(10.0)
+                                .weak(),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let mut refresh_requested = false;
+                            ui.add_enabled_ui(self.jobs_receiver.is_none(), |ui| {
+                                let refresh = ui.small_button("↻");
+                                accessible_button_label(&refresh, "Refresh jobs");
+                                if refresh.on_hover_text("Refresh jobs").clicked() {
+                                    refresh_requested = true;
+                                }
+                            });
+                            if refresh_requested {
+                                self.jobs_session = None;
+                                self.start_job_list();
+                            }
+                        });
+                    });
+                    if self.jobs_receiver.is_some() {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Loading jobs…");
+                        });
+                    }
+                    if let Some(error) = &self.jobs_error {
+                        ui.colored_label(ui.visuals().error_fg_color, error);
+                    }
+                    let mut next = None;
+                    egui::ScrollArea::vertical()
+                        .id_salt("jobs-list")
+                        .max_height(90.0)
+                        .show(ui, |ui| {
+                            for job in &self.jobs {
+                                let selected =
+                                    self.job_selected.as_deref() == Some(job.id.as_str());
+                                if ui
+                                    .selectable_label(
+                                        selected,
+                                        format!("{} · {} · {}", job.label, job.kind, job.status),
+                                    )
+                                    .on_hover_text(format!("Follow output for {}", job.label))
+                                    .clicked()
+                                {
+                                    next = Some(job.id.clone());
+                                }
+                            }
+                        });
+                    if let Some(id) = next {
+                        self.start_job_follow(id);
+                    }
+                    if !self.job_status.is_empty() {
+                        ui.small(&self.job_status);
+                    }
+                    if !self.job_output.is_empty() {
+                        egui::ScrollArea::vertical()
+                            .id_salt("job-output")
+                            .max_height(140.0)
+                            .stick_to_bottom(true)
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&self.job_output).monospace(),
+                                    )
+                                    .selectable(true)
+                                    .wrap_mode(egui::TextWrapMode::Extend),
+                                );
+                            });
+                    } else if self.jobs.is_empty() && self.jobs_receiver.is_none() {
+                        ui.label(egui::RichText::new("No jobs for this Session.").weak());
+                    } else if self.job_selected.is_none() {
+                        ui.small("Select a job to follow its output.");
+                    }
+                });
+            });
+            if close_panel {
+                self.bottom_tool = None;
+            }
+        }
+        if self.selected_session.is_some() && self.bottom_tool == Some(BottomTool::Deliverables) {
+            let mut close_panel = false;
+            egui::Panel::bottom("deliverables-panel").show(ui, |ui| {
+                ui.vertical(|ui| {
+                    close_panel = utility_panel_header(
+                        ui,
+                        &format!("Deliverables ({})", self.deliverables.len()),
+                        "Close Deliverables panel",
+                    );
+                    ui.separator();
+                    if self.deliverables.is_empty() {
+                        ui.label(
+                            egui::RichText::new("Files presented by the assistant appear here.")
+                                .weak(),
+                        );
+                    }
+                    let mut preview = None;
+                    for file in &self.deliverables {
+                        let label = egui::RichText::new(&file.path).monospace();
+                        if ui
+                            .link(label)
+                            .on_hover_text(
+                                file.description
+                                    .as_deref()
+                                    .unwrap_or("Open this deliverable"),
+                            )
+                            .clicked()
+                        {
+                            preview = Some(file.path.clone());
+                        }
+                        if let Some(description) = &file.description {
+                            ui.small(description);
+                        }
+                    }
+                    if let Some(path) = preview {
+                        self.preview_path = path.clone();
+                        self.show_document = true;
+                        self.active_view = ActiveView::Document;
+                        self.show_settings = false;
+                        self.show_plugins = false;
+                        self.show_skills = false;
+                        self.show_market = false;
+                        self.show_goals = false;
+                        if Self::is_office_path(&path) {
+                            self.read_office_document();
+                        } else {
+                            self.read_document();
+                        }
+                    }
+                });
+            });
+            if close_panel {
+                self.bottom_tool = None;
+            }
+        }
+        if self.selected_session.is_some() && self.bottom_tool == Some(BottomTool::Terminal) {
+            let mut close_panel = false;
+            egui::Panel::bottom("terminal-panel").show(ui, |ui| {
+                close_panel = utility_panel_header(ui, "Terminal", "Close Terminal panel");
+                ui.separator();
+                self.terminal
+                    .ui(ui, self.transport.clone(), self.streams.clone());
+            });
+            if close_panel {
+                self.bottom_tool = None;
+            }
+        }
+        egui::Panel::bottom("utility-toolbar")
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(8, 3)))
+            .show(ui, |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    for (tool, label) in [
+                        (BottomTool::Terminal, "Terminal"),
+                        (BottomTool::Jobs, "Jobs"),
+                        (BottomTool::Schedules, "Schedules"),
+                        (BottomTool::Deliverables, "Deliverables"),
+                    ] {
+                        let enabled = self.selected_session.is_some();
+                        let selected = self.bottom_tool == Some(tool);
+                        let button = ui.add_enabled(
+                            enabled,
+                            egui::Button::new(" ")
+                                .selected(selected)
+                                .min_size(egui::vec2(28.0, 24.0)),
+                        );
+                        accessible_button_label(&button, label);
+                        let color = if selected {
+                            ui.visuals().hyperlink_color
+                        } else {
+                            ui.visuals().text_color()
+                        };
+                        paint_bottom_tool_icon(ui.painter(), button.rect, tool, color);
+                        let hint = if enabled {
+                            label.to_owned()
+                        } else {
+                            format!("{label} · select a Session first")
+                        };
+                        if button.on_hover_text(hint).clicked() {
+                            self.bottom_tool = if selected { None } else { Some(tool) };
+                        }
+                    }
+                });
+            });
+        let viewport_width = ui.ctx().content_rect().width();
+        let dock_explorer = self.active_view == ActiveView::Sessions
+            && self.show_explorer
+            && !self.explorer_fullscreen
+            && viewport_width >= layout::EXPLORER_DOCK_MIN_WIDTH;
+        if dock_explorer {
+            egui::Panel::right("workspace-explorer")
+                .resizable(true)
+                .default_size(self.ui_preferences.workspace_panel_width)
+                .min_size(layout::EXPLORER_MIN)
+                .max_size(layout::EXPLORER_MAX)
+                .show(ui, |ui| {
+                    self.explorer.ui(
+                        ui,
+                        self.transport.as_ref(),
+                        self.selected_session.as_deref(),
+                        false,
+                    );
+                });
         }
         egui::CentralPanel::default().show(ui, |ui| {
             central_size = ui.available_size();
-            if self.transport.is_none() && !self.show_settings {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(40.0);
-                    ui.heading("Not connected");
-                    ui.label("The Host sidecar is not running or authentication failed.");
-                    ui.label("Check DSH_DESKTOP_HOST_BIN and the runtime tree.");
-                    if ui.button("Retry connection").clicked() {
-                        self.connect();
+            if self.transport.is_none() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.colored_label(
+                        ui.visuals().warn_fg_color,
+                        egui::RichText::new("Host disconnected").strong(),
+                    );
+                    ui.label(egui::RichText::new(
+                        "Loaded Session content is retained. Reconnect to continue working.",
+                    ).size(11.0));
+                    if self.host_receiver.is_some() || self.connect_receiver.is_some() {
+                        ui.spinner();
+                        ui.label(egui::RichText::new("Reconnecting…").size(10.0).weak());
+                    } else {
+                        let retry = ui.button("Retry connection");
+                        if retry.clicked() {
+                            self.connect();
+                        }
                     }
                 });
+                ui.separator();
+            }
+            if self.explorer_fullscreen {
+                ui.horizontal(|ui| {
+                    if ui.button("Back to Session").clicked() {
+                        self.explorer_fullscreen = false;
+                        self.active_view = ActiveView::Sessions;
+                    }
+                    ui.separator();
+                    ui.label("Workspace Explorer");
+                });
+                self.explorer.ui(
+                    ui,
+                    self.transport.as_ref(),
+                    self.selected_session.as_deref(),
+                    viewport_width <= layout::EXPLORER_SINGLE_PANE_MAX_WIDTH,
+                );
                 return;
             }
             if !self.show_settings
@@ -4695,17 +5286,186 @@ impl DesktopApp {
                 && !self.show_goals
                 && self.selected_session.is_none()
             {
+                let empty_search = self
+                    .session_search
+                    .as_ref()
+                    .is_some_and(|results| results.items.is_empty());
+                let sessions_error = self.sessions_error.clone();
                 ui.vertical_centered(|ui| {
-                    ui.add_space(80.0);
-                    ui.heading("No session selected");
-                    ui.label("Open an existing session from the sidebar, or start a new one.");
-                    ui.add_space(12.0);
-                    if ui.button("New Session").clicked() {
-                        self.request_sessions(SessionOperation::Create);
+                    if self.transport.is_none() {
+                        ui.add_space(80.0);
+                        ui.label(egui::RichText::new("Host unavailable").size(10.0).weak());
+                        ui.add_space(6.0);
+                        ui.heading(egui::RichText::new("The Host isn’t reachable").size(20.0));
+                        ui.label(egui::RichText::new(
+                            "A new Session needs the Host. Retry the connection to continue.",
+                        ).size(13.0));
+                        let create = ui.add_enabled(
+                            false,
+                            egui::Button::new("＋ New Session"),
+                        );
+                        accessible_button_label(&create, "New Session");
+                        create.on_hover_text("Needs a Host connection");
+                        return;
                     }
-                    if ui.button("Refresh sessions").clicked() {
-                        self.session_query.clear();
-                        self.refresh_sessions();
+                    if empty_search {
+                        ui.add_space(80.0);
+                        ui.heading("No matching Sessions");
+                        ui.label("Try a different search or clear the current query.");
+                        if ui.button("Clear search").clicked() {
+                            self.session_query.clear();
+                            self.session_search = None;
+                            self.refresh_sessions();
+                        }
+                        return;
+                    }
+                    if let Some(error) = &sessions_error {
+                        ui.add_space(80.0);
+                        ui.heading("Could not load Sessions");
+                        ui.label(error);
+                        if ui.button("Retry Session list").clicked() {
+                            self.session_query.clear();
+                            self.refresh_sessions();
+                        }
+                        return;
+                    }
+                    if self.sessions_receiver.is_some() {
+                        ui.add_space(80.0);
+                        ui.spinner();
+                        ui.label(egui::RichText::new("Loading sessions…").size(11.0).weak());
+                        return;
+                    }
+                    if !self.sessions.is_empty() {
+                        ui.heading("Choose a Session");
+                        ui.label("Open a Session from the sidebar, or start another one.");
+                    } else {
+                        let top_space = (ui.available_height() - 280.0).max(0.0) / 2.0;
+                        ui.add_space(top_space);
+                        let onboarding_width = ui.available_width().min(520.0);
+                        let onboarding_height = ui.available_height();
+                        ui.vertical_centered(|ui| {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(onboarding_width, onboarding_height),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                ui.label(
+                                    egui::RichText::new(if self.model_catalog_empty() {
+                                        "No provider"
+                                    } else {
+                                        "First run"
+                                    })
+                                    .size(10.0)
+                                    .weak(),
+                                );
+                                if self.model_catalog_empty() {
+                                    ui.add_space(6.0);
+                                    ui.heading(
+                                        egui::RichText::new("No model provider is available")
+                                            .size(20.0),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(if self.model_error.is_some() {
+                                            "The Host could not load its model catalog. A Session can still be created; check Host configuration before sending a prompt."
+                                        } else {
+                                            "You can create a Session now. Sending a prompt needs a model provider configured by the Host."
+                                        })
+                                        .size(13.0),
+                                    );
+                                } else {
+                                    ui.add_space(6.0);
+                                    ui.heading(
+                                        egui::RichText::new("Start your first Session")
+                                            .size(20.0),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new("Create a Session to begin. Each Session keeps its own conversation and workspace in Explorer.")
+                                            .size(13.0),
+                                    );
+                                }
+                                ui.add_space(10.0);
+                                ui.horizontal_wrapped(|ui| {
+                                    if self.model_receiver.is_some() {
+                                        ui.spinner();
+                                        ui.label(egui::RichText::new("Loading models from the Host…").size(11.0).weak());
+                                    }
+                                    if let Some(error) = &self.model_error {
+                                        ui.colored_label(ui.visuals().warn_fg_color, error);
+                                    }
+                                });
+                                ui.horizontal_wrapped(|ui| {
+                                    let create = ui.add(
+                                        egui::Button::new(
+                                            egui::RichText::new("＋ New Session")
+                                                .color(accent_ink(ui_preferences::accent_fill(
+                                                    &self.ui_preferences,
+                                                    ui.visuals().dark_mode,
+                                                )))
+                                                .strong(),
+                                        )
+                                            .min_size(egui::vec2(130.0, 38.0))
+                                            .fill(ui_preferences::accent_fill(
+                                                &self.ui_preferences,
+                                                ui.visuals().dark_mode,
+                                            ))
+                                            .stroke(egui::Stroke::new(
+                                                1.0,
+                                                ui_preferences::accent_fill(
+                                                    &self.ui_preferences,
+                                                    ui.visuals().dark_mode,
+                                                ),
+                                            ))
+                                            .corner_radius(6.0),
+                                    );
+                                    accessible_button_label(&create, "Create your first Session");
+                                    if create.clicked() {
+                                        self.request_sessions(SessionOperation::Create);
+                                    }
+                                    if self.model_catalog_empty() && self.transport.is_some() {
+                                        let host_settings = ui.button("Host settings");
+                                        if host_settings.clicked() {
+                                            self.active_view = ActiveView::Settings;
+                                            self.open_settings();
+                                        }
+                                    }
+                                });
+                                if self.model_catalog_empty() {
+                                    ui.add_space(6.0);
+                                    let retry = ui.small_button("Retry model catalog");
+                                    if retry.clicked() {
+                                        self.refresh_models();
+                                    }
+                                } else if let Some(catalog) = &self.model_catalog {
+                                    if catalog.default.provider.is_empty() || catalog.default.model.is_empty() {
+                                        ui.add_space(10.0);
+                                        ui.label(egui::RichText::new("The profile has no default model yet.").size(11.0).weak());
+                                    } else {
+                                        ui.add_space(10.0);
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "Profile default · {}",
+                                                catalog.default.model
+                                            ))
+                                            .size(11.0)
+                                            .weak(),
+                                        );
+                                    }
+                                }
+                                ui.add_space(8.0);
+                                ui.label(
+                                    egui::RichText::new("Model selection is available from the composer after opening a Session.")
+                                        .size(11.0)
+                                        .weak(),
+                                );
+                                },
+                            );
+                        });
+                        return;
+                    }
+                    ui.add_space(12.0);
+                    let create = ui.button("＋ New Session");
+                    accessible_button_label(&create, "New Session");
+                    if create.clicked() {
+                        self.request_sessions(SessionOperation::Create);
                     }
                 });
                 return;
@@ -4719,6 +5479,32 @@ impl DesktopApp {
                     self.handle_ui_preferences_action(action, ui.ctx());
                 }
                 ui.separator();
+                let mut open_updates = false;
+                ui.collapsing("Desktop updates", |ui| {
+                    ui.label(
+                        "Check the signed feed and confirm any download or installation here.",
+                    );
+                    if ui
+                        .add_enabled(
+                            self.transport.is_some() && self.update_open_receiver.is_none(),
+                            egui::Button::new("Check for updates"),
+                        )
+                        .clicked()
+                    {
+                        open_updates = true;
+                    }
+                    if self.update_open_receiver.is_some() {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label("Checking for updates…");
+                        });
+                    } else if let Some(status) = &self.update_status {
+                        ui.label(status);
+                    }
+                });
+                if open_updates {
+                    self.open_updates();
+                }
                 if self.transport.is_some() {
                     let mut settings_action = None;
                     ui.collapsing("Host settings (agent and plugin configuration)", |ui| {
@@ -4741,10 +5527,12 @@ impl DesktopApp {
             } else if self.show_goals {
                 self.render_goals_panel(ui);
             } else if self.show_plugins {
-                ui.add_space(4.0);
+                app_page_header(
+                    ui,
+                    "Plugins",
+                    "Extensions configured by the active profile and managed through the Host.",
+                );
                 ui.horizontal(|ui| {
-                    ui.heading("Plugins");
-                    ui.add_space(8.0);
                     if ui
                         .add_enabled(!self.plugins_loading, egui::Button::new("Refresh"))
                         .clicked()
@@ -4752,7 +5540,7 @@ impl DesktopApp {
                         self.refresh_plugins();
                     }
                 });
-                ui.add_space(4.0);
+                ui.add_space(6.0);
                 if self.plugins_loading {
                     ui.horizontal(|ui| {
                         ui.spinner();
@@ -4760,7 +5548,7 @@ impl DesktopApp {
                     });
                 }
                 if let Some(error) = &self.plugins_error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                    ui.colored_label(ui.visuals().error_fg_color, error);
                 }
                 if let Some(status) = &self.plugin_write_status {
                     ui.label(status);
@@ -4863,13 +5651,15 @@ impl DesktopApp {
                     self.write_plugin(action);
                 }
                 if let Some(error) = &self.page_error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                    ui.colored_label(ui.visuals().error_fg_color, error);
                 }
             } else if self.show_market {
-                ui.add_space(4.0);
+                app_page_header(
+                    ui,
+                    "Marketplace",
+                    "Search configured indexes and install profile extensions.",
+                );
                 ui.horizontal(|ui| {
-                    ui.heading("Marketplace");
-                    ui.add_space(8.0);
                     if ui
                         .add_enabled(!self.market_loading, egui::Button::new("Refresh indexes"))
                         .clicked()
@@ -4877,7 +5667,7 @@ impl DesktopApp {
                         self.refresh_market_indexes();
                     }
                 });
-                ui.add_space(4.0);
+                ui.add_space(6.0);
                 if self.market_loading {
                     ui.horizontal(|ui| {
                         ui.spinner();
@@ -4905,7 +5695,7 @@ impl DesktopApp {
                 if self.market_indexes.is_empty() && !self.market_loading {
                     ui.label("No market indexes configured.");
                 }
-                let mut install_spec = None;
+                let mut install_target = None;
                 if !self.market_results.is_empty() {
                     egui::ScrollArea::vertical()
                         .id_salt("market-results")
@@ -4918,23 +5708,34 @@ impl DesktopApp {
                                     .unwrap_or("plugin");
                                 ui.horizontal(|ui| {
                                     ui.label(name);
-                                    let default_spec = entry
+                                    let default_install = entry
                                         .get("versions")
                                         .and_then(serde_json::Value::as_array)
                                         .and_then(|versions| versions.first())
                                         .and_then(|version| version.get("install"))
-                                        .and_then(|install| install.get("spec"))
-                                        .and_then(serde_json::Value::as_str)
-                                        .map(str::to_owned);
-                                    if let Some(spec) = default_spec {
-                                        if ui
-                                            .add_enabled(
-                                                !self.market_loading,
-                                                egui::Button::new("Install").small(),
-                                            )
-                                            .clicked()
-                                        {
-                                            install_spec = Some(spec);
+                                        .and_then(serde_json::Value::as_object);
+                                    if let Some(install) = default_install {
+                                        let spec = install
+                                            .get("spec")
+                                            .and_then(serde_json::Value::as_str)
+                                            .map(str::to_owned);
+                                        let registry = install
+                                            .get("registry")
+                                            .and_then(serde_json::Value::as_str)
+                                            .map(str::to_owned);
+                                        if let Some(spec) = spec {
+                                            if ui
+                                                .add_enabled(
+                                                    !self.market_loading,
+                                                    egui::Button::new("Install").small(),
+                                                )
+                                                .clicked()
+                                            {
+                                                install_target = Some((
+                                                    spec,
+                                                    MarketplaceInstallOptions { registry },
+                                                ));
+                                            }
                                         }
                                     }
                                 });
@@ -4947,22 +5748,32 @@ impl DesktopApp {
                             }
                         });
                 }
-                if let Some(spec) = install_spec {
-                    self.install_market_entry(spec);
+                if let Some((spec, options)) = install_target {
+                    self.install_market_entry(spec, options);
                 }
             } else if self.show_skills {
-                ui.add_space(4.0);
+                ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    ui.heading("Skills");
-                    ui.add_space(8.0);
-                    if ui
-                        .add_enabled(!self.skills_loading, egui::Button::new("Refresh"))
-                        .clicked()
-                    {
-                        self.refresh_skills();
-                    }
+                    ui.vertical(|ui| {
+                        ui.label(egui::RichText::new("Skills").size(16.0).strong());
+                        ui.label(
+                            egui::RichText::new("Instructions available to this Session")
+                                .size(10.0)
+                                .weak(),
+                        );
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let refresh = ui.add_enabled(
+                            !self.skills_loading,
+                            egui::Button::new("Refresh"),
+                        );
+                        accessible_button_label(&refresh, "Refresh skills");
+                        if refresh.on_hover_text("Refresh skills").clicked() {
+                            self.refresh_skills();
+                        }
+                    });
                 });
-                ui.add_space(4.0);
+                ui.separator();
                 if self.skills_loading {
                     ui.horizontal(|ui| {
                         ui.spinner();
@@ -4973,46 +5784,156 @@ impl DesktopApp {
                     ui.label("Select a session to list the skills its composer can invoke.");
                 }
                 if let Some(error) = &self.skills_error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                    ui.colored_label(ui.visuals().error_fg_color, error);
                 }
                 if let Some(skills) = &self.skills {
-                    egui::ScrollArea::vertical()
-                        .id_salt("skill-list")
-                        .max_height(420.0)
-                        .show(ui, |ui| {
-                            if skills.skills.is_empty() {
-                                ui.label("No skills are available to this session.");
-                            }
-                            for skill in &skills.skills {
-                                ui.add(
-                                    egui::Label::new(egui::RichText::new(&skill.name).strong())
-                                        .wrap(),
-                                );
-                                ui.add(
-                                    egui::Label::new(&skill.description).wrap().selectable(true),
-                                );
-                                if let Some(when) = &skill.when_to_use {
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(format!("When: {when}"))
-                                                .color(ui.visuals().weak_text_color()),
-                                        )
-                                        .wrap(),
-                                    );
-                                }
-                                if !skill.model_invocable {
-                                    ui.small("Not model-invocable");
-                                }
-                                if let Some(path) = &skill.path {
-                                    ui.small(path);
-                                }
-                                ui.separator();
-                            }
+                    let skills = skills.skills.clone();
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        let filter = ui.add(
+                            egui::TextEdit::singleline(&mut self.skills_query)
+                                .hint_text("Filter skills")
+                                .desired_width(ui.available_width().min(320.0)),
+                        );
+                        accessible_label(&filter, "Filter skills");
+                    });
+                    let query = self.skills_query.trim().to_lowercase();
+                    let matches: Vec<_> = skills
+                        .iter()
+                        .filter(|skill| {
+                            query.is_empty()
+                                || skill.name.to_lowercase().contains(&query)
+                                || skill.description.to_lowercase().contains(&query)
+                        })
+                        .collect();
+                    let selected_name = self.selected_skill.clone();
+                    let selected_skill = selected_name
+                        .as_deref()
+                        .and_then(|name| skills.iter().find(|skill| skill.name == name));
+                    if matches.is_empty() {
+                        ui.add_space(12.0);
+                        ui.label(if query.is_empty() {
+                            "No skills are available to this Session."
+                        } else {
+                            "No skills match this filter."
                         });
+                    } else if ui.available_width() >= 760.0 {
+                        let available = ui.available_size();
+                        let list_width = (available.x * 0.58).clamp(320.0, 520.0);
+                        let detail_width = (available.x - list_width - ui.spacing().item_spacing.x)
+                            .max(240.0);
+                        let mut selected_by_click = None;
+                        ui.horizontal_top(|ui| {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(list_width, available.y),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    egui::ScrollArea::vertical()
+                                        .id_salt("skill-list")
+                                        .show(ui, |ui| {
+                                            for skill in matches {
+                                                let row = ui.selectable_label(
+                                                    selected_name.as_deref()
+                                                        == Some(skill.name.as_str()),
+                                                    egui::RichText::new(&skill.name).strong(),
+                                                );
+                                                accessible_button_label(&row, &skill.name);
+                                                if row.clicked() {
+                                                    selected_by_click = Some(skill.name.clone());
+                                                }
+                                                ui.label(
+                                                    egui::RichText::new(&skill.description)
+                                                        .size(10.0)
+                                                        .weak(),
+                                                );
+                                                ui.separator();
+                                            }
+                                        });
+                                },
+                            );
+                            ui.separator();
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(detail_width, available.y),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    if let Some(skill) = selected_skill {
+                                        ui.heading(
+                                            egui::RichText::new(&skill.name).size(14.0),
+                                        );
+                                        ui.label(&skill.description);
+                                        if let Some(when) = &skill.when_to_use {
+                                            ui.add_space(8.0);
+                                            ui.label(egui::RichText::new("When it applies").strong());
+                                            ui.label(when);
+                                        }
+                                        ui.add_space(8.0);
+                                        ui.label(if skill.model_invocable {
+                                            "Available to the Session composer."
+                                        } else {
+                                            "Loaded in the profile; not model-invocable."
+                                        });
+                                        if let Some(path) = &skill.path {
+                                            ui.add_space(8.0);
+                                            ui.label(egui::RichText::new("Source").strong());
+                                            ui.label(
+                                                egui::RichText::new(path)
+                                                    .size(10.0)
+                                                    .weak(),
+                                            );
+                                        }
+                                    }
+                                },
+                            );
+                        });
+                        if let Some(name) = selected_by_click {
+                            self.selected_skill = Some(name);
+                        }
+                    } else {
+                        let mut selected_by_click = None;
+                        egui::ScrollArea::vertical()
+                            .id_salt("skill-list-narrow")
+                            .max_height(300.0)
+                            .show(ui, |ui| {
+                                for skill in matches {
+                                    let row = ui.selectable_label(
+                                        selected_name.as_deref() == Some(skill.name.as_str()),
+                                        egui::RichText::new(&skill.name).strong(),
+                                    );
+                                    accessible_button_label(&row, &skill.name);
+                                    if row.clicked() {
+                                        selected_by_click = Some(skill.name.clone());
+                                    }
+                                    ui.label(
+                                        egui::RichText::new(&skill.description)
+                                            .size(10.0)
+                                            .weak(),
+                                    );
+                                    ui.separator();
+                                }
+                            });
+                        if let Some(name) = selected_by_click {
+                            self.selected_skill = Some(name);
+                        }
+                        if let Some(skill) = selected_skill {
+                            ui.separator();
+                            ui.heading(egui::RichText::new(&skill.name).size(14.0));
+                            ui.label(&skill.description);
+                            if let Some(when) = &skill.when_to_use {
+                                ui.add_space(6.0);
+                                ui.label(egui::RichText::new("When it applies").strong());
+                                ui.label(when);
+                            }
+                        }
+                    }
                 } else if !self.skills_loading {
                     ui.label("Open this tab with a session selected to load skills.");
                 }
             } else if self.show_document {
+                app_page_header(
+                    ui,
+                    "Document preview",
+                    "Read-only files scoped to this Session’s workspace.",
+                );
                 ui.horizontal(|ui| {
                     let path = ui.add(
                         egui::TextEdit::singleline(&mut self.preview_path)
@@ -5069,11 +5990,44 @@ impl DesktopApp {
                 }
                 ui.label(&self.status);
             } else {
-                ui.heading(self.selected_session.as_deref().unwrap_or("Session"));
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            egui::RichText::new(
+                                self.session_title
+                                    .as_str()
+                                    .is_empty()
+                                    .then_some(self.selected_session.as_deref().unwrap_or("Session"))
+                                    .unwrap_or(self.session_title.as_str()),
+                            )
+                            .size(14.0)
+                            .strong(),
+                        );
+                        let state = if self.transport.is_none() {
+                            "Session · Host disconnected"
+                        } else if self.chat_loading || self.assistant_streaming {
+                            "Running · Host connected"
+                        } else {
+                            "Idle · Host connected"
+                        };
+                        ui.label(egui::RichText::new(state).size(10.0).weak());
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if viewport_width >= layout::EXPLORER_DOCK_MIN_WIDTH {
+                            let label = if self.show_explorer { "Hide Explorer" } else { "Show Explorer" };
+                            if ui.button(label).clicked() {
+                                self.show_explorer = !self.show_explorer;
+                            }
+                        } else if ui.button("Open Explorer").clicked() {
+                            self.active_view = ActiveView::Explorer;
+                            self.explorer_fullscreen = true;
+                        }
+                    });
+                });
                 if self.page_loading && self.transcript.is_empty() {
                     ui.label("Loading session…");
                 } else if let Some(error) = &self.page_error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                    ui.colored_label(ui.visuals().error_fg_color, error);
                     if ui.button("Retry session load").clicked() {
                         if let Some(session_id) = self.selected_session.clone() {
                             self.load_session(session_id);
@@ -5090,185 +6044,6 @@ impl DesktopApp {
                 } else if self.page_loading {
                     ui.label("Loading older events…");
                 }
-                ui.separator();
-                ui.heading("Chat");
-                ui.horizontal_wrapped(|ui| {
-                    let selected = self.model_picker_label();
-                    let model_picker = egui::ComboBox::from_id_salt("model-selection")
-                        .selected_text(selected)
-                        .show_ui(ui, |ui| {
-                            let mut next = None;
-                            if let Some(catalog) = &self.model_catalog {
-                                for group in &catalog.groups {
-                                    ui.label(egui::RichText::new(&group.name).strong());
-                                    for model in &group.models {
-                                        let selection = ModelSelection {
-                                            provider: group.id.clone(),
-                                            model: model.id.clone(),
-                                            reasoning_effort: model.reasoning.as_ref().and_then(
-                                                |reasoning| reasoning.default_effort.clone(),
-                                            ),
-                                        };
-                                        let current =
-                                            self.model_selection.as_ref().is_some_and(|current| {
-                                                current.provider == selection.provider
-                                                    && current.model == selection.model
-                                            });
-                                        if ui
-                                            .selectable_label(
-                                                current,
-                                                format!("{} · {}", model.name, model.id),
-                                            )
-                                            .clicked()
-                                        {
-                                            next = Some(selection);
-                                        }
-                                    }
-                                }
-                            }
-                            if let Some(selection) = next {
-                                self.select_model(selection);
-                            }
-                        });
-                    accessible_label(&model_picker.response, "Model");
-                    if ui
-                        .add_enabled(self.model_receiver.is_none(), egui::Button::new("Reload"))
-                        .clicked()
-                    {
-                        self.refresh_models();
-                    }
-                    if ui
-                        .add_enabled(
-                            self.model_init_receiver.is_none()
-                                && self.model_select_receiver.is_none(),
-                            egui::Button::new("Use profile default"),
-                        )
-                        .clicked()
-                    {
-                        self.initialize_default_model();
-                    }
-                    let selected_model = match (&self.model_catalog, &self.model_selection) {
-                        (Some(catalog), Some(selection)) => {
-                            catalog_model(catalog, selection).cloned()
-                        }
-                        _ => None,
-                    };
-                    if let (Some(selection), Some(reasoning)) = (
-                        self.model_selection.clone(),
-                        selected_model.and_then(|model| model.reasoning),
-                    ) {
-                        let current = selection
-                            .reasoning_effort
-                            .clone()
-                            .or_else(|| reasoning.default_effort.clone())
-                            .unwrap_or_else(|| "default".to_owned());
-                        let mut next_effort = None;
-                        egui::ComboBox::from_id_salt("model-effort")
-                            .selected_text(format!("Effort: {current}"))
-                            .show_ui(ui, |ui| {
-                                for effort in &reasoning.efforts {
-                                    if ui
-                                        .selectable_label(current == effort.id, &effort.name)
-                                        .on_hover_text(
-                                            effort.description.as_deref().unwrap_or_default(),
-                                        )
-                                        .clicked()
-                                    {
-                                        next_effort = Some(effort.id.clone());
-                                    }
-                                }
-                            });
-                        if let Some(effort) = next_effort {
-                            let mut next = selection;
-                            next.reasoning_effort = Some(effort);
-                            self.select_model(next);
-                        }
-                    }
-                });
-                if self.model_selection.is_none() {
-                    if let Some(error) = &self.model_error {
-                        ui.colored_label(egui::Color32::LIGHT_RED, error);
-                        if ui.button("Open Settings").clicked() {
-                            self.show_settings = true;
-                        }
-                    } else if self.model_catalog_empty() {
-                        ui.label("Add a provider key in Settings to choose a model.");
-                        if ui.button("Open Settings").clicked() {
-                            self.show_settings = true;
-                        }
-                    }
-                } else if let Some(error) = &self.model_error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, error);
-                }
-                let text_edit = ui.add_enabled(
-                    !self.chat_loading,
-                    egui::TextEdit::multiline(&mut self.chat_text)
-                        .id_salt("composer")
-                        .hint_text("Message (Ctrl+Enter to send)")
-                        .desired_rows(3),
-                );
-                accessible_label(&text_edit, "Composer");
-                if self.focus_composer && !self.chat_loading {
-                    text_edit.request_focus();
-                    self.focus_composer = false;
-                }
-                if composer_input::submit_requested(
-                    text_edit.has_focus(),
-                    ui.input(|input| input.key_pressed(egui::Key::Enter)),
-                    ui.input(|input| input.modifiers.ctrl),
-                ) && !self.chat_loading
-                    && !self.chat_text.trim().is_empty()
-                    && self.attachment_receiver.is_none()
-                {
-                    self.send_prompt();
-                }
-                ui.horizontal_wrapped(|ui| {
-                    let uploading = self.attachment_receiver.is_some();
-                    if ui
-                        .add_enabled(
-                            !uploading && !self.chat_loading,
-                            egui::Button::new("Attach file…"),
-                        )
-                        .clicked()
-                    {
-                        self.pick_attachment();
-                    }
-                    if !self.attachment_name.is_empty() {
-                        ui.label(&self.attachment_name);
-                    }
-                    if uploading {
-                        ui.spinner();
-                    }
-                    if self.attachment.is_some() && ui.button("Remove").clicked() {
-                        self.attachment = None;
-                        self.attachment_name.clear();
-                    }
-                });
-                if let Some(error) = &self.attachment_error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, error);
-                }
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(
-                            !self.chat_loading
-                                && !self.chat_text.trim().is_empty()
-                                && self.attachment_receiver.is_none(),
-                            egui::Button::new("Send"),
-                        )
-                        .clicked()
-                    {
-                        self.send_prompt();
-                    }
-                    if ui
-                        .add_enabled(
-                            self.chat_loading && self.cancel_receiver.is_none(),
-                            egui::Button::new("Cancel turn"),
-                        )
-                        .clicked()
-                    {
-                        self.cancel_turn();
-                    }
-                });
                 let mut feedback_actions = Vec::new();
                 if let Some(status) = &self.feedback_status {
                     ui.label(status);
@@ -5367,6 +6142,242 @@ impl DesktopApp {
                         }
                     }
                 }
+                        let composer_width = central_size.x.min(800.0);
+                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                    egui::Frame::new()
+                        .fill(ui.visuals().extreme_bg_color)
+                        .stroke(egui::Stroke::new(
+                            1.0,
+                            ui.visuals().widgets.inactive.bg_stroke.color,
+                        ))
+                        .corner_radius(10.0)
+                        .inner_margin(egui::Margin::same(8))
+                        .show(ui, |ui| {
+                let text_edit = ui.add_enabled(
+                    !self.chat_loading && self.transport.is_some(),
+                    egui::TextEdit::multiline(&mut self.chat_text)
+                        .id_salt("composer")
+                        .hint_text("Message (Ctrl+Enter to send)")
+                        .desired_rows(3)
+                        .desired_width((composer_width - 16.0).max(240.0)),
+                );
+                accessible_label(&text_edit, "Composer");
+                if self.focus_composer && !self.chat_loading {
+                    text_edit.request_focus();
+                    self.focus_composer = false;
+                }
+                if composer_input::submit_requested(
+                    text_edit.has_focus(),
+                    ui.input(|input| input.key_pressed(egui::Key::Enter)),
+                    ui.input(|input| input.modifiers.ctrl),
+                    ) && !self.chat_loading
+                    && self.transport.is_some()
+                    && !self.chat_text.trim().is_empty()
+                    && self.attachment_receiver.is_none()
+                {
+                    self.send_prompt();
+                }
+                ui.add_enabled_ui(self.transport.is_some(), |ui| {
+                    let mut selection_to_apply = None;
+                    let mut initialize_profile_default = false;
+                    let mut reload_catalog = false;
+                    let mut open_host_settings = false;
+                    ui.horizontal_wrapped(|ui| {
+                        let uploading = self.attachment_receiver.is_some();
+                        let attach = ui.add_enabled(
+                            !uploading && !self.chat_loading,
+                            egui::Button::new("＋ Attach"),
+                        );
+                        accessible_button_label(&attach, "Attach file…");
+                        if attach.clicked() {
+                            self.pick_attachment();
+                        }
+                        if !self.attachment_name.is_empty() {
+                            ui.label(egui::RichText::new(&self.attachment_name).size(10.0));
+                        }
+                        if uploading {
+                            ui.spinner();
+                        }
+                        if self.attachment.is_some()
+                            && ui.small_button("×").on_hover_text("Remove attachment").clicked()
+                        {
+                            self.attachment = None;
+                            self.attachment_name.clear();
+                        }
+
+                        let model_picker = egui::ComboBox::from_id_salt("model-selection")
+                            .selected_text(self.model_picker_label())
+                            .show_ui(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(egui::RichText::new("Model").size(10.0).strong());
+                                    let reload = ui.small_button("↻");
+                                    accessible_button_label(&reload, "Reload model catalog");
+                                    if reload.on_hover_text("Reload catalog").clicked() {
+                                        reload_catalog = true;
+                                    }
+                                });
+                                if self.model_receiver.is_some() {
+                                    ui.horizontal(|ui| {
+                                        ui.spinner();
+                                        ui.label(egui::RichText::new("Loading models from Host…").size(10.0).weak());
+                                    });
+                                } else if let Some(error) = &self.model_error {
+                                    ui.colored_label(ui.visuals().error_fg_color, error);
+                                    if ui.button("Retry catalog").clicked() {
+                                        reload_catalog = true;
+                                    }
+                                } else if self.model_catalog_empty() {
+                                    ui.label(egui::RichText::new("No model providers are available.").size(11.0));
+                                    ui.label(egui::RichText::new("The Host controls provider configuration.").size(10.0).weak());
+                                    ui.horizontal(|ui| {
+                                        if ui.button("Retry catalog").clicked() {
+                                            reload_catalog = true;
+                                        }
+                                        if ui.button("Host settings").clicked() {
+                                            open_host_settings = true;
+                                        }
+                                    });
+                                } else if let Some(catalog) = &self.model_catalog {
+                                    for group in &catalog.groups {
+                                        ui.label(egui::RichText::new(&group.name).size(10.0).strong());
+                                        for model in &group.models {
+                                            let selection = ModelSelection {
+                                                provider: group.id.clone(),
+                                                model: model.id.clone(),
+                                                reasoning_effort: model.reasoning.as_ref().and_then(
+                                                    |reasoning| reasoning.default_effort.clone(),
+                                                ),
+                                            };
+                                            let current = self.model_selection.as_ref().is_some_and(|current| {
+                                                current.provider == selection.provider && current.model == selection.model
+                                            });
+                                            if ui.selectable_label(
+                                                current,
+                                                format!("{} · {}", model.name, model.id),
+                                            ).clicked() {
+                                                selection_to_apply = Some(selection);
+                                            }
+                                        }
+                                    }
+                                    ui.separator();
+                                    ui.label(egui::RichText::new("Profile default").size(10.0).strong());
+                                    if !catalog.default.model.is_empty() {
+                                        ui.label(egui::RichText::new(&catalog.default.model).size(10.0).weak());
+                                        if self.model_selection.as_ref() != Some(&catalog.default)
+                                            && ui.button("Use profile default").clicked()
+                                        {
+                                            selection_to_apply = Some(catalog.default.clone());
+                                        }
+                                    }
+                                    let initialize = ui.add_enabled(
+                                        self.model_init_receiver.is_none() && self.model_select_receiver.is_none(),
+                                        egui::Button::new("Initialize profile default"),
+                                    );
+                                    if initialize.clicked() {
+                                        initialize_profile_default = true;
+                                    }
+                                }
+                            });
+                        accessible_label(&model_picker.response, "Model");
+                        if let Some(selection) = selection_to_apply {
+                            self.select_model(selection);
+                        }
+                        if initialize_profile_default {
+                            self.initialize_default_model();
+                        }
+                        if reload_catalog {
+                            self.refresh_models();
+                        }
+                        if open_host_settings {
+                            self.active_view = ActiveView::Settings;
+                            self.open_settings();
+                        }
+
+                        if let (Some(selection), Some(model)) = (
+                            self.model_selection.clone(),
+                            self.model_selection.as_ref().and_then(|selection| {
+                                self.model_catalog.as_ref().and_then(|catalog| catalog_model(catalog, selection))
+                            }),
+                        ) {
+                            if let Some(reasoning) = &model.reasoning {
+                                let current = selection.reasoning_effort.clone()
+                                    .or_else(|| reasoning.default_effort.clone())
+                                    .unwrap_or_else(|| "default".to_owned());
+                                let mut next_effort = None;
+                                egui::ComboBox::from_id_salt("model-effort")
+                                    .selected_text(current.clone())
+                                    .show_ui(ui, |ui| {
+                                        for effort in &reasoning.efforts {
+                                            if ui.selectable_label(current == effort.id, &effort.name)
+                                                .on_hover_text(effort.description.as_deref().unwrap_or_default())
+                                                .clicked()
+                                            {
+                                                next_effort = Some(effort.id.clone());
+                                            }
+                                        }
+                                    });
+                                if let Some(effort) = next_effort {
+                                    let mut next = selection;
+                                    next.reasoning_effort = Some(effort);
+                                    self.select_model(next);
+                                }
+                            }
+                        }
+                    });
+                });
+                if let Some(error) = &self.attachment_error {
+                    ui.colored_label(ui.visuals().error_fg_color, error);
+                }
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("Ctrl+Enter · Shift+Enter for a new line")
+                            .size(10.0)
+                            .weak(),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let send = ui.add_enabled(
+                        !self.chat_loading
+                            && self.transport.is_some()
+                            && !self.chat_text.trim().is_empty()
+                            && self.attachment_receiver.is_none(),
+                        egui::Button::new(
+                            egui::RichText::new("Send  ↑")
+                                .color(accent_ink(ui_preferences::accent_fill(
+                                    &self.ui_preferences,
+                                    ui.visuals().dark_mode,
+                                )))
+                                .strong(),
+                        )
+                        .fill(ui_preferences::accent_fill(
+                            &self.ui_preferences,
+                            ui.visuals().dark_mode,
+                        ))
+                        .stroke(egui::Stroke::new(
+                            1.0,
+                            ui_preferences::accent_fill(
+                                &self.ui_preferences,
+                                ui.visuals().dark_mode,
+                            ),
+                        ))
+                        .corner_radius(6.0),
+                    );
+                    accessible_button_label(&send, "Send");
+                    if send.clicked() {
+                        self.send_prompt();
+                    }
+                    if ui
+                        .add_enabled(
+                            self.chat_loading && self.cancel_receiver.is_none(),
+                            egui::Button::new("Cancel turn"),
+                        )
+                        .clicked()
+                    {
+                        self.cancel_turn();
+                    }
+                    });
+                });
+                        });
+                });
             }
         });
         if std::env::var("DSH_DESKTOP_DEBUG_LAYOUT").as_deref() == Ok("1") {
@@ -5548,10 +6559,30 @@ pub(crate) fn accessible_label(response: &egui::Response, label: &str) {
 }
 
 /// Replaces a control's accessible name when its visible text is ambiguous.
-fn accessible_button_label(response: &egui::Response, label: &str) {
+pub(crate) fn accessible_button_label(response: &egui::Response, label: &str) {
     response.output_event(egui::output::OutputEvent::ValueChanged(
         egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), label),
     ));
+}
+
+fn accent_ink(fill: egui::Color32) -> egui::Color32 {
+    let [red, green, blue, _] = fill.to_srgba_unmultiplied();
+    let channel = |value: u8| {
+        let value = f32::from(value) / 255.0;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let luminance = 0.2126 * channel(red) + 0.7152 * channel(green) + 0.0722 * channel(blue);
+    let dark_contrast = (luminance + 0.05) / 0.05;
+    let light_contrast = 1.05 / (luminance + 0.05);
+    if dark_contrast >= light_contrast {
+        egui::Color32::from_rgb(0x21, 0x14, 0x0d)
+    } else {
+        egui::Color32::WHITE
+    }
 }
 
 /// Labels the model picker: the chosen model, or why there is nothing to pick.
@@ -6740,7 +7771,7 @@ mod transcript_render_tests {
         }
         for expected in [
             "Waiting for assistant…",
-            "Assistant (streaming)",
+            "Assistant · streaming",
             "partial answer",
         ] {
             assert!(texts.iter().any(|text| text == expected), "{texts:?}");
@@ -6796,7 +7827,7 @@ mod transcript_render_tests {
         let (empty, _) = render(&Transcript::default());
         assert!(empty
             .iter()
-            .any(|text| text == "No messages in this window yet."));
+            .any(|text| text == "No messages in this Session yet."));
     }
 
     #[test]

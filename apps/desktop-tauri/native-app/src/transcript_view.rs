@@ -19,7 +19,7 @@ pub(super) fn render_transcript(
             ui.label("Waiting for assistant…");
         });
     }
-    let height = (ui.available_height() - 140.0).max(80.0);
+    let height = (ui.available_height() - 155.0).max(80.0);
     egui::ScrollArea::vertical()
         .id_salt("chat-transcript")
         .auto_shrink([false, false])
@@ -27,46 +27,85 @@ pub(super) fn render_transcript(
         .max_height(height)
         .show(ui, |ui| {
             if transcript.is_empty() && !loading {
-                ui.label("No messages in this window yet.");
+                ui.add_space(18.0);
+                ui.label(
+                    egui::RichText::new("No messages in this Session yet.")
+                        .size(12.0)
+                        .weak(),
+                );
             }
             for row in transcript.rows() {
-                let color = match row.kind {
-                    RowKind::User => egui::Color32::LIGHT_BLUE,
-                    RowKind::Assistant => ui.visuals().strong_text_color(),
-                    RowKind::Job => egui::Color32::LIGHT_GREEN,
-                    RowKind::ToolResult => {
-                        if row.title == "Tool error" {
-                            egui::Color32::LIGHT_RED
-                        } else {
-                            ui.visuals().weak_text_color()
-                        }
-                    }
-                    RowKind::Approval => egui::Color32::YELLOW,
-                    RowKind::Reasoning => ui.visuals().weak_text_color(),
-                    RowKind::Todo => egui::Color32::LIGHT_GREEN,
-                    RowKind::Deliverable => egui::Color32::LIGHT_BLUE,
-                    RowKind::Goal => egui::Color32::YELLOW,
-                    RowKind::Notice => egui::Color32::LIGHT_GRAY,
+                ui.add_space(14.0);
+                let assistant = row.kind == RowKind::Assistant;
+                let avatar_fill = if assistant {
+                    ui.visuals().selection.bg_fill
+                } else {
+                    ui.visuals().widgets.inactive.bg_fill
                 };
-                ui.add(
-                    egui::Label::new(egui::RichText::new(&row.title).strong().color(color))
-                        .wrap()
-                        .selectable(true),
-                );
+                let avatar_text = if assistant {
+                    ui.visuals().hyperlink_color
+                } else {
+                    ui.visuals().weak_text_color()
+                };
+                ui.horizontal(|ui| {
+                    egui::Frame::new()
+                        .fill(avatar_fill)
+                        .corner_radius(6.0)
+                        .inner_margin(egui::Margin::symmetric(6, 4))
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(if row.kind == RowKind::User {
+                                    "Y"
+                                } else if assistant {
+                                    "D"
+                                } else {
+                                    "·"
+                                })
+                                .size(10.0)
+                                .strong()
+                                .color(avatar_text),
+                            );
+                        });
+                    ui.label(egui::RichText::new(&row.title).size(12.0).strong());
+                });
                 if !row.text.is_empty() {
-                    let text = egui::RichText::new(&row.text);
+                    let text = egui::RichText::new(&row.text).size(13.0);
                     let text = match row.kind {
-                        RowKind::ToolResult | RowKind::Job | RowKind::Todo => text.monospace(),
-                        RowKind::Reasoning => text.italics(),
+                        RowKind::ToolResult | RowKind::Job | RowKind::Todo => {
+                            text.monospace().size(11.0)
+                        }
+                        RowKind::Reasoning => text.italics().color(ui.visuals().weak_text_color()),
                         _ => text,
                     };
-                    ui.add(egui::Label::new(text).wrap().selectable(true));
+                    if matches!(row.kind, RowKind::ToolResult | RowKind::Job) {
+                        egui::Frame::new()
+                            .fill(ui.visuals().extreme_bg_color)
+                            .stroke(egui::Stroke::new(
+                                1.0,
+                                ui.visuals().widgets.noninteractive.bg_stroke.color,
+                            ))
+                            .corner_radius(6.0)
+                            .inner_margin(egui::Margin::symmetric(11, 8))
+                            .show(ui, |ui| {
+                                ui.add(egui::Label::new(text).wrap().selectable(true));
+                            });
+                    } else {
+                        ui.horizontal(|ui| {
+                            ui.add_space(34.0);
+                            ui.add(egui::Label::new(text).wrap().selectable(true));
+                        });
+                    }
                 }
                 if row.kind == RowKind::Assistant {
                     if let Some(message_id) = &row.message_id {
                         ui.horizontal(|ui| {
+                            ui.add_space(34.0);
                             if let Some(rating) = feedback.get(message_id) {
-                                ui.label(format!("Feedback: {rating}"));
+                                ui.label(
+                                    egui::RichText::new(format!("Feedback: {rating}"))
+                                        .size(10.0)
+                                        .weak(),
+                                );
                             }
                             if ui.small_button("👍").clicked() {
                                 feedback_actions.push((message_id.clone(), "positive".into()));
@@ -77,19 +116,30 @@ pub(super) fn render_transcript(
                         });
                     }
                 }
-                ui.separator();
             }
             if !draft.trim().is_empty() {
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new("Assistant (streaming)")
+                ui.add_space(14.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("D")
+                            .size(11.0)
                             .strong()
-                            .color(ui.visuals().strong_text_color()),
-                    )
-                    .wrap(),
-                );
-                ui.add(egui::Label::new(draft).wrap().selectable(true));
-                ui.separator();
+                            .color(ui.visuals().hyperlink_color),
+                    );
+                    ui.label(
+                        egui::RichText::new("Assistant · streaming")
+                            .size(12.0)
+                            .strong(),
+                    );
+                });
+                ui.horizontal(|ui| {
+                    ui.add_space(34.0);
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(draft).size(13.0))
+                            .wrap()
+                            .selectable(true),
+                    );
+                });
             }
         });
 }

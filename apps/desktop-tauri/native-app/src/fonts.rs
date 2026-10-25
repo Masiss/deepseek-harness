@@ -98,7 +98,11 @@ impl FontCatalog {
             if !is_loadable_face(file) {
                 continue;
             }
-            let Some(name) = names.split(',').map(str::trim).find(|name| !name.is_empty()) else {
+            let Some(name) = names
+                .split(',')
+                .map(str::trim)
+                .find(|name| !name.is_empty())
+            else {
                 continue;
             };
             if families.iter().any(|known| known.name == name) {
@@ -153,7 +157,9 @@ impl FontCatalog {
                 file: PathBuf::from(path),
             });
         }
-        catalog.families.sort_by_key(|family| family.name.to_lowercase());
+        catalog
+            .families
+            .sort_by_key(|family| family.name.to_lowercase());
         catalog
     }
 
@@ -265,10 +271,9 @@ pub fn install(
             match catalog.file_for(chosen).and_then(|path| read_face(path)) {
                 Some(bytes) => {
                     let name = format!("preferred-{}", chosen.replace(' ', "-"));
-                    definitions.font_data.insert(
-                        name.clone(),
-                        Arc::new(egui::FontData::from_owned(bytes)),
-                    );
+                    definitions
+                        .font_data
+                        .insert(name.clone(), Arc::new(egui::FontData::from_owned(bytes)));
                     Some(name)
                 }
                 None => {
@@ -316,7 +321,8 @@ pub fn install(
 mod tests {
     use super::*;
 
-    const SAMPLE: &str = "JetBrains Mono,JetBrains Mono NL\t/usr/share/fonts/TTF/JetBrainsMono-Regular.ttf\n\
+    const SAMPLE: &str =
+        "JetBrains Mono,JetBrains Mono NL\t/usr/share/fonts/TTF/JetBrainsMono-Regular.ttf\n\
 Noto Sans CJK JP\t/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc\n\
 Liberation Sans\t/usr/share/fonts/liberation/LiberationSans-Regular.ttf\n\
 Liberation Sans\t/usr/share/fonts/liberation/LiberationSans-Bold.ttf\n\

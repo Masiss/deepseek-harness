@@ -4,7 +4,7 @@
 use dsh_client_core::{
     commands::{CommandResult, CommandSubmitAttachment, CommandsClient},
     goals::{CreateGoalRequest, EditGoalRequest, GoalActivation, GoalPhase, GoalRef, GoalsClient},
-    marketplace::MarketplaceClient,
+    marketplace::{MarketplaceClient, MarketplaceInstallOptions},
     office_to_pdf::OfficeToPdfClient,
     plugins::PluginsClient,
     session::{
@@ -708,12 +708,45 @@ fn plugin_and_marketplace_operations_preserve_application_failures() {
             .unwrap()["total"],
         0
     );
+    let options = MarketplaceInstallOptions::default();
     assert_eq!(
-        market.inspect("file:/fixture/probe.tgz").unwrap()["name"],
+        market.inspect("file:/fixture/probe.tgz", &options).unwrap()["name"],
         "@fixture/probe"
     );
-    let install = market.install_bundle("file:/fixture/probe.tgz").unwrap();
+    let install = market
+        .install_bundle("file:/fixture/probe.tgz", &options)
+        .unwrap();
     assert_eq!(install["application"], "restart-required");
+}
+
+#[test]
+fn marketplace_install_options_reach_inspect_and_install() {
+    let mut host = HostFixture::new();
+    let options = MarketplaceInstallOptions {
+        registry: Some("http://127.0.0.1:31337/".into()),
+    };
+    host.ok(
+        "pluginManager/inspect",
+        json!({"spec":"@fixture/probe@1.0.0","options":{"registry":"http://127.0.0.1:31337/"}}),
+        json!({"status":"accepted","name":"@fixture/probe","registry":"http://127.0.0.1:31337/"}),
+    );
+    host.ok(
+        "pluginManager/installBundle",
+        json!({"spec":"@fixture/probe@1.0.0","options":{"registry":"http://127.0.0.1:31337/"}}),
+        json!({"application":"applied"}),
+    );
+
+    let market = MarketplaceClient::new(&host.transport);
+    assert_eq!(
+        market.inspect("@fixture/probe@1.0.0", &options).unwrap()["status"],
+        "accepted"
+    );
+    assert_eq!(
+        market
+            .install_bundle("@fixture/probe@1.0.0", &options)
+            .unwrap()["application"],
+        "applied"
+    );
 }
 
 #[test]

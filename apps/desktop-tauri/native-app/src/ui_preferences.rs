@@ -10,15 +10,19 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
 /// First on-disk format; its fields are all still read, new ones stay defaulted.
 const SCHEMA_VERSION_V1: u32 = 1;
+/// Appearance/editor format before the workspace panel preferences were added.
+const SCHEMA_VERSION_V2: u32 = 2;
 const UI_SCALE_MIN: f32 = 0.8;
 const UI_SCALE_MAX: f32 = 1.5;
 const RADIUS_MIN: f32 = 0.0;
 const RADIUS_MAX: f32 = 12.0;
 const SESSION_PANEL_WIDTH_MIN: f32 = crate::layout::SIDEBAR_MIN;
 const SESSION_PANEL_WIDTH_MAX: f32 = crate::layout::SIDEBAR_MAX;
+const WORKSPACE_PANEL_WIDTH_MIN: f32 = crate::layout::EXPLORER_MIN;
+const WORKSPACE_PANEL_WIDTH_MAX: f32 = crate::layout::EXPLORER_MAX;
 const INVALID_CHORD: &str = "keyboard shortcuts look like Ctrl+Shift+S, or none";
 
 static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
@@ -61,7 +65,7 @@ pub enum UiDensity {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ThemePack {
-    /// The egui theme's own palette.
+    /// The native Harness palette used by the supplied desktop design.
     #[default]
     Default,
     /// Maximum text and border contrast.
@@ -165,29 +169,29 @@ impl ThemePalette {
 
     fn dark_default() -> Self {
         Self {
-            background: ThemeColor("#1B1B1B".to_owned()),
-            surface: ThemeColor("#232323".to_owned()),
-            text: ThemeColor("#E6E6E6".to_owned()),
-            muted: ThemeColor("#A0A0A0".to_owned()),
-            accent: ThemeColor("#2F6FEB".to_owned()),
-            selection: ThemeColor("#2F6FEB".to_owned()),
-            border: ThemeColor("#3A3A3A".to_owned()),
-            warn: ThemeColor("#EAB308".to_owned()),
-            error: ThemeColor("#DC2626".to_owned()),
+            background: ThemeColor("#171A1F".to_owned()),
+            surface: ThemeColor("#22272E".to_owned()),
+            text: ThemeColor("#EEF1F4".to_owned()),
+            muted: ThemeColor("#929BA6".to_owned()),
+            accent: ThemeColor("#E95618".to_owned()),
+            selection: ThemeColor("#3B2A23".to_owned()),
+            border: ThemeColor("#353D47".to_owned()),
+            warn: ThemeColor("#E7C979".to_owned()),
+            error: ThemeColor("#FF9B70".to_owned()),
         }
     }
 
     fn light_default() -> Self {
         Self {
-            background: ThemeColor("#FAFAFA".to_owned()),
+            background: ThemeColor("#F1F2F3".to_owned()),
             surface: ThemeColor("#FFFFFF".to_owned()),
-            text: ThemeColor("#111111".to_owned()),
-            muted: ThemeColor("#6B6B6B".to_owned()),
-            accent: ThemeColor("#2F6FEB".to_owned()),
-            selection: ThemeColor("#2F6FEB".to_owned()),
-            border: ThemeColor("#E5E5E5".to_owned()),
-            warn: ThemeColor("#A16207".to_owned()),
-            error: ThemeColor("#DC2626".to_owned()),
+            text: ThemeColor("#20201F".to_owned()),
+            muted: ThemeColor("#70706B".to_owned()),
+            accent: ThemeColor("#E95618".to_owned()),
+            selection: ThemeColor("#FFF1E9".to_owned()),
+            border: ThemeColor("#E6E6E3".to_owned()),
+            warn: ThemeColor("#795B1A".to_owned()),
+            error: ThemeColor("#9C3916".to_owned()),
         }
     }
 }
@@ -234,15 +238,24 @@ impl CustomTheme {
 ///
 /// A family name matches an installed face; an empty name keeps the face egui
 /// bundles, which is what every preference file written before this field had.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FontSettings {
     /// Family used for interface text.
-    #[serde(default)]
+    #[serde(default = "default_interface_font")]
     pub proportional: String,
     /// Family used for code, transcripts, and terminals.
-    #[serde(default)]
+    #[serde(default = "default_code_font")]
     pub monospace: String,
+}
+
+impl Default for FontSettings {
+    fn default() -> Self {
+        Self {
+            proportional: default_interface_font(),
+            monospace: default_code_font(),
+        }
+    }
 }
 
 /// Client-local shortcuts, written as `Ctrl+Shift+S` or `none`.
@@ -388,6 +401,12 @@ pub struct UiPreferences {
     /// Initial width of the resizable Sessions panel.
     #[serde(default = "default_session_panel_width")]
     pub session_panel_width: f32,
+    /// Whether the Session workspace Explorer opens by default.
+    #[serde(default = "default_workspace_explorer_visible")]
+    pub show_workspace_explorer: bool,
+    /// Initial width of the resizable workspace Explorer.
+    #[serde(default = "default_workspace_panel_width")]
+    pub workspace_panel_width: f32,
 }
 
 impl Default for UiPreferences {
@@ -403,6 +422,8 @@ impl Default for UiPreferences {
             radius: default_radius(),
             keybindings: Keybindings::default(),
             session_panel_width: default_session_panel_width(),
+            show_workspace_explorer: default_workspace_explorer_visible(),
+            workspace_panel_width: default_workspace_panel_width(),
         }
     }
 }
@@ -437,7 +458,9 @@ impl UiPreferences {
             })?;
         // Version 1 files predate the custom palette, fonts, and radius; every new
         // field defaults, so the generation upgrade keeps the stored choices.
-        if preferences.schema_version == SCHEMA_VERSION_V1 {
+        if preferences.schema_version == SCHEMA_VERSION_V1
+            || preferences.schema_version == SCHEMA_VERSION_V2
+        {
             preferences.schema_version = SCHEMA_VERSION;
         }
         preferences.validate()?;
@@ -463,6 +486,14 @@ impl UiPreferences {
         {
             return Err(UiPreferencesError::InvalidValue(
                 "sessionPanelWidth must be from 220 to 400",
+            ));
+        }
+        if !self.workspace_panel_width.is_finite()
+            || !(WORKSPACE_PANEL_WIDTH_MIN..=WORKSPACE_PANEL_WIDTH_MAX)
+                .contains(&self.workspace_panel_width)
+        {
+            return Err(UiPreferencesError::InvalidValue(
+                "workspacePanelWidth must be within the Explorer panel range",
             ));
         }
         if !self.radius.is_finite() || !(RADIUS_MIN..=RADIUS_MAX).contains(&self.radius) {
@@ -603,6 +634,7 @@ struct Palette {
     text: Color32,
     selection: Color32,
     accent: Color32,
+    accent_text: Color32,
     widget: Color32,
     stroke: Color32,
     muted: Color32,
@@ -612,7 +644,30 @@ struct Palette {
 
 fn palette(pack: ThemePack, dark: bool, custom: &CustomTheme) -> Option<Palette> {
     match (pack, dark) {
-        (ThemePack::Default, _) => None,
+        (ThemePack::Default, dark) => {
+            let palette = if dark {
+                ThemePalette::dark_default()
+            } else {
+                ThemePalette::light_default()
+            };
+            Some(Palette {
+                panel: palette.background.color_or(Color32::BLACK),
+                extreme: palette.surface.color_or(Color32::BLACK),
+                text: palette.text.color_or(Color32::WHITE),
+                selection: palette.selection.color_or(Color32::BLUE),
+                accent: palette.accent.color_or(Color32::LIGHT_BLUE),
+                accent_text: if dark {
+                    Color32::from_rgb(0xff, 0x9b, 0x70)
+                } else {
+                    Color32::from_rgb(0xa8, 0x3b, 0x10)
+                },
+                widget: palette.surface.color_or(Color32::BLACK),
+                stroke: palette.border.color_or(Color32::GRAY),
+                muted: palette.muted.color_or(Color32::GRAY),
+                warn: palette.warn.color_or(Color32::YELLOW),
+                error: palette.error.color_or(Color32::RED),
+            })
+        }
         (ThemePack::Custom, dark) => {
             let palette = custom.for_scheme(dark);
             let fallback = if dark {
@@ -626,6 +681,7 @@ fn palette(pack: ThemePack, dark: bool, custom: &CustomTheme) -> Option<Palette>
                 text: palette.text.color_or(Color32::WHITE),
                 selection: palette.selection.color_or(Color32::BLUE),
                 accent: palette.accent.color_or(Color32::LIGHT_BLUE),
+                accent_text: palette.accent.color_or(Color32::LIGHT_BLUE),
                 widget: palette.surface.color_or(fallback),
                 stroke: palette.border.color_or(Color32::GRAY),
                 muted: palette.muted.color_or(Color32::GRAY),
@@ -639,6 +695,7 @@ fn palette(pack: ThemePack, dark: bool, custom: &CustomTheme) -> Option<Palette>
             text: Color32::WHITE,
             selection: Color32::from_rgb(0xff, 0xf2, 0x00),
             accent: Color32::from_rgb(0x00, 0xe5, 0xff),
+            accent_text: Color32::from_rgb(0x00, 0xe5, 0xff),
             widget: Color32::BLACK,
             stroke: Color32::WHITE,
             muted: Color32::WHITE,
@@ -651,6 +708,7 @@ fn palette(pack: ThemePack, dark: bool, custom: &CustomTheme) -> Option<Palette>
             text: Color32::BLACK,
             selection: Color32::from_rgb(0x00, 0x00, 0xff),
             accent: Color32::from_rgb(0x00, 0x44, 0xaa),
+            accent_text: Color32::from_rgb(0x00, 0x44, 0xaa),
             widget: Color32::WHITE,
             stroke: Color32::BLACK,
             muted: Color32::BLACK,
@@ -663,6 +721,7 @@ fn palette(pack: ThemePack, dark: bool, custom: &CustomTheme) -> Option<Palette>
             text: Color32::from_rgb(0x83, 0x94, 0x96),
             selection: Color32::from_rgb(0x26, 0x8b, 0xd2),
             accent: Color32::from_rgb(0x2a, 0xa1, 0x98),
+            accent_text: Color32::from_rgb(0x2a, 0xa1, 0x98),
             widget: Color32::from_rgb(0x07, 0x36, 0x42),
             stroke: Color32::from_rgb(0x58, 0x6e, 0x75),
             muted: Color32::from_rgb(0x93, 0xa1, 0xa1),
@@ -675,6 +734,7 @@ fn palette(pack: ThemePack, dark: bool, custom: &CustomTheme) -> Option<Palette>
             text: Color32::from_rgb(0x65, 0x7b, 0x83),
             selection: Color32::from_rgb(0x26, 0x8b, 0xd2),
             accent: Color32::from_rgb(0x2a, 0xa1, 0x98),
+            accent_text: Color32::from_rgb(0x2a, 0xa1, 0x98),
             widget: Color32::from_rgb(0xee, 0xe8, 0xd5),
             stroke: Color32::from_rgb(0x93, 0xa1, 0xa1),
             muted: Color32::from_rgb(0x65, 0x7b, 0x83),
@@ -682,6 +742,14 @@ fn palette(pack: ThemePack, dark: bool, custom: &CustomTheme) -> Option<Palette>
             error: Color32::from_rgb(0xdc, 0x32, 0x2f),
         }),
     }
+}
+
+/// Returns the active accent fill for buttons that carry the primary action.
+pub(crate) fn accent_fill(preferences: &UiPreferences, dark: bool) -> Color32 {
+    palette(preferences.theme_pack, dark, &preferences.custom_theme).map_or_else(
+        || Color32::from_rgb(0xe9, 0x56, 0x18),
+        |palette| palette.accent,
+    )
 }
 
 fn apply_corner_radius(visuals: &mut egui::Visuals, radius: egui::CornerRadius) {
@@ -707,7 +775,7 @@ fn apply_theme_pack(visuals: &mut egui::Visuals, pack: ThemePack, custom: &Custo
     visuals.extreme_bg_color = palette.extreme;
     visuals.faint_bg_color = palette.panel;
     visuals.override_text_color = Some(palette.text);
-    visuals.hyperlink_color = palette.accent;
+    visuals.hyperlink_color = palette.accent_text;
     visuals.selection.bg_fill = palette.selection;
     visuals.selection.stroke.color = palette.text;
     visuals.widgets.noninteractive.bg_fill = palette.panel;
@@ -740,9 +808,19 @@ pub enum UiPreferencesAction {
     Reset,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum UiPreferencesTab {
+    #[default]
+    Appearance,
+    Layout,
+    Shortcuts,
+    Advanced,
+}
+
 /// Draft editor for client-local appearance preferences.
 pub struct UiPreferencesPanel {
     draft: UiPreferences,
+    tab: UiPreferencesTab,
     config_text: String,
     config_dirty: bool,
     config_error: Option<String>,
@@ -758,6 +836,7 @@ impl UiPreferencesPanel {
             .unwrap_or_else(|_| "{}".to_owned());
         Self {
             draft: preferences,
+            tab: UiPreferencesTab::Appearance,
             config_text,
             config_dirty: false,
             config_error: None,
@@ -779,8 +858,19 @@ impl UiPreferencesPanel {
         catalog: Option<&crate::fonts::FontCatalog>,
     ) -> Option<UiPreferencesAction> {
         let mut action = None;
-        ui.heading("Interface preferences");
-        ui.label("These settings belong to the native app. Host settings below change agent configuration.");
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.heading(egui::RichText::new("Settings").size(16.0));
+                ui.label(
+                    egui::RichText::new("Local interface preferences · Host settings are separate")
+                        .size(10.0)
+                        .weak(),
+                );
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(egui::RichText::new("CLIENT-LOCAL").size(9.0).weak());
+            });
+        });
         if let Some(error) = &self.load_error {
             ui.colored_label(
                 ui.visuals().error_fg_color,
@@ -798,126 +888,164 @@ impl UiPreferencesPanel {
             ui.label(status);
         }
 
-        let original_draft = self.draft.clone();
-        section(ui, "Appearance");
-        egui::ComboBox::from_label("Theme")
-            .selected_text(theme_label(self.draft.theme))
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut self.draft.theme, ThemeMode::System, "System");
-                ui.selectable_value(&mut self.draft.theme, ThemeMode::Light, "Light");
-                ui.selectable_value(&mut self.draft.theme, ThemeMode::Dark, "Dark");
-            });
-        ui.add(
-            egui::Slider::new(&mut self.draft.ui_scale, UI_SCALE_MIN..=UI_SCALE_MAX)
-                .step_by(0.05)
-                .text("UI scale"),
-        );
         ui.horizontal(|ui| {
-            ui.label("Density");
-            ui.selectable_value(
-                &mut self.draft.density,
-                UiDensity::Comfortable,
-                "Comfortable",
-            );
-            ui.selectable_value(&mut self.draft.density, UiDensity::Compact, "Compact");
-        });
-        ui.add(
-            egui::Slider::new(&mut self.draft.radius, RADIUS_MIN..=RADIUS_MAX)
-                .step_by(1.0)
-                .text("Corner radius"),
-        );
-
-        section(ui, "Colors");
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Theme pack");
-            for (pack, label) in [
-                (ThemePack::Default, "Default"),
-                (ThemePack::HighContrast, "High contrast"),
-                (ThemePack::Solarized, "Solarized"),
-                (ThemePack::Custom, "Custom"),
+            for (tab, label) in [
+                (UiPreferencesTab::Appearance, "Appearance"),
+                (UiPreferencesTab::Layout, "Layout"),
+                (UiPreferencesTab::Shortcuts, "Shortcuts"),
+                (UiPreferencesTab::Advanced, "Advanced"),
             ] {
-                ui.selectable_value(&mut self.draft.theme_pack, pack, label);
+                ui.selectable_value(&mut self.tab, tab, label);
             }
         });
-        if self.draft.theme_pack == ThemePack::Custom {
-            let dark = ui.visuals().dark_mode;
-            ui.small(format!(
-                "Editing the {} palette. The Theme above chooses which palette renders.",
-                if dark { "dark" } else { "light" }
-            ));
-            let mut changed = false;
-            for (role, color) in self.draft.custom_theme.for_scheme_mut(dark).roles_mut() {
-                changed |= color_row(ui, role, color);
-            }
-            if ui.button("Reset custom colors").clicked() {
-                let defaults = CustomTheme::default();
-                *self.draft.custom_theme.for_scheme_mut(dark) = defaults.for_scheme(dark).clone();
-                changed = true;
-            }
-            let _ = changed;
-        } else {
-            ui.small("Choose Custom to edit every role color for the active light or dark theme.");
-        }
+        ui.separator();
 
-        section(ui, "Fonts");
-        font_row(
-            ui,
-            "Interface font",
-            &mut self.draft.fonts.proportional,
-            catalog,
-        );
-        font_row(ui, "Code font", &mut self.draft.fonts.monospace, catalog);
-        let missing: Vec<&str> = [&self.draft.fonts.proportional, &self.draft.fonts.monospace]
-            .into_iter()
-            .filter(|family| {
-                !family.is_empty()
-                    && catalog.is_some_and(|catalog| catalog.file_for(family).is_none())
-            })
-            .map(String::as_str)
-            .collect();
-        if !missing.is_empty() {
-            ui.colored_label(
-                ui.visuals().error_fg_color,
-                format!(
+        let original_draft = self.draft.clone();
+        if self.tab == UiPreferencesTab::Appearance {
+            section(ui, "Appearance");
+            egui::ComboBox::from_label("Theme")
+                .selected_text(theme_label(self.draft.theme))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.draft.theme, ThemeMode::System, "System");
+                    ui.selectable_value(&mut self.draft.theme, ThemeMode::Light, "Light");
+                    ui.selectable_value(&mut self.draft.theme, ThemeMode::Dark, "Dark");
+                });
+            ui.add(
+                egui::Slider::new(&mut self.draft.ui_scale, UI_SCALE_MIN..=UI_SCALE_MAX)
+                    .step_by(0.05)
+                    .text("UI scale"),
+            );
+            ui.horizontal(|ui| {
+                ui.label("Density");
+                ui.selectable_value(
+                    &mut self.draft.density,
+                    UiDensity::Comfortable,
+                    "Comfortable",
+                );
+                ui.selectable_value(&mut self.draft.density, UiDensity::Compact, "Compact");
+            });
+            ui.add(
+                egui::Slider::new(&mut self.draft.radius, RADIUS_MIN..=RADIUS_MAX)
+                    .step_by(1.0)
+                    .text("Corner radius"),
+            );
+
+            section(ui, "Colors");
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Theme pack");
+                for (pack, label) in [
+                    (ThemePack::Default, "Harness"),
+                    (ThemePack::HighContrast, "High contrast"),
+                    (ThemePack::Solarized, "Solarized"),
+                    (ThemePack::Custom, "Custom"),
+                ] {
+                    ui.selectable_value(&mut self.draft.theme_pack, pack, label);
+                }
+            });
+            if self.draft.theme_pack == ThemePack::Custom {
+                let dark = ui.visuals().dark_mode;
+                ui.small(format!(
+                    "Editing the {} palette. The Theme above chooses which palette renders.",
+                    if dark { "dark" } else { "light" }
+                ));
+                let mut changed = false;
+                for (role, color) in self.draft.custom_theme.for_scheme_mut(dark).roles_mut() {
+                    changed |= color_row(ui, role, color);
+                }
+                if ui.button("Reset custom colors").clicked() {
+                    let defaults = CustomTheme::default();
+                    *self.draft.custom_theme.for_scheme_mut(dark) =
+                        defaults.for_scheme(dark).clone();
+                    changed = true;
+                }
+                let _ = changed;
+            } else {
+                ui.small(
+                    "Choose Custom to edit every role color for the active light or dark theme.",
+                );
+            }
+
+            section(ui, "Fonts");
+            font_row(
+                ui,
+                "Interface font",
+                &mut self.draft.fonts.proportional,
+                catalog,
+            );
+            font_row(ui, "Code font", &mut self.draft.fonts.monospace, catalog);
+            let missing: Vec<&str> = [&self.draft.fonts.proportional, &self.draft.fonts.monospace]
+                .into_iter()
+                .filter(|family| {
+                    !family.is_empty()
+                        && catalog.is_some_and(|catalog| catalog.file_for(family).is_none())
+                })
+                .map(String::as_str)
+                .collect();
+            if !missing.is_empty() {
+                ui.colored_label(
+                    ui.visuals().error_fg_color,
+                    format!(
                     "Not installed: {}. The bundled face is used until another family is chosen.",
                     missing.join(", ")
                 ),
-            );
-        }
-        let sample = egui::RichText::new("Aa 0123 — việt · →  { code }");
-        ui.label(sample);
-        if catalog.is_none() {
-            ui.small("Scanning installed fonts…");
+                );
+            }
+            let sample = egui::RichText::new("Aa 0123 — việt · →  { code }");
+            ui.label(sample);
+            if catalog.is_none() {
+                ui.small("Scanning installed fonts…");
+            }
         }
 
-        ui.add_space(8.0);
-        ui.separator();
-        ui.collapsing("Keyboard shortcuts", |ui| {
-            for (label, value) in [
-                ("Open settings", &mut self.draft.keybindings.open_settings),
-                (
-                    "Open marketplace",
-                    &mut self.draft.keybindings.open_marketplace,
-                ),
-                ("Open goals", &mut self.draft.keybindings.open_goals),
-                ("New session", &mut self.draft.keybindings.new_session),
-            ] {
-                ui.horizontal(|ui| {
-                    ui.label(label);
-                    ui.add(egui::TextEdit::singleline(value).desired_width(160.0));
-                });
-            }
-            ui.small("Write a chord like Ctrl+Shift+S, or none to disable it.");
-        });
-        ui.add(
-            egui::Slider::new(
-                &mut self.draft.session_panel_width,
-                SESSION_PANEL_WIDTH_MIN..=SESSION_PANEL_WIDTH_MAX,
-            )
-            .step_by(10.0)
-            .text("Sessions panel default width"),
-        );
-        ui.small("The default width applies when the Sessions panel opens on the next launch.");
+        if self.tab == UiPreferencesTab::Shortcuts {
+            ui.add_space(8.0);
+            ui.separator();
+            ui.collapsing("Keyboard shortcuts", |ui| {
+                for (label, value) in [
+                    ("Open settings", &mut self.draft.keybindings.open_settings),
+                    (
+                        "Open marketplace",
+                        &mut self.draft.keybindings.open_marketplace,
+                    ),
+                    ("Open goals", &mut self.draft.keybindings.open_goals),
+                    ("New session", &mut self.draft.keybindings.new_session),
+                ] {
+                    ui.horizontal(|ui| {
+                        ui.label(label);
+                        ui.add(egui::TextEdit::singleline(value).desired_width(160.0));
+                    });
+                }
+                ui.small("Write a chord like Ctrl+Shift+S, or none to disable it.");
+            });
+        }
+
+        if self.tab == UiPreferencesTab::Layout {
+            ui.add(
+                egui::Slider::new(
+                    &mut self.draft.session_panel_width,
+                    SESSION_PANEL_WIDTH_MIN..=SESSION_PANEL_WIDTH_MAX,
+                )
+                .step_by(10.0)
+                .text("Sessions panel default width"),
+            );
+            ui.small("The default width applies when the Sessions panel opens on the next launch.");
+            section(ui, "Workspace Explorer");
+            ui.checkbox(
+                &mut self.draft.show_workspace_explorer,
+                "Show the Explorer beside the conversation",
+            );
+            ui.add(
+                egui::Slider::new(
+                    &mut self.draft.workspace_panel_width,
+                    WORKSPACE_PANEL_WIDTH_MIN..=WORKSPACE_PANEL_WIDTH_MAX,
+                )
+                .step_by(10.0)
+                .text("Explorer panel default width"),
+            );
+            ui.small(
+                "The dock opens above 1240px. Drag its divider to resize it for this session.",
+            );
+        }
         if self.draft != original_draft {
             self.status =
                 Some("Form controls changed; JSON draft refreshed and remains unsaved.".into());
@@ -929,26 +1057,29 @@ impl UiPreferencesPanel {
             self.config_error = None;
         }
 
-        ui.collapsing("Advanced JSON config", |ui| {
-            ui.label(path.display().to_string());
-            if ui
-                .add(
-                    egui::TextEdit::multiline(&mut self.config_text)
-                        .code_editor()
-                        .desired_rows(10)
-                        .desired_width(f32::INFINITY),
-                )
-                .changed()
-            {
-                self.config_dirty = true;
-            }
-            if ui.button("Apply JSON draft").clicked() {
-                if let Some(preferences) = self.parse_config_draft() {
-                    self.status = Some("Draft applied for this session; save to keep it.".into());
-                    action = Some(UiPreferencesAction::Preview(preferences));
+        if self.tab == UiPreferencesTab::Advanced {
+            ui.collapsing("Advanced JSON config", |ui| {
+                ui.label(path.display().to_string());
+                if ui
+                    .add(
+                        egui::TextEdit::multiline(&mut self.config_text)
+                            .code_editor()
+                            .desired_rows(10)
+                            .desired_width(f32::INFINITY),
+                    )
+                    .changed()
+                {
+                    self.config_dirty = true;
                 }
-            }
-        });
+                if ui.button("Apply JSON draft").clicked() {
+                    if let Some(preferences) = self.parse_config_draft() {
+                        self.status =
+                            Some("Draft applied for this session; save to keep it.".into());
+                        action = Some(UiPreferencesAction::Preview(preferences));
+                    }
+                }
+            });
+        }
 
         ui.horizontal(|ui| {
             if ui.button("Preview changes").clicked() {
@@ -1226,6 +1357,22 @@ fn default_session_panel_width() -> f32 {
     crate::layout::SIDEBAR_DEFAULT
 }
 
+fn default_workspace_explorer_visible() -> bool {
+    true
+}
+
+fn default_workspace_panel_width() -> f32 {
+    crate::layout::EXPLORER_DEFAULT
+}
+
+fn default_interface_font() -> String {
+    "Noto Sans".to_owned()
+}
+
+fn default_code_font() -> String {
+    "Noto Sans Mono".to_owned()
+}
+
 fn default_open_settings() -> String {
     "Ctrl+Comma".to_owned()
 }
@@ -1304,6 +1451,8 @@ mod tests {
             ui_scale: 1.2,
             density: UiDensity::Compact,
             session_panel_width: 320.0,
+            show_workspace_explorer: false,
+            workspace_panel_width: 440.0,
             ..UiPreferences::default()
         };
         preferences.save(&path).unwrap();
@@ -1315,9 +1464,10 @@ mod tests {
     #[test]
     fn rejects_unsupported_versions_invalid_values_and_unknown_fields() {
         for text in [
-            r#"{"schemaVersion":3}"#,
+            r#"{"schemaVersion":4}"#,
             r#"{"uiScale":3.0}"#,
             r#"{"sessionPanelWidth":500.0}"#,
+            r#"{"workspacePanelWidth":600.0}"#,
             r#"{"theme":"sepia"}"#,
             r#"{"unknown":true}"#,
         ] {
@@ -1341,8 +1491,33 @@ mod tests {
         assert_eq!(loaded.theme, ThemeMode::Dark);
         assert_eq!(loaded.theme_pack, ThemePack::Solarized);
         assert_eq!(loaded.session_panel_width, 300.0);
+        assert!(loaded.show_workspace_explorer);
+        assert_eq!(
+            loaded.workspace_panel_width,
+            default_workspace_panel_width()
+        );
         assert_eq!(loaded.fonts, FontSettings::default());
         assert_eq!(loaded.custom_theme, CustomTheme::default());
+    }
+
+    #[test]
+    fn reads_a_version_two_file_and_defaults_workspace_explorer_preferences() {
+        let directory = TestDirectory::new();
+        let path = directory.file();
+        fs::write(
+            &path,
+            r#"{"schemaVersion":2,"theme":"dark","sessionPanelWidth":320.0}"#,
+        )
+        .unwrap();
+        let loaded = UiPreferences::load(&path).unwrap();
+        assert_eq!(loaded.schema_version, SCHEMA_VERSION);
+        assert_eq!(loaded.theme, ThemeMode::Dark);
+        assert_eq!(loaded.session_panel_width, 320.0);
+        assert!(loaded.show_workspace_explorer);
+        assert_eq!(
+            loaded.workspace_panel_width,
+            default_workspace_panel_width()
+        );
     }
 
     #[test]
@@ -1486,6 +1661,21 @@ mod tests {
         assert_eq!(dark.override_text_color, Some(egui::Color32::WHITE));
         let light = context.style_of(egui::Theme::Light).visuals.clone();
         assert_eq!(light.panel_fill, egui::Color32::WHITE);
+    }
+
+    #[test]
+    fn default_theme_uses_the_harness_dark_and_light_tokens() {
+        let custom = CustomTheme::default();
+        let dark = palette(ThemePack::Default, true, &custom).expect("dark Harness palette");
+        assert_eq!(dark.panel, Color32::from_rgb(0x17, 0x1a, 0x1f));
+        assert_eq!(dark.extreme, Color32::from_rgb(0x22, 0x27, 0x2e));
+        assert_eq!(dark.accent, Color32::from_rgb(0xe9, 0x56, 0x18));
+        assert_eq!(dark.accent_text, Color32::from_rgb(0xff, 0x9b, 0x70));
+
+        let light = palette(ThemePack::Default, false, &custom).expect("light Harness palette");
+        assert_eq!(light.panel, Color32::from_rgb(0xf1, 0xf2, 0xf3));
+        assert_eq!(light.accent, Color32::from_rgb(0xe9, 0x56, 0x18));
+        assert_eq!(light.accent_text, Color32::from_rgb(0xa8, 0x3b, 0x10));
     }
 
     #[test]

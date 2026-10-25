@@ -350,8 +350,7 @@ impl Screen {
                 break;
             }
             self.rows.remove(top);
-            self.rows
-                .insert(bottom.min(self.rows.len()), Vec::new());
+            self.rows.insert(bottom.min(self.rows.len()), Vec::new());
         }
         if self.row > bottom {
             self.row = bottom;
@@ -441,9 +440,9 @@ impl Screen {
             return;
         }
         for _ in 0..count {
-            self.rows.remove(bottom.min(self.rows.len().saturating_sub(1)));
             self.rows
-                .insert(self.row.min(self.rows.len()), Vec::new());
+                .remove(bottom.min(self.rows.len().saturating_sub(1)));
+            self.rows.insert(self.row.min(self.rows.len()), Vec::new());
         }
     }
 
@@ -457,14 +456,17 @@ impl Screen {
                 break;
             }
             self.rows.remove(self.row);
-            self.rows
-                .insert(bottom.min(self.rows.len()), Vec::new());
+            self.rows.insert(bottom.min(self.rows.len()), Vec::new());
         }
     }
 
     fn insert_chars(&mut self, count: usize) {
         self.ensure_row();
-        let limit = if self.width > 0 { self.width } else { usize::MAX };
+        let limit = if self.width > 0 {
+            self.width
+        } else {
+            usize::MAX
+        };
         let line = &mut self.rows[self.row];
         for _ in 0..count {
             if line.len() >= limit {

@@ -227,7 +227,7 @@ impl SettingsPanel {
                 return;
             }
 
-            egui::ComboBox::from_id_salt("namespace")
+            let namespace_picker = egui::ComboBox::from_id_salt("namespace")
                 .selected_text(self.selected_namespace.as_deref().unwrap_or_default())
                 .show_ui(ui, |ui| {
                     for namespace in &description.namespaces {
@@ -238,6 +238,7 @@ impl SettingsPanel {
                         );
                     }
                 });
+            crate::accessible_button_label(&namespace_picker.response, "Settings namespace");
             ui.checkbox(&mut self.pretty_json, "Pretty-print JSON");
             ui.separator();
 

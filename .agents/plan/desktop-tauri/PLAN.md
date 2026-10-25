@@ -233,7 +233,7 @@ Lane tập trung **Linux**; **macOS và Windows để pending** cho tới khi c�
 
 **Còn giữ nguyên:** toàn bộ tính năng dsh nằm ở **Host** (tools, plugin, session, model, provider, terminal, sandbox) — client native nói chuyện với Host qua **đúng API** web client dùng ⇒ không mất tính năng harness. Mất là **bề mặt UI** (66 package `packages/client/*`) phải viết lại, và **UX mới của upstream không tự về** ⇒ có quy trình đối chiếu (M9).
 
-**Mốc (thứ tự theo rủi ro, Q13) — trạng thái thực tế (2026-10-24):**
+**Mốc (thứ tự theo rủi ro, Q13) — trạng thái thực tế (2026-10-25):**
 
 | Mốc | Nội dung | Trạng thái | Ghi chú |
 |---|---|---|---|
@@ -241,43 +241,41 @@ Lane tập trung **Linux**; **macOS và Windows để pending** cho tới khi c�
 | **M2** | Viewer: session list/page, log, trạng thái tool call | **Xong một phần** ◐ | egui list + async page viewer and older-page controls; packaged journey reads a page before and after Host restart, older-page Host coverage remains loopback-only |
 | **M3** | Chat: prompt, cancel, follow stream | **Xong một phần** ◐ | egui prompt + follow qua mux dùng chung; **đính kèm tệp**, **Cancel turn**, **transcript** (message/tool/approval/job + draft streaming) từ snapshot và event sống; lượt thật đã probe bằng mock provider (approval + question), còn thiếu card tool chuyên biệt và reasoning |
 | **M4** | Model selection + session management + approval + goals/plan | **Xong một phần** ◐ | composer model picker/profile-default initializer; session controls and older-page navigation; allow/reject/delegate; Goal lifecycle panel; `/plan` toggles through `commands/execute`. Packaged journey covers session create/rename/page reads, but search/fork and live Goal/Plan writes still lack packaged probes |
-| **M5** | Terminal (PTY): RPC + attach/retain + native panel | **Xong một phần** ◐ | Gateway mux + egui list/create/attach/input/resize; `terminal_ansi` renders SGR, carriage-return overwrite, and erase-to-end-of-line; `TerminalWriter` enforces input/frame budgets. Rust PTY provider passes the isolated probe; native panel still lacks a live PTY journey |
-| **M6** | Settings, plugins, skills, schedules, workspace files, preview | **Xong một phần** ◐ | settings editor, plugin/bundle controls, marketplace, skills/schedules, multipart previews, and Office UI are present. Packaged journey proves one settings mutation persists over restart and plugin tarball lifecycle; registry install and PDF rendering remain unverified |
-| **M7** | Native app shell, Host sidecar, packaging, system integration | **Xong một phần** ◐ | Host/auth, tray, dialogs, signed update prompts, outer-AppImage restart, self-contained runtime, and native AppImage boot pass local probes. Release-lane publication and GUI-driven signed update replacement remain pending |
-| **M8** | Cổng parity: checklist từng màn hình | **Đang làm** ◐ | `.agents/plan/desktop-tauri/PARITY.md`; headless panel geometry passes four viewports and the native shell boots/authenticates under isolated Weston. The 2026-10-24 physical-desktop pass covers rendering, typing, Vietnamese IME, clipboard, theme packs, rebinding, Host-death degradation, and RSS; pointer-only controls (Retry, terminal TUI, update confirmation) and an independent visual review remain pending |
+| **M5** | Terminal (PTY): RPC + attach/retain + native panel | **Xong một phần** ◐ | Gateway mux + egui list/create/attach/input/resize, bracketed paste, X10/SGR mouse click/drag/motion/wheel, bounded ack-ordered input; `native-journey-probe.sh panels` drives a TUI through the panel and packaged Host, including paste/mouse round trips. Physical-window TUI review remains pending |
+| **M6** | Settings, plugins, skills, schedules, workspace files, preview | **Xong một phần** ◐ | Settings, plugin/bundle controls, marketplace, skills/schedules, multipart previews, and Office UI are present. `native-journey-probe.sh panels` installs a loopback registry bundle through the native Marketplace panel and reads it back from the packaged Host; it previews a real Office conversion in the panel and checks a Host-side missing-file failure |
+| **M7** | Native app shell, Host sidecar, packaging, system integration | **Xong một phần** ◐ | Host/auth, tray, dialogs, signed update prompts, outer-AppImage restart, self-contained runtime, and native AppImage boot pass local probes. `native-journey-probe.sh update-ui` clicks both native update prompts and verifies a signed fake-image swap/restart; production feed signing, shipped-image swap, release-lane publication remain pending |
+| **M8** | Cổng parity: checklist từng màn hình | **Đang làm** ◐ | `.agents/plan/desktop-tauri/PARITY.md`; AccessKit fixture tests cover 20 ordinary cases and two ignored packaged-Host journeys. Physical-desktop rendering, typing, Vietnamese IME, clipboard, theme packs, rebinding, Host-death degradation, and RSS were checked 2026-10-24; physical-window visual review, OS-level pointer/TUI input, and Retry after Host recovery remain pending |
 | **M9** | Quy trình kịp upstream | **Xong** ✓ | `.agents/plan/desktop-tauri/UPSTREAM.md` |
 
 **Số đo sàn bộ nhớ (2026-10-22):** Host base-only (không `dsh-web-app`) **≈ 180 MiB RSS / 168 MiB PSS**; Host có webview ~190 MiB ⇒ bỏ bundle web chỉ tiết kiệm ~10 MiB ở Host, **webview ~530 MiB mới là chi phí lớn**. Ước tính native: Host 180 + shell ~30 + client 30–80 = **240–290 MiB** ⇒ đạt `< 300 MiB` nếu giữ transcript có giới hạn + tải plugin lazy.
 
 **Đo thật app native (2026-10-23, Hyprland, cây đóng gói):** sau khi Host sẵn sàng và auth xong, cây tiến trình (app + shell + Host) **263 MiB RSS / 240 MiB PSS** ⇒ **đạt ngân sách < 300 MiB**. `native-gui-probe.sh` in lại được số này trên máy thật.
 
-## Trạng thái hiện tại và việc còn lại — 2026-10-24
+## Trạng thái hiện tại và việc còn lại — 2026-10-25
 
-Release-mode Linux x64 binary và AppImage 87,587,320-byte hiện có chứa UI preferences. `appimage-probe.sh` passes; `native-gui-probe.sh --no-measure` verifies app boot, Host readiness/authentication, and streams under isolated Weston, but does not click the preference controls or measure current RSS. RSS 263–266 MiB / PSS 240–245 MiB is from an earlier build. This is a local experimental artifact, not a signed or supported release.
+Linux native shell có 20 AccessKit UI tests thường; hai ignored tests được chạy bởi `native-journey-probe.sh panels|update-ui` đối với packaged Host. `panels` chứng minh cài Marketplace registry bundle và Host read-back, Office conversion/raster trong native panel, cùng PTY TUI paste/mouse round trip. `update-ui` chứng minh Settings → Check for updates → Download → Install and restart qua AccessKit với signed feed và fake executable. Đây là packaged Host + renderer evidence trong `DSH_HOME` cô lập, không phải physical-window L3 hoặc production release evidence.
 
 Trước khi coi Goal 3 là dùng hằng ngày hoặc phát hành, còn phải:
 
-- Kiểm tra GUI trên desktop thật: visual review, IME, clipboard, UI fault recovery, và cài update có ký rồi swap/restart từ giao diện. (Native egui: visual review, typing, IME, clipboard, và Host-death degradation đã PASS 2026-10-24; còn Retry, terminal TUI, update confirmation vì không có pointer injection.)
+- Review thị giác độc lập và kiểm tra hành vi physical window/input; Retry sau khi Host thật phục hồi chưa có successful reconnect journey.
 - Timed-question wait: bản compose hiện tại dùng tool blocking; bật `mode: timed` phải ghi đè `config.plugins` của preset (đổi bề mặt tool model thấy) ⇒ cần quyết định sản phẩm.
-- Hoàn tất hoặc chấp thuận rõ các thiếu hụt parity còn trong [`PARITY.md`](PARITY.md).
-- Chạy lại release lane; xác minh Linux x64/arm64 artifacts và feeds, ký bằng production key rồi mới publish khi được chủ dự án yêu cầu.
+- Hoàn tất hoặc chấp thuận rõ các thiếu hụt parity còn trong [`PARITY.md`](PARITY.md), gồm Explorer/source pane và onboarding nếu các tính năng đó còn nằm trong product scope.
+- Chạy lại release lane; xác minh Linux x64/arm64 artifacts và feeds, ký bằng production key rồi mới publish khi được chủ dự án yêu cầu. Không có production signing/publication trong các probe hiện tại.
 
-**Packaged journeys (2026-10-24):** session fork + Goal lifecycle + marketplace-registry install đã PASS trong `packaged-journey-probe.sh`; `officeToPdf/render` PASS trong `office-component-probe.sh`; terminal journey PASS qua `native-journey-probe.sh`. Terminal từng hỏng trong bản đóng gói (`Cannot find module 'node-pty'` — subprocess runner tự resolve, không đi qua resolve hook của launcher); `prepare-linux-runtime.ts` giờ tạo package `node-pty` trỏ về provider Rust.
+AppImage hiện có vẫn là artifact thử nghiệm Linux x64; không có artifact mới được cài hoặc phát hành trong các probe 2026-10-25 này.
 
-AppImage hiện có thể dùng để thử nghiệm Linux x64 preferences, nhưng chưa nên dùng cho công việc cần độ tin cậy hoặc dữ liệu quan trọng. Không có production signing, publication, hoặc kiểm tra trên desktop thật trong lần build này.
-
-Native app now supports a separate client-local `native-ui-preferences.json` under `DSH_HOME` (or `~/.deepseek-harness`): system/light/dark theme, egui zoom, compact/comfortable spacing, and default Sessions panel width. Missing files use defaults; malformed or unsupported files stay untouched, defaults remain active, and Settings reports the error. Save/reload/reset use the versioned schema; Host settings remain separate, and local appearance settings work while disconnected. The editor accepts validated JSON. Custom font families, theme packs, keybindings, and the prototype Explorer/source pane are not implemented in the native app. Native-app tests, release build, AppImage package probe, and isolated-Weston startup/auth/stream probe pass; Settings interaction and current RSS were not verified.
+Native app stores client-local preferences in `native-ui-preferences.json`, separate from Host settings. The versioned editor covers system/light/dark theme, scale/density, role color packs, custom fonts, keybindings and panel width. Invalid files remain untouched and Settings reports the load/save failure. Package tests are 136 passing + 2 ignored packaged journeys; release build, AppImage package probe and isolated-Weston startup/auth/stream probe pass. The 2026-10-24 real-GPU RSS evidence is 241–261 MiB for the shipped AppImage, and 92.7–133.5 MB for a release build with an isolated Home before D81. Explorer/source pane and onboarding remain absent.
 
 Prototype `DeepSeek Harness — Native Desktop GUI` in OpenDesign remains a separate HTML discussion artifact with a demo Explorer/source preview and wider appearance controls. It is not the native implementation: the source excerpt is supplied demo content, other file previews are placeholders, and its draft config schema is not the app's settings format. Browser/console verification of the artifact remains unavailable because the runner lacks Chrome.
 
 **Cấu trúc code hiện tại:**
 
 ```
-apps/desktop-tauri/client-core/     # protocol library (Rust), 112 tests across unit and loopback suites
+apps/desktop-tauri/client-core/     # protocol library (Rust), 116 tests across unit and loopback suites
   src/{lib,envelope,auth,transport,binary_response,stream,streams,remote_stream,remote_events,session,chat,commands,follow,models,sessions,approvals,goals,terminal,upload,settings,plugins,skills,schedules,workspace_files}.rs
   API.md, api.json                  # inventory 82 requests + 12 streams
-apps/desktop-tauri/native-app/      # egui shell (no webview), 75 tests
-  src/{main,host,restart,dialog,settings_panel,ui_preferences,document_preview,terminal_ansi,updater}.rs
+apps/desktop-tauri/native-app/      # egui shell (no webview), 136 passing tests + 2 ignored packaged journeys
+  src/{main,host,restart,dialog,settings_panel,ui_preferences,document_preview,terminal_ansi,terminal_input,updater,ui_harness}.rs
   package-appimage.sh
 ```
 

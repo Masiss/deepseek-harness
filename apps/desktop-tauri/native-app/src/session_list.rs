@@ -22,7 +22,8 @@ pub fn truncate(value: &str, max: usize) -> String {
     }
 }
 
-/// Renders a compact session row label without truncating its relative age.
+/// Builds the accessible one-line summary for a Session row.
+#[cfg(test)]
 pub fn session_row_label(title: &str, running: bool, blank: bool, age: &str) -> String {
     let prefix = if running { "● " } else { "" };
     let suffix = if blank { " (blank)" } else { "" };
@@ -53,21 +54,25 @@ pub fn render(
     now: i64,
 ) -> Option<String> {
     let mut selected = None;
+    let max_height = (ui.available_height() - 56.0).max(80.0);
     egui::ScrollArea::vertical()
         .id_salt("session-inventory")
-        .max_height(300.0)
+        .auto_shrink([false, false])
+        .max_height(max_height)
         .show(ui, |ui| {
             if let Some(results) = search {
                 for item in &results.items {
-                    let display = truncate(&item.session_id, 26);
-                    if ui
-                        .selectable_label(
-                            selected_session == Some(item.session_id.as_str()),
-                            display,
-                        )
-                        .on_hover_text(format!("{}\n{}", item.session_id, item.snippet))
-                        .clicked()
-                    {
+                    let title = truncate(&item.session_id, 34);
+                    let meta = truncate(&item.snippet, 42);
+                    let row = session_row(
+                        ui,
+                        &title,
+                        &meta,
+                        false,
+                        selected_session == Some(item.session_id.as_str()),
+                    )
+                    .on_hover_text(format!("{}\n{}", item.session_id, item.snippet));
+                    if row.clicked() {
                         selected = Some(item.session_id.clone());
                     }
                 }
@@ -77,26 +82,94 @@ pub fn render(
             } else {
                 for summary in sessions {
                     let title = session_label(summary);
-                    let label = session_row_label(
+                    let mut meta = relative_time(summary.updated_at, now);
+                    if summary.blank {
+                        meta.push_str(" · blank");
+                    }
+                    let row = session_row(
+                        ui,
                         &title,
+                        &meta,
                         summary.running,
-                        summary.blank,
-                        &relative_time(summary.updated_at, now),
-                    );
-                    if ui
-                        .selectable_label(
-                            selected_session == Some(summary.session_id.as_str()),
-                            label,
-                        )
-                        .on_hover_text(format!("{}\n{}", summary.session_id, title))
-                        .clicked()
-                    {
+                        selected_session == Some(summary.session_id.as_str()),
+                    )
+                    .on_hover_text(format!("{}\n{}", summary.session_id, title));
+                    if row.clicked() {
                         selected = Some(summary.session_id.clone());
                     }
                 }
             }
         });
     selected
+}
+
+fn session_row(
+    ui: &mut egui::Ui,
+    title: &str,
+    meta: &str,
+    running: bool,
+    selected: bool,
+) -> egui::Response {
+    let primary = if selected {
+        ui.visuals().hyperlink_color
+    } else {
+        ui.visuals().widgets.noninteractive.fg_stroke.color
+    };
+    let mut job = egui::text::LayoutJob::default();
+    if running {
+        job.append(
+            "● ",
+            0.0,
+            egui::TextFormat {
+                font_id: egui::FontId::proportional(9.0),
+                color: ui.visuals().hyperlink_color,
+                ..Default::default()
+            },
+        );
+    }
+    job.append(
+        title,
+        0.0,
+        egui::TextFormat {
+            font_id: egui::FontId::proportional(12.0),
+            color: primary,
+            ..Default::default()
+        },
+    );
+    job.append(
+        "\n",
+        0.0,
+        egui::TextFormat {
+            font_id: egui::FontId::proportional(10.0),
+            color: ui.visuals().weak_text_color(),
+            ..Default::default()
+        },
+    );
+    job.append(
+        meta,
+        0.0,
+        egui::TextFormat {
+            font_id: egui::FontId::proportional(10.0),
+            color: ui.visuals().weak_text_color(),
+            ..Default::default()
+        },
+    );
+    let (fill, stroke) = if selected {
+        (
+            ui.visuals().selection.bg_fill,
+            egui::Stroke::new(1.0, ui.visuals().widgets.active.bg_stroke.color),
+        )
+    } else {
+        (egui::Color32::TRANSPARENT, egui::Stroke::NONE)
+    };
+    let width = ui.available_width();
+    ui.add(
+        egui::Button::new(job)
+            .min_size(egui::vec2(width, 40.0))
+            .fill(fill)
+            .stroke(stroke)
+            .corner_radius(5.0),
+    )
 }
 
 /// Display title projected for a session, or its identity when no title exists.

@@ -1,25 +1,31 @@
 #!/usr/bin/env bash
-# Drive one native journey on the packaged runtime under a private compositor.
+# Drive native journeys against the packaged runtime in isolated homes.
 #
-# The native app cannot be scripted through its widgets, so each journey runs the
-# same client code the panel uses behind an environment-gated probe hook and
-# reports a marker on stderr:
+# The terminal and timed-question journeys use the native app's existing probe
+# hooks under headless Weston. The `panels` journey runs the shipped egui renderer
+# in `egui_kittest` against a real packaged Host and exits without an OS window.
 #
 #   terminal        create a Session and a terminal, attach over the shared mux,
 #                   write one command, and read the output back
+#   panels          install the Office component, then use AccessKit against the
+#                   packaged Host for Marketplace, Office preview, and a real PTY TUI
+#   model-default   initialize and read back the profile default through a
+#                   loopback-only /models response and a fake account grant
+#   update-ui       accept a signed update through the native modal, then verify
+#                   the fake AppImage replacement and scheduled restart
 #   timed-question  answer a timed `ask_user_question` through the question-card
 #                   code path, after observing the foreground wait stream
 #
-# The app runs on a headless Weston compositor with its own DSH_HOME, so it never
-# draws on the operator's desktop and never touches their profile.
+# Every mode uses a private DSH_HOME and never opens or types into the operator's
+# desktop or profile.
 #
-# Usage: native-journey-probe.sh [terminal|timed-question]
+# Usage: native-journey-probe.sh [terminal|timed-question|panels|model-default|update-ui]
 set -euo pipefail
 
 mode=${1:-terminal}
 case "$mode" in
-  terminal|timed-question) ;;
-  *) echo "usage: $0 [terminal|timed-question]" >&2; exit 2 ;;
+  terminal|timed-question|panels|model-default|update-ui) ;;
+  *) echo "usage: $0 [terminal|timed-question|panels|model-default|update-ui]" >&2; exit 2 ;;
 esac
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
@@ -48,6 +54,35 @@ chmod 700 "$work/run"
 project="$work/home/.dsh/desktop-project"
 cp -a "$tree/project" "$project"
 chmod -R u+w "$project"
+
+if [ "$mode" = panels ] || [ "$mode" = model-default ] || [ "$mode" = update-ui ]; then
+  cargo test --locked --offline --manifest-path "$root/apps/desktop-tauri/native-app/Cargo.toml" --no-run
+  test_bin=$(find "$root/apps/desktop-tauri/native-app/target/debug/deps" -maxdepth 1 \
+    -type f -name 'dsh_desktop_native_app-*' -executable -printf '%T@ %p\n' \
+    | sort -nr | sed -n '1s/^[^ ]* //p')
+  [ -x "$test_bin" ] || { echo "native-journey-probe: no native UI test binary" >&2; exit 1; }
+  if [ "$mode" = panels ]; then
+    mkdir -p "$work/panels"
+    # The packaged native renderer plus the Office conversion exceeded the
+    # 2 GiB probe cap (Host exit 137); 4 GiB is still bounded and passed.
+    DSH_ISOLATION_DIR="$work/panels" DSH_DESKTOP_TARGET=linux-x64 \
+      DSH_ISOLATION_MEMORY="${DSH_ISOLATION_MEMORY:-4G}" \
+      DSH_OFFICE_PANEL_TEST=1 DSH_NATIVE_UI_PANEL_TEST_BIN="$test_bin" \
+      bash "$root/apps/desktop-tauri/scripts/isolated-run.sh" \
+        bash "$root/apps/desktop-tauri/scripts/office-component-probe.sh"
+  elif [ "$mode" = model-default ]; then
+    mkdir -p "$work/model-default"
+    DSH_ISOLATION_DIR="$work/model-default" DSH_DESKTOP_TARGET=linux-x64 \
+      bash "$root/apps/desktop-tauri/scripts/isolated-run.sh" \
+        bash "$root/apps/desktop-tauri/scripts/model-default-probe.sh"
+  else
+    mkdir -p "$work/update-ui"
+    DSH_ISOLATION_DIR="$work/update-ui" DSH_NATIVE_UI_TEST_BIN="$test_bin" \
+      bash "$root/apps/desktop-tauri/scripts/isolated-run.sh" \
+        "$node" "$root/apps/desktop-tauri/scripts/update-flow-probe.mjs" linux-x64 --gui
+  fi
+  exit $?
+fi
 
 case "$mode" in
   terminal)

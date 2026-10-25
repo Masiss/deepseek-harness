@@ -49,7 +49,8 @@ impl HttpTransport {
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(15))
             .build()?;
-        let mut connect_url = Url::parse(launch_url).map_err(|source| Error::InvalidUrl { source })?;
+        let mut connect_url =
+            Url::parse(launch_url).map_err(|source| Error::InvalidUrl { source })?;
         let tokens: Vec<_> = connect_url
             .query_pairs()
             .filter(|(key, _)| key == "token")
@@ -112,10 +113,7 @@ impl HttpTransport {
         if cancel.load(Ordering::Relaxed) {
             return Err(Error::Cancelled);
         }
-        let id = format!(
-            "native-{}",
-            self.next_id.fetch_add(1, Ordering::Relaxed)
-        );
+        let id = format!("native-{}", self.next_id.fetch_add(1, Ordering::Relaxed));
         let url = self
             .base_url
             .join(&format!("api/{method}"))
@@ -123,12 +121,7 @@ impl HttpTransport {
         let envelope = RequestEnvelope::new(id.clone(), method, payload);
         self.runtime.block_on(async {
             let exchange = async {
-                let response = self
-                    .client
-                    .post(url)
-                    .json(&envelope)
-                    .send()
-                    .await?;
+                let response = self.client.post(url).json(&envelope).send().await?;
                 if !response.status().is_success() {
                     return Err(Error::HttpStatus(response.status().as_u16()));
                 }
@@ -142,12 +135,45 @@ impl HttpTransport {
         })
     }
 
-    /// Posts a raw body to an authenticated route and returns the decoded JSON body.
+    /// Posts a raw body to an authenticated route and returns its JSON body, or null for HTTP 204.
     pub fn post_json(
         &self,
         path: &str,
         content_type: &str,
         body: Vec<u8>,
+        cancel: &AtomicBool,
+    ) -> Result<Value, Error> {
+        self.post_json_request(path, content_type, body, None, cancel)
+    }
+
+    /// Posts a raw body with a longer per-request deadline than the client's default.
+    ///
+    /// Use this for Host operations that wait for user confirmation while the client
+    /// remains available to render and answer the corresponding control prompt.
+    ///
+    /// @param path - Authenticated route relative to the Host base URL.
+    /// @param content_type - Content type for the raw request body.
+    /// @param body - Complete request body.
+    /// @param timeout - Maximum time for the Host operation to finish.
+    /// @param cancel - Set to abort the request.
+    /// @returns The decoded JSON response or null for HTTP 204.
+    pub fn post_json_with_timeout(
+        &self,
+        path: &str,
+        content_type: &str,
+        body: Vec<u8>,
+        timeout: Duration,
+        cancel: &AtomicBool,
+    ) -> Result<Value, Error> {
+        self.post_json_request(path, content_type, body, Some(timeout), cancel)
+    }
+
+    fn post_json_request(
+        &self,
+        path: &str,
+        content_type: &str,
+        body: Vec<u8>,
+        timeout: Option<Duration>,
         cancel: &AtomicBool,
     ) -> Result<Value, Error> {
         if cancel.load(Ordering::Relaxed) {
@@ -159,16 +185,21 @@ impl HttpTransport {
             .map_err(|source| Error::InvalidUrl { source })?;
         self.runtime.block_on(async {
             let exchange = async {
-                let response = self
+                let mut request = self
                     .client
                     .post(url)
                     .header(reqwest::header::CONTENT_TYPE, content_type)
-                    .body(body)
-                    .send()
-                    .await?;
+                    .body(body);
+                if let Some(timeout) = timeout {
+                    request = request.timeout(timeout);
+                }
+                let response = request.send().await?;
                 let status = response.status();
                 if !status.is_success() {
                     return Err(Error::HttpStatus(status.as_u16()));
+                }
+                if status == reqwest::StatusCode::NO_CONTENT {
+                    return Ok(Value::Null);
                 }
                 Ok(response.json().await?)
             };
@@ -288,6 +319,29 @@ mod tests {
         assert_eq!(
             transport.credential().unwrap().cookie,
             "dsh-auth-test=operator"
+        );
+    }
+
+    #[test]
+    fn post_json_accepts_no_content_control_responses() {
+        use httptest::{matchers::*, responders::status_code, Expectation, Server};
+
+        let server = Server::run();
+        server.expect(
+            Expectation::matching(request::method_path("POST", "/updates-open"))
+                .respond_with(status_code(204)),
+        );
+        let transport = HttpTransport::new(&server.url_str("/")).unwrap();
+        assert_eq!(
+            transport
+                .post_json(
+                    "/updates-open",
+                    "application/json",
+                    b"null".to_vec(),
+                    &AtomicBool::new(false),
+                )
+                .unwrap(),
+            serde_json::Value::Null
         );
     }
 

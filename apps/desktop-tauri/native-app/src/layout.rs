@@ -1,12 +1,23 @@
 //! Shared sizing values and headless geometry checks for the desktop shell.
 
 /// Navigation rail width (icon-first).
-pub const NAV_RAIL_WIDTH: f32 = 56.0;
+pub const NAV_RAIL_WIDTH: f32 = 62.0;
 
 /// Context sidebar default and bounds.
-pub const SIDEBAR_DEFAULT: f32 = 280.0;
+pub const SIDEBAR_DEFAULT: f32 = 278.0;
 pub const SIDEBAR_MIN: f32 = 220.0;
 pub const SIDEBAR_MAX: f32 = 400.0;
+
+/// Explorer panel default and bounds when it is docked beside the conversation.
+pub const EXPLORER_DEFAULT: f32 = 390.0;
+pub const EXPLORER_MIN: f32 = 280.0;
+pub const EXPLORER_MAX: f32 = 520.0;
+
+/// Width below which the Explorer switches between the tree and preview panes.
+pub const EXPLORER_SINGLE_PANE_MAX_WIDTH: f32 = 900.0;
+
+/// Minimum viewport width for showing rail, Sessions, conversation, and Explorer together.
+pub const EXPLORER_DOCK_MIN_WIDTH: f32 = 1240.0;
 
 /// Computed panel rectangles for one viewport.
 #[cfg(test)]

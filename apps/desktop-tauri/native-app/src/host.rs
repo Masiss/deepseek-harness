@@ -313,6 +313,12 @@ impl Host {
         }
         Some(event)
     }
+
+    /// Stops the owned sidecar through its control frame for packaged lifecycle tests.
+    #[cfg(test)]
+    pub(crate) fn shutdown_for_test(&mut self) {
+        self.shutdown();
+    }
 }
 
 fn send_update_response<W: Write>(
