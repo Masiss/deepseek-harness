@@ -16,6 +16,8 @@ use std::collections::BTreeMap;
 use std::net::TcpListener;
 use std::sync::atomic::AtomicUsize;
 
+mod audit;
+
 /// One RPC the interface issued, as the fixture Host received it.
 #[derive(Debug, Clone)]
 struct FixtureRequest {
@@ -836,6 +838,37 @@ fn fixture(host: &FixtureHost) -> (DesktopApp, mpsc::Sender<Value>) {
     app.streams = Some(RemoteStreamMux::loopback(receiver));
     app.refresh_models();
     (app, frames)
+}
+
+#[test]
+fn ready_host_is_authenticated_automatically_by_default() {
+    assert!(auto_connect_enabled(None));
+    assert!(!auto_connect_enabled(Some("0")));
+    let host = FixtureHost::start();
+    let (mut app, _) = fixture(&host);
+    app.transport = None;
+    app.streams = None;
+    app.host_url = None;
+    app.host = None;
+    app.auto_connect = auto_connect_enabled(None);
+    let (ready_sender, ready_receiver) = mpsc::channel();
+    app.host_receiver = Some(ready_receiver);
+    ready_sender
+        .send(Host::for_test(&format!("{}?token=fixture", host.url)))
+        .expect("send Host ready");
+
+    let mut harness = harness(app, 1024.0, 768.0);
+    pump(
+        &mut harness,
+        "automatic Host authentication attempt",
+        |_| host.connect_attempts.load(Ordering::Acquire) == 1,
+    );
+    pump(&mut harness, "Host authentication settles", |app| {
+        app.connect_receiver.is_none()
+    });
+
+    assert!(harness.state().status.starts_with("Authentication failed:"));
+    assert_eq!(host.connect_attempts.load(Ordering::Acquire), 1);
 }
 
 /// Builds the real panel renderer over an authenticated packaged Host.
@@ -1707,6 +1740,11 @@ fn snapshot_empty_shell_1920() {
 #[test]
 fn snapshot_empty_shell_1440() {
     snapshot_empty_shell(1440.0, 900.0, "shell-1440x900");
+}
+
+#[test]
+fn snapshot_empty_shell_1366() {
+    snapshot_empty_shell(1366.0, 768.0, "shell-1366x768");
 }
 
 /// One redacted settings namespace the fixture Host reports.

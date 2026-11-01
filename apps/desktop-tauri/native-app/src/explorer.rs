@@ -1,5 +1,6 @@
 //! Session-scoped workspace directory tree and read-only text preview.
 
+#[cfg(feature = "legacy-egui")]
 use crate::accessible_button_label;
 use dsh_client_core::{
     transport::HttpTransport,
@@ -8,6 +9,7 @@ use dsh_client_core::{
         WorkspaceFilesClient,
     },
 };
+#[cfg(feature = "legacy-egui")]
 use eframe::egui;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::mpsc;
@@ -170,6 +172,7 @@ impl WorkspaceExplorer {
     }
 
     /// Renders the current Session's workspace tree and read-only text pane.
+    #[cfg(feature = "legacy-egui")]
     pub(crate) fn ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -183,10 +186,8 @@ impl WorkspaceExplorer {
             self.show_file_pane = false;
         }
         ui.horizontal(|ui| {
-            if single_pane && self.show_file_pane {
-                if ui.small_button("‹ Files").clicked() {
-                    self.show_file_pane = false;
-                }
+            if single_pane && self.show_file_pane && ui.small_button("‹ Files").clicked() {
+                self.show_file_pane = false;
             }
             ui.heading(egui::RichText::new("Workspace Explorer").size(13.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -225,6 +226,7 @@ impl WorkspaceExplorer {
         self.render_panes(ui, Some(transport), &session_id);
     }
 
+    #[cfg(feature = "legacy-egui")]
     fn render_panes(
         &mut self,
         ui: &mut egui::Ui,
@@ -262,6 +264,7 @@ impl WorkspaceExplorer {
         self.render_preview(ui, transport, session_id);
     }
 
+    #[cfg(feature = "legacy-egui")]
     fn render_tree(
         &mut self,
         ui: &mut egui::Ui,
@@ -303,6 +306,7 @@ impl WorkspaceExplorer {
         }
     }
 
+    #[cfg(feature = "legacy-egui")]
     fn render_directory(
         &mut self,
         ui: &mut egui::Ui,
@@ -418,6 +422,7 @@ impl WorkspaceExplorer {
         }
     }
 
+    #[cfg(feature = "legacy-egui")]
     fn render_preview(
         &mut self,
         ui: &mut egui::Ui,
@@ -657,6 +662,295 @@ impl WorkspaceExplorer {
     }
 }
 
+/// One visible row of the workspace tree, flattened for renderers that do not
+/// own an egui `Ui`.
+/// Consumed by the gpui Explorer panel; the egui shell renders the raw tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) struct ExplorerRow {
+    /// Workspace-relative path; empty for the root notices.
+    pub path: String,
+    /// Text painted for the row, without indentation or glyph decoration.
+    pub label: String,
+    /// Nesting level below the workspace root.
+    pub depth: usize,
+    pub kind: ExplorerRowKind,
+}
+
+/// What an [`ExplorerRow`] represents and how it reacts to a click.
+/// Consumed by the gpui Explorer panel; the egui shell renders the raw tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum ExplorerRowKind {
+    /// A directory; `expanded` selects the disclosure state.
+    Directory { expanded: bool },
+    /// A file the Session may preview; `selected` marks the open preview.
+    File { selected: bool },
+    /// A symbolic link the Host reports without following it.
+    Symlink,
+    /// An entry type this client does not render.
+    Unsupported,
+    /// A listing failure the user can retry.
+    Error,
+    /// A listing request still in flight.
+    Loading,
+    /// Static information such as an omitted-entry notice.
+    Notice,
+}
+
+/// Read-only accessors and row projection consumed by the gpui Explorer panel.
+#[allow(dead_code)]
+impl WorkspaceExplorer {
+    /// The Session whose workspace this explorer displays.
+    pub(crate) fn session(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    /// The workspace-relative path whose text preview is open.
+    pub(crate) fn preview_path(&self) -> Option<&str> {
+        self.selected_path.as_deref()
+    }
+
+    /// The loaded preview page, if any.
+    pub(crate) fn preview(&self) -> Option<&WorkspaceFileText> {
+        self.text.as_ref()
+    }
+
+    /// The most recent preview failure, if any.
+    pub(crate) fn preview_error(&self) -> Option<&str> {
+        self.read_error.as_deref()
+    }
+
+    /// Whether a preview request is still in flight.
+    pub(crate) fn preview_pending(&self) -> bool {
+        self.pending_read.is_some()
+    }
+
+    /// Flattens the tree in draw order, honouring the expanded set.
+    pub(crate) fn visible_rows(&self) -> Vec<ExplorerRow> {
+        let mut rows = Vec::new();
+        let Some(root) = self.directories.get("") else {
+            if let Some(error) = self.list_errors.get("") {
+                rows.push(ExplorerRow {
+                    path: String::new(),
+                    label: format!("Could not list workspace: {error}"),
+                    depth: 0,
+                    kind: ExplorerRowKind::Error,
+                });
+            } else if self.is_listing_pending("") {
+                rows.push(ExplorerRow {
+                    path: String::new(),
+                    label: "Loading workspace…".to_owned(),
+                    depth: 0,
+                    kind: ExplorerRowKind::Loading,
+                });
+            } else {
+                rows.push(ExplorerRow {
+                    path: String::new(),
+                    label: "Workspace tree is not loaded.".to_owned(),
+                    depth: 0,
+                    kind: ExplorerRowKind::Notice,
+                });
+            }
+            return rows;
+        };
+        if root.entries.is_empty() {
+            rows.push(ExplorerRow {
+                path: String::new(),
+                label: "This workspace is empty.".to_owned(),
+                depth: 0,
+                kind: ExplorerRowKind::Notice,
+            });
+            return rows;
+        }
+        self.collect_rows("", 0, &mut rows);
+        if root.truncated {
+            rows.push(ExplorerRow {
+                path: String::new(),
+                label: "More entries omitted by the Host limit.".to_owned(),
+                depth: 0,
+                kind: ExplorerRowKind::Notice,
+            });
+        }
+        rows
+    }
+
+    fn collect_rows(&self, parent: &str, depth: usize, rows: &mut Vec<ExplorerRow>) {
+        let Some(listing) = self.directories.get(parent) else {
+            return;
+        };
+        for entry in &listing.entries {
+            let path = join_workspace_path(parent, &entry.name);
+            match entry.entry_type.as_str() {
+                "directory" => {
+                    let expanded = self.expanded.contains(&path);
+                    rows.push(ExplorerRow {
+                        path: path.clone(),
+                        label: entry.name.clone(),
+                        depth,
+                        kind: ExplorerRowKind::Directory { expanded },
+                    });
+                    if !expanded {
+                        continue;
+                    }
+                    if let Some(error) = self.list_errors.get(&path) {
+                        rows.push(ExplorerRow {
+                            path: path.clone(),
+                            label: error.clone(),
+                            depth: depth + 1,
+                            kind: ExplorerRowKind::Error,
+                        });
+                    } else if self.is_listing_pending(&path) {
+                        rows.push(ExplorerRow {
+                            path: path.clone(),
+                            label: "Loading…".to_owned(),
+                            depth: depth + 1,
+                            kind: ExplorerRowKind::Loading,
+                        });
+                    } else if self.directories.contains_key(&path) {
+                        self.collect_rows(&path, depth + 1, rows);
+                    }
+                }
+                "file" => rows.push(ExplorerRow {
+                    path: path.clone(),
+                    label: entry.name.clone(),
+                    depth,
+                    kind: ExplorerRowKind::File {
+                        selected: self.selected_path.as_deref() == Some(path.as_str()),
+                    },
+                }),
+                "symlink" => rows.push(ExplorerRow {
+                    path,
+                    label: format!("{} · link", entry.name),
+                    depth,
+                    kind: ExplorerRowKind::Symlink,
+                }),
+                _ => rows.push(ExplorerRow {
+                    path,
+                    label: format!("{} · unsupported entry", entry.name),
+                    depth,
+                    kind: ExplorerRowKind::Unsupported,
+                }),
+            }
+        }
+        if listing.truncated {
+            rows.push(ExplorerRow {
+                path: String::new(),
+                label: "More entries were omitted by the Host limit.".to_owned(),
+                depth: depth + 1,
+                kind: ExplorerRowKind::Notice,
+            });
+        }
+    }
+
+    /// Expands or collapses a directory, requesting its listing on first open.
+    pub(crate) fn toggle_directory(
+        &mut self,
+        transport: Option<&HttpTransport>,
+        session_id: &str,
+        path: &str,
+    ) {
+        if self.expanded.remove(path) {
+            return;
+        }
+        self.expanded.insert(path.to_owned());
+        if self.directories.contains_key(path) {
+            return;
+        }
+        if let Some(transport) = transport {
+            self.start_listing(transport, session_id.to_owned(), path.to_owned());
+        }
+    }
+
+    /// Opens a file's read-only preview.
+    pub(crate) fn open_file(
+        &mut self,
+        transport: Option<&HttpTransport>,
+        session_id: &str,
+        path: &str,
+    ) {
+        if let Some(transport) = transport {
+            self.select_file(transport, session_id.to_owned(), path.to_owned());
+            self.show_file_pane = self.single_pane;
+        }
+    }
+
+    /// Discards the preview so a narrow Explorer returns to the tree.
+    pub(crate) fn close_preview(&mut self) {
+        self.show_file_pane = false;
+    }
+
+    /// Whether a narrow Explorer currently shows the preview pane.
+    pub(crate) fn preview_pane_visible(&self) -> bool {
+        self.single_pane && self.show_file_pane
+    }
+
+    /// Applies the pane policy for the current width and Session.
+    pub(crate) fn prepare(
+        &mut self,
+        transport: Option<&HttpTransport>,
+        session_id: Option<&str>,
+        single_pane: bool,
+    ) {
+        self.select_session(session_id, transport);
+        self.single_pane = single_pane;
+        if !single_pane {
+            self.show_file_pane = false;
+        }
+    }
+
+    /// Retries one failed or stale listing.
+    pub(crate) fn retry_listing(
+        &mut self,
+        transport: Option<&HttpTransport>,
+        session_id: &str,
+        path: &str,
+    ) {
+        if let Some(transport) = transport {
+            self.start_listing(transport, session_id.to_owned(), path.to_owned());
+        }
+    }
+
+    /// Reloads the open preview from its first line.
+    pub(crate) fn reload_preview(
+        &mut self,
+        transport: Option<&HttpTransport>,
+        session_id: &str,
+        path: &str,
+    ) {
+        if let Some(transport) = transport {
+            self.select_file(transport, session_id.to_owned(), path.to_owned());
+        }
+    }
+
+    /// Appends the next page of the open preview.
+    pub(crate) fn load_next_preview_page(
+        &mut self,
+        transport: Option<&HttpTransport>,
+        session_id: &str,
+        path: &str,
+    ) {
+        let (Some(transport), Some(text)) = (transport, self.text.as_ref()) else {
+            return;
+        };
+        let offset = text.offset.saturating_add(text.lines);
+        let version = text.stat.version.clone();
+        self.read_page(
+            transport,
+            session_id.to_owned(),
+            path.to_owned(),
+            offset,
+            true,
+            Some(version),
+        );
+    }
+
+    /// Whether a root listing request is in flight.
+    pub(crate) fn root_pending(&self) -> bool {
+        self.is_listing_pending("")
+    }
+}
+
 fn normalized(path: &str) -> String {
     if path == "." || path == "/" {
         String::new()
@@ -673,6 +967,7 @@ fn join_workspace_path(parent: &str, child: &str) -> String {
     }
 }
 
+#[cfg(feature = "legacy-egui")]
 fn source_line_job(
     line: &str,
     extension: Option<&str>,
@@ -783,6 +1078,7 @@ fn source_line_job(
     job
 }
 
+#[cfg(feature = "legacy-egui")]
 fn append_source_span(
     job: &mut egui::text::LayoutJob,
     text: &str,

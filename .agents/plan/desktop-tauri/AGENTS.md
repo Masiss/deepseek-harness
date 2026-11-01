@@ -1,6 +1,6 @@
 # AGENTS.md — Native Desktop lane
 
-Hướng dẫn bắt buộc cho agent làm việc trên Desktop lane của fork. ADR-0012 là quyết định hiện hành: UI dùng Rust + egui; Tauri đã rời khỏi lane. Đọc cùng:
+Hướng dẫn bắt buộc cho agent làm việc trên Desktop lane của fork. ADR-0012 (sửa đổi âm danh ngày 2026-10-31) là quyết định hiện hành: UI dùng Rust + **gpui** (`gpui` 0.2.2, GPU-first) trên entrypoint `dsh-desktop-native-app`; Tauri đã rời khỏi lane. Đọc cùng:
 
 - [`PLAN.md`](PLAN.md) — ADR + kế hoạch theo phase + điều kiện nghiệm thu.
 - [`MEMORY.md`](MEMORY.md) — quyết định đã chốt, số đo, bẫy đã gặp.
@@ -11,7 +11,7 @@ Hướng dẫn bắt buộc cho agent làm việc trên Desktop lane của fork.
 
 ## 1. Sứ mệnh
 
-Chuyển Desktop lane của fork sang **native Rust + egui** và giảm runtime footprint, trong khi Node Host giữ nguyên harness và API của Web client:
+Chuyển Desktop lane của fork sang **native Rust + gpui** và giảm runtime footprint, trong khi Node Host giữ nguyên harness và API của Web client:
 
 - giữ nguyên plugin ecosystem (Cordis, `dsh plugin`, bundle composition),
 - giữ nguyên session format, model-visible transcript, CLI/config,
@@ -68,7 +68,7 @@ Goal 2 Tauri là lịch sử và không phải đích triển khai hiện hành.
 Linux MVP → Linux production → macOS → Windows
 ```
 
-- Linux native egui là mục tiêu hiện hành; macOS/Windows chưa mở cho tới khi có runner, signing credentials và quyết định port riêng.
+- Linux native gpui là mục tiêu hiện hành; macOS/Windows chưa mở cho tới khi có runner, signing credentials và quyết định port riêng.
 - Crate native dùng `#[cfg(target_os)]` **từ ngày đầu**, kể cả khi chưa build Windows.
 - Không hardcode đường dẫn Linux ngoài module platform.
 
@@ -126,7 +126,7 @@ Dừng ngay, không cố, khi gặp:
 ```
 apps/desktop-tauri/          # L1 — native Linux Desktop lane
   client-core/               # Host protocol, HTTP transport, shared mux
-  native-app/                # Rust + egui shell and Host sidecar
+  native-app/                # Rust + gpui shell and Host sidecar (egui giữ làm bin legacy `dsh-desktop-egui-legacy`)
   scripts/                   # Linux packaging and packaged probes
 native/dsh-native/           # L1 — crate napi-rs, cfg theo OS
 packages/.../*-native/       # L1 — provider packages

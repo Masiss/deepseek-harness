@@ -1,14 +1,46 @@
 # Bàn giao — lane Desktop Tauri (fork `Masiss/deepseek-harness`)
 
-Cập nhật 2026-10-26. Mục đích: session mới đọc file này là biết đang ở đâu, cái gì đã xong, cái gì nên làm tiếp và bẫy nào đã mắc.
+Cập nhật 2026-10-31. Mục đích: session mới đọc file này là biết đang ở đâu, cái gì đã xong, cái gì nên làm tiếp và bẫy nào đã mắc.
+
+## Native gpui port — 2026-10-31
+
+Native GUI của lane chuyển từ `eframe`/`egui` sang **`gpui` 0.2.2** (GPU-first renderer qua wgpu). Hai bin song song trong `apps/desktop-tauri/native-app`: `dsh-desktop-native-app` (gpui, default-run) và `dsh-desktop-egui-legacy` (giữ `src/main.rs` + shell egui cho giai đoạn chuyển tiếp). Module chia theo vai đã chuyển (client-core protocol, host, explorer, session_list, question_card, transcript, terminal_ansi, fonts, ui_preferences, layout) giữ nguyên contracts; presentation layer (`shell/`: render modules, theme, text input, widgets, terminal state, app runtime) chuyển sang gpui.
+
+Cổng build cuối phiên: `cargo check/build/test --bin dsh-desktop-native-app` xanh, `cargo check --features legacy-egui --bin dsh-desktop-egui-legacy` xanh, `cargo test --features legacy-egui --bin dsh-desktop-egui-legacy` = **163 pass / 0 fail** (3 ignored); `cargo test --bin dsh-desktop-native-app` = **126 pass / 0 fail** (đã sửa 4 test `host.rs` đỏ sẵn: gpui kéo `serde_json/preserve_order` vào làm đổi thứ tự key JSON, còn fixture so sánh chuỗi byte; giờ so từng field nên không phụ thuộc thứ tự). 48 test mới phủ preferences chord/parse, auto-connect, office/image path, text-delta budget, model picker/probe/catalog, settings error, theme metrics/blend, terminal log budget, layout bounds, `contains_cjk` và tiến trình khởi động Host.
+
+Startup đo thật (debug, cây packaged, Home cô lập): **host=ready 2,5–3,7 s**, `auth=ok` thêm **~0,13–0,17 s**; riêng `desktop-host` packaged tới listen **1,2–1,6 s warm**. Shell in `dsh: native host=ready in <ms>` / `auth=ok in <ms>` để đo độ trễ thay vì đoán, và trong lúc chờ Host nó hiện `Starting Host sidecar… <n>s`.
+
+Còn lại: runtime gpui cần session Wayland **thật** (headless Weston expose no seat → panic ở `gpui linux wayland client seat`) để xác nhận boot/auth/streams; headless gpui test-support cho shell mới chưa có suite riêng; visual/IME/physical-window review và RSS mới chưa đo; release build + doc gates + pre-push checks chưa chạy lại sau port.
 
 ## Native UI rollout — 2026-10-26
 
 `native-app/src/main.rs` áp dụng các view prototype vào shell egui: Plugins và Skills có trạng thái Host, filter/chọn skill; Marketplace search/install, Goals lifecycle và Document preview giữ các RPC đang có. Dock dưới bên phải chuyển Terminal, Jobs, Schedules, Deliverables thành bốn icon accessible có tooltip; chỉ một utility panel mở, mỗi panel có nút đóng, Jobs/Schedules có Refresh và Deliverables mở file preview.
 
-`cargo test --locked --offline --manifest-path apps/desktop-tauri/native-app/Cargo.toml`: **152 pass / 3 ignored**. AccessKit harness kiểm tra toggle/close dock, plugin enablement, skill filter/selection, goal create/pause/resume/complete, schedule listing/deletion, job output selection, và deliverable preview. Packaged `native-journey-probe.sh panels` (4 GiB), `model-default`, `update-ui`, AppImage probe, và `size-gate.sh linux-x64` đều pass.
+Trước điều chỉnh rail bên dưới, `cargo test --locked --offline --manifest-path apps/desktop-tauri/native-app/Cargo.toml` đạt **153 pass / 3 ignored**. AccessKit harness kiểm tra toggle/close dock, plugin enablement, skill filter/selection, goal create/pause/resume/complete, schedule listing/deletion, job output selection, và deliverable preview. Packaged `native-journey-probe.sh panels` (4 GiB), `model-default`, `update-ui`, AppImage probe, và `size-gate.sh linux-x64` đều pass.
 
-AppImage được cài nguyên tử tại `/home/masis/.local/bin/dsh` và mở cho owner review: **87,812,600 B**, SHA-256 `33aa5a56ceb43885537cbd283be2aa339b7b8f83000bd5031d65bd000fd01dc2`. Đây là build cục bộ; không publish. Owner sẽ review UI trên cửa sổ đang mở; tests/probes không thay manual acceptance.
+AppImage được cài nguyên tử tại `/home/masis/.local/bin/deepseek-harness` cho owner review: **87,833,080 B**, SHA-256 `dd4c236f4965f58e5f7e81cee5898eb8457c63f080d590bc5da3c223b3d74256`. Đây là build cục bộ; không publish. Chưa mở cửa sổ trong phiên này nên manual acceptance vẫn thuộc owner; tests/probes không thay review tay.
+
+## Headless UI audit — 2026-10-26
+
+`native-app/src/ui_harness/audit.rs` chạy như một `#[test]` integration-style trên `Harness::builder().build_ui_state`, gọi đúng `DesktopApp::tick` + `render`. Bảy scenario (default, many-sessions, long-transcript, approval, explorer-terminal, CJK/Vietnamese, host-offline) nhân nhiều viewport/scale thành **20 run**; mỗi run đọc AccessKit `bounding_box`/`role`/`is_disabled`/`supports_action(Click)` và epaint galley (`elided`, `rect` so `clip_rect`) để kiểm tra bounds/min-size, overlap không hợp lệ, clipping và elision, rồi thực hiện tương tác thật: Reject approval, đóng/mở lại Terminal, gõ CJK/Vietnamese vào Composer.
+
+Kết quả: **LAYOUT PASS / INTERACTION PASS / VISUAL REVIEW PENDING** (0 layout failure, 0 interaction failure). Report máy đọc được ở `target/dsh-kittest/ui-audit.json` (`schemaVersion: 1`, `layout`/`interaction`/`visual`, `runs[]`); ảnh review theo scenario ở viewport nhỏ nhất và lớn nhất nằm trong `target/dsh-kittest/audit/`.
+
+Hai lỗi có bằng chứng từ dump đã sửa: footer sidebar Sessions tràn khỏi viewport (chuyển thành `egui::Panel::bottom("sessions-footer")` và để `session_list` dùng trọn `available_height`) và approval card đè lên composer (`attention_reserved_height` + `estimate_approval_height`, truyền qua `TranscriptViewState`). Golden screenshot chỉ cập nhật **một lần** sau khi chép `.diff.png`/`.new.png` cũ sang `target/dsh-kittest/review/`; ảnh review đó là thứ owner dùng để duyệt thay đổi thị giác, không phải baseline tự làm xanh test. Clippy về 0 warning, gồm ba cảnh báo có sẵn ở `explorer.rs` và vùng `session_title`.
+
+## Visual review follow-up — 2026-10-26
+
+Ảnh GUI owner gửi cho thấy các nhãn rail như “Sessions”, “Explorer” và “Settings” bị bẻ giữa từ. Rail 62 pt cùng nút tối thiểu 50 pt không giữ đủ chỗ cho nhãn ở scale thực tế. Rail tăng lên 82 pt, nút lên 68 pt; audit đọc số hàng galley và báo `nav-label-wrap` nếu nhãn bị tách dòng. Ma trận vẫn đạt **20 run, 0 layout failure, 0 interaction failure**; ảnh mới ở `.artifacts/ui-audit-review/audit/` cho thấy nhãn một dòng.
+
+Không cập nhật golden. Lần chạy đầy đủ sau sửa đạt **147 pass / 6 snapshot failures / 3 ignored**; sáu ảnh `.diff.png`/`.new.png` nằm trong `.artifacts/ui-audit-review/nav-rail-change/` để owner duyệt. `cargo clippy --locked --offline --bin dsh-desktop-native-app --all-targets -- -D warnings` pass. AppImage native được dựng lại; `appimage-probe.sh` và `size-gate.sh linux-x64` pass. **Visual review và chấp thuận golden vẫn pending**.
+
+## Host startup connection — 2026-10-26
+
+The native shell now authenticates with the bundled Host automatically after its ready frame. `DSH_DESKTOP_AUTO_CONNECT=0` disables the initial attempt for troubleshooting; provider configuration is not required for Host authentication. An AccessKit harness test verifies that the default path issues the real `/connect` handshake and surfaces a rejected response. `native-journey-probe.sh terminal` also passes under isolated Weston with no auto-connect variable set: Host ready, auth succeeds, and the terminal journey completes. Full native tests report **148 pass / 6 snapshot mismatches / 3 ignored**; the mismatches are the pending nav-rail golden review above and were not rewritten. Clippy, AppImage probe, and size gate pass. The local AppImage is installed at `~/.local/bin/deepseek-harness`; physical-window review remains pending.
+
+## GUI launcher name — 2026-10-26
+
+The Local Codex runtime registry includes a `deepseek-harness` agent whose executable is `dsh`; its availability scan runs `dsh --version`. The user’s `~/.local/bin/dsh` was the Desktop AppImage, whose native executable ignores CLI arguments and opens the GUI, so each version probe briefly launched the window and Host. The process watcher captured two launches with `--version`, parented to the Local Codex daemon, followed by process exit. The AppImage was renamed to `~/.local/bin/deepseek-harness`, and `~/.local/share/applications/dsh.desktop` now points to that name. The AppImage bytes and SHA-256 are unchanged. `dsh` is currently not installed as a CLI on PATH; install a real CLI before enabling the Local Codex agent.
 
 ## Packaged native-panel evidence — 2026-10-25
 
@@ -346,7 +378,7 @@ git tag desktop-v0.2.1-rc.4 && git push fork desktop-v0.2.1-rc.4   # kích hoạ
 ```
 Phát hành (làm thay đổi trên `fork`): bump version **mọi package** ⇒ tag `desktop-v<version>` ⇒ lane release tự chạy ⇒ feed mới đã ký.
 
-## 7b. Kiểm thử UI không cửa sổ (`egui_kittest`)
+## 7b. Kiểm thử UI không cửa sổ (gpui kittest / harness)
 
 Không dùng toạ độ pixel, không chạm Hyprland: harness dựng **cùng** `DesktopApp::tick`/`render` mà cửa sổ dùng, trong `egui::Context` không có OS window.
 
@@ -368,3 +400,17 @@ cargo test --locked --offline --manifest-path apps/desktop-tauri/native-app/Carg
 
 ## 8. Tài liệu lane
 `.agents/plan/desktop-tauri/PLAN.md` (kế hoạch + bảng finding F01–F13) · `MEMORY.md` (quyết định D1–D39, số đo M1–M25, bẫy B1–B52) · `AGENTS.md` (luật lệ của lane) · `probes/` (probe cũ) — cập nhật cả hai file đầu khi có quyết định mới.
+## Release measurement — 2026-11-01
+
+- `cargo build --release --bin dsh-desktop-native-app`: 9m42s, 44.5 MB binary.
+- Real Hyprland run, packaged runtime tree, isolated Home: `host=ready` 5.0–14.4 s, `auth=ok` +0.2–0.9 s — measured while the host machine had load average 20.4 from unrelated `cc1plus` processes; quiet debug runs were 2.5–3.7 s.
+- Idle process-tree RSS after auth ≈ 290–297 MiB (app ~114 MB + Host ~184 MB), under the 300 MiB gate but close to it.
+- The eframe/epaint link was removed on 2026-11-01 (see the split section below): release binary 43.99 MB, debug 646 MB, idle RSS unchanged at about 299 MiB.
+
+## Tách `eframe`/`egui` khỏi binary gpui — 2026-11-01
+
+`eframe` giờ là dependency **optional** sau feature `legacy-egui` (`default = []`), và bin `dsh-desktop-egui-legacy` khai báo `required-features = ["legacy-egui"]`. Nhờ vậy binary gpui không còn link egui/epaint; kiểm chứng bằng `strings` trên binary build ra: 0 ký hiệu `egui::`/`eframe::` (chỉ còn chuỗi `prepaint` của gpui).
+
+Phần trình bày egui trong các module dùng chung được gate theo feature thay vì bị xoá: `fonts::install`, `terminal_ansi::{format_for, layout}`, `explorer` (ui + render + source preview), `question_card::render`, `session_list::render`, `document_preview` (ImagePreview + DocumentPreview::ui), `ui_preferences` (ThemeMode→ThemePreference, KeyChord::consume, key_by_name, apply/apply_theme_pack/accent_fill, UiPreferencesPanel + editor helpers), `layout` tests. Trạng thái/model/protocol vẫn dùng chung: `KeyChord` giờ là dữ liệu thuần (`ctrl/alt/shift/cmd` + tên phím chuẩn hoá) nên `UiPreferences::validate` kiểm trùng phím cho cả hai bin, còn `KeyChord::consume` chỉ tồn tại ở bản egui. `Palette`/`AnsiStyle` chuyển sang màu 8-bit thuần (`Rgba8`, `AnsiColor`) và chỉ convert sang `Color32` trong code egui.
+
+Hai test terminal trước đây kiểm cả parse lẫn format egui được tách: phần parse ở lại bin gpui, phần format chuyển sang `formatted_spans_swap_foreground_and_background_when_inverse` (legacy). Clippy: **66 warning ở bin gpui** (đều là dead code/visibility có sẵn trong `shell/`, không phải lỗi) và **0 warning code** ở bin legacy.

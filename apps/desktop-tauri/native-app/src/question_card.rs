@@ -7,6 +7,7 @@
 use dsh_client_core::user_questions::{
     AskUserQuestionAnswer, AskUserQuestionAnswerItem, PendingQuestion, UserQuestion,
 };
+#[cfg(feature = "legacy-egui")]
 use eframe::egui;
 
 /// What the user did with a card.
@@ -89,7 +90,51 @@ impl QuestionCard {
         }
     }
 
+    /// The questions this card asks, in order.
+    #[allow(dead_code)]
+    pub(crate) fn questions(&self) -> &[UserQuestion] {
+        &self.questions
+    }
+
+    /// Selected option labels for the question at `index`.
+    #[allow(dead_code)]
+    pub(crate) fn chosen(&self, index: usize) -> &[String] {
+        self.selected.get(index).map_or(&[], Vec::as_slice)
+    }
+
+    /// The typed free-form answer for the question at `index`.
+    #[allow(dead_code)]
+    pub(crate) fn custom(&self, index: usize) -> &str {
+        self.custom.get(index).map_or("", String::as_str)
+    }
+
+    /// Selects an option, replacing the choice unless the question is multi-select.
+    #[allow(dead_code)]
+    pub(crate) fn choose(&mut self, index: usize, label: &str) {
+        let multi = self
+            .questions
+            .get(index)
+            .is_some_and(|question| question.multi_select);
+        let Some(selected) = self.selected.get_mut(index) else {
+            return;
+        };
+        if multi {
+            toggle(selected, label);
+        } else {
+            *selected = vec![label.to_owned()];
+        }
+    }
+
+    /// Records the typed answer for the question at `index`.
+    #[allow(dead_code)]
+    pub(crate) fn set_custom(&mut self, index: usize, text: &str) {
+        if let Some(custom) = self.custom.get_mut(index) {
+            *custom = text.to_owned();
+        }
+    }
+
     /// Renders the card and reports a submitted action.
+    #[cfg(feature = "legacy-egui")]
     pub fn render(&mut self, ui: &mut egui::Ui) -> Option<QuestionAction> {
         let mut action = None;
         ui.separator();
@@ -199,6 +244,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "legacy-egui")]
     fn renders_the_question_options_and_controls() {
         let ctx = egui::Context::default();
         ctx.begin_pass(egui::RawInput {
@@ -237,6 +283,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "legacy-egui")]
     fn collect_text(shape: &egui::Shape, texts: &mut Vec<String>) {
         match shape {
             egui::Shape::Text(text) => texts.push(text.galley.job.text.clone()),

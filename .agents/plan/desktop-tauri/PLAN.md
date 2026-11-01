@@ -1,11 +1,11 @@
-# PLAN — Desktop native (egui) + Node
+# PLAN — Desktop native (gpui) + Node
 
 Tài liệu này gộp **ADR** và **kế hoạch chi tiết theo phase**. Quy tắc làm việc: [`AGENTS.md`](AGENTS.md). Số đo và bẫy: [`MEMORY.md`](MEMORY.md).
 
 Kế hoạch **cắt nhỏ phần mềm** nằm riêng ở [`PLAN-SHRINK.md`](PLAN-SHRINK.md) và chỉ mở **sau khi** tài liệu này xanh.
 
-- Trạng thái: **Goal 1 và Goal 2 là lịch sử; Goal 3 (native egui) đang mở, chưa release-grade.**
-- Ngày cập nhật: 2026-10-24.
+- Trạng thái: **Goal 1 và Goal 2 là lịch sử; Goal 3 (native gpui) đang mở, chưa release-grade.**
+- Ngày cập nhật: 2026-10-31.
 - Phạm vi: chỉ `apps/desktop-tauri`, `native/dsh-native`, provider packages và glue tối thiểu.
 
 ---
@@ -215,9 +215,9 @@ Lane tập trung **Linux**; **macOS và Windows để pending** cho tới khi c�
 
 ---
 
-## Goal 3 — Desktop native (egui), bỏ webview (mở 2026-10-22)
+## Goal 3 — Desktop native (gpui), bỏ webview (mở 2026-10-22; ported sang gpui 2026-10-31)
 
-**Quyết định (sau grill với chủ dự án):** bản release webview hiện tại (`0.2.1-rc.4`) là bản cuối của hướng webview; sau đó lane **chuyển hẳn** sang ứng dụng desktop native (Rust + egui) và **giữ nguyên** tính năng gốc của dsh.
+**Quyết định (sau grill với chủ dự án):** bản release webview hiện tại (`0.2.1-rc.4`) là bản cuối của hướng webview; sau đó lane **chuyển hẳn** sang ứng dụng desktop native (Rust + egui) và **giữ nguyên** tính năng gốc của dsh. Sửa đổi âm danh ngày 2026-10-31: UI được viết bằng **Rust + gpui** (`gpui` 0.2.2) thay cho `eframe`/`egui`; hai bin song song trong `apps/desktop-tauri/native-app` — `dsh-desktop-native-app` (gpui, mặc định chạy) và `dsh-desktop-egui-legacy` (giữ `src/main.rs` + shell egui cho giai đoạn chuyển tiếp) — và presentation layer (`shell/`) chuyển cùng module chia theo vai đã chuyển.
 
 **Vì sao (số đo, không phải cảm tính):**
 
@@ -238,10 +238,10 @@ Lane tập trung **Linux**; **macOS và Windows để pending** cho tới khi c�
 | Mốc | Nội dung | Trạng thái | Ghi chú |
 |---|---|---|---|
 | **M1** | `client-core` Rust: Connection envelope, token→API-cookie auth, unary HTTP, mux transport | **Xong** ✓ | `rpcId`, `{args: ...}`, `GET /connect?interactions=answer`, `/api` routing đã đối chiếu; request chạy trên tokio nên cờ huỷ bỏ request đang bay; **một socket vật lý dùng chung** (`RemoteStreamMux`) + reconnect có backoff, stream đang mở fail có kiểu, open mới chờ socket kế tiếp |
-| **M2** | Viewer: session list/page, log, trạng thái tool call | **Xong một phần** ◐ | egui list + async page viewer and older-page controls; packaged journey reads a page before and after Host restart, older-page Host coverage remains loopback-only |
-| **M3** | Chat: prompt, cancel, follow stream | **Xong một phần** ◐ | egui prompt + follow qua mux dùng chung; **đính kèm tệp**, **Cancel turn**, **transcript** (message/tool/approval/job + draft streaming) từ snapshot và event sống; lượt thật đã probe bằng mock provider (approval + question), còn thiếu card tool chuyên biệt và reasoning |
+| **M2** | Viewer: session list/page, log, trạng thái tool call | **Xong một phần** ◐ | gpui list + async page viewer and older-page controls; packaged journey reads a page before and after Host restart, older-page Host coverage remains loopback-only |
+| **M3** | Chat: prompt, cancel, follow stream | **Xong một phần** ◐ | gpui prompt + follow qua mux dùng chung; **đính kèm tệp**, **Cancel turn**, **transcript** (message/tool/approval/job + draft streaming) từ snapshot và event sống; lượt thật đã probe bằng mock provider (approval + question), còn thiếu card tool chuyên biệt và reasoning |
 | **M4** | Model selection + session management + approval + goals/plan | **Xong một phần** ◐ | composer model picker/profile-default initializer; session controls and older-page navigation; allow/reject/delegate; Goal lifecycle panel; `/plan` toggles through `commands/execute`. Packaged journey covers session create/rename/page reads, but search/fork and live Goal/Plan writes still lack packaged probes |
-| **M5** | Terminal (PTY): RPC + attach/retain + native panel | **Xong một phần** ◐ | Gateway mux + egui list/create/attach/input/resize, bracketed paste, X10/SGR mouse click/drag/motion/wheel, bounded ack-ordered input; `native-journey-probe.sh panels` drives a TUI through the panel and packaged Host, including paste/mouse round trips. Physical-window TUI review remains pending |
+| **M5** | Terminal (PTY): RPC + attach/retain + native panel | **Xong một phần** ◐ | Gateway mux + gpui list/create/attach/input/resize, bracketed paste, X10/SGR mouse click/drag/motion/wheel, bounded ack-ordered input; `native-journey-probe.sh panels` drives a TUI through the panel and packaged Host, including paste/mouse round trips. Physical-window TUI review remains pending |
 | **M6** | Settings, plugins, skills, schedules, workspace files, preview | **Xong một phần** ◐ | Settings, plugin/bundle controls, marketplace, skills/schedules, multipart previews, and Office UI are present. `native-journey-probe.sh panels` installs a loopback registry bundle through the native Marketplace panel and reads it back from the packaged Host; it previews a real Office conversion in the panel and checks a Host-side missing-file failure |
 | **M7** | Native app shell, Host sidecar, packaging, system integration | **Xong một phần** ◐ | Host/auth, tray, dialogs, signed update prompts, outer-AppImage restart, self-contained runtime, and native AppImage boot pass local probes. `native-journey-probe.sh update-ui` clicks both native update prompts and verifies a signed fake-image swap/restart; production feed signing, shipped-image swap, release-lane publication remain pending |
 | **M8** | Cổng parity: checklist từng màn hình | **Đang làm** ◐ | `.agents/plan/desktop-tauri/PARITY.md`; AccessKit fixture tests cover 20 ordinary cases and two ignored packaged-Host journeys. Physical-desktop rendering, typing, Vietnamese IME, clipboard, theme packs, rebinding, Host-death degradation, and RSS were checked 2026-10-24; physical-window visual review, OS-level pointer/TUI input, and Retry after Host recovery remain pending |
@@ -274,7 +274,7 @@ Prototype `DeepSeek Harness — Native Desktop GUI` in OpenDesign remains a sepa
 apps/desktop-tauri/client-core/     # protocol library (Rust), 116 tests across unit and loopback suites
   src/{lib,envelope,auth,transport,binary_response,stream,streams,remote_stream,remote_events,session,chat,commands,follow,models,sessions,approvals,goals,terminal,upload,settings,plugins,skills,schedules,workspace_files}.rs
   API.md, api.json                  # inventory 82 requests + 12 streams
-apps/desktop-tauri/native-app/      # egui shell (no webview), 136 passing tests + 2 ignored packaged journeys
+apps/desktop-tauri/native-app/      # Rust + gpui shell (no webview), 136 passing tests + 2 ignored packaged journeys
   src/{main,host,restart,dialog,settings_panel,ui_preferences,document_preview,terminal_ansi,terminal_input,updater,ui_harness}.rs
   package-appimage.sh
 ```
@@ -301,7 +301,7 @@ apps/desktop-tauri/native-app/      # egui shell (no webview), 136 passing tests
 | **Giữ transcript trong bộ nhớ có giới hạn** (ảo hoá danh sách) | App native không phình theo session dài ✓ | Dữ liệu vẫn đầy đủ trên đĩa ✓ |
 | **`--optimize-for-size` + trần heap hợp lý cho Host** | Đã dùng ✓; đo lại sau khi bớt plugin | Không đặt trần old-space cứng ✓ (session cần sẽ nghẽn ✗) |
 | **Tải plugin theo nhu cầu (lazy)** | Host khởi động nhanh + nhẹ hơn | Phải là cơ chế extension point sẵn có ✓, không phải hack ✓ |
-| **Font atlas + render của egui** | Native client nhẹ hơn webview nhiều ✓ | Chỉ đo, không giả định ✓ |
+| **Font atlas + render của gpui** | Native client nhẹ hơn webview nhiều ✓ | Chỉ đo, không giả định ✓ |
 
 ⇒ **Không có hướng tối ưu nào được chấp nhận nếu nó phá luật ở trên**; mục tiêu `< 300 MiB` là **điều kiện xong**, không phải lý do để viết code cẩu thả ✓.
 
@@ -559,13 +559,15 @@ Tốc độ test đến từ kiến trúc client/server, không từ định d�
 
 **Giới hạn v1 (có chủ ý).** `browser` vắng mặt (không có tương đương `WebContentsView`). `keyboard.subscribe`, `shortcuts.subscribe`, `updates.subscribe` trả disposer không bao giờ phát: một cửa sổ, chưa có native accelerator, và client tự áp snapshot từ `get`/`edit`. `updates.status()` trả `idle` cho tới P3.
 
-## ADR-0012 — Desktop native (egui) thay webview; Tauri rời khỏi lane
+## ADR-0012 — Desktop native (gpui) thay webview; Tauri rời khỏi lane
 
-**Trạng thái:** accepted · 2026-10-22 (sau grill với chủ dự án)
+**Trạng thái:** accepted · 2026-10-22 (sau grill với chủ dự án) · **sửa đổi âm danh ngày 2026-10-31: port sang gpui**
 
 **Bối cảnh.** Bản release webview `0.2.1-rc.4` là bản cuối của hướng webview. Số đo trên máy thật: app đang chạy giữ **719–728 MiB RSS**; phần WebKit giữ ~530 MiB **ngay cả khi trang trắng**; Host Node giữ ~190 MiB. Mục tiêu `< 300 MiB` không thể đạt với WebKitGTK. Đo thêm: app chỉ nạp phần client mà nó dùng (trọng lượng không với tới được = **0 B**) ⇒ **đổi composition không giải quyết vấn đề bộ nhớ**; chỉ bỏ webview mới giải quyết.
 
 **Quyết định.** Ứng dụng desktop viết UI bằng **Rust + egui** trên `tao`/`winit`; **Tauri rời khỏi lane** (upstream giữ Electron của họ; lane giữ Electron cầu tạm ở upstream ✓). Host **vẫn là Node sidecar** ✓ — toàn bộ tính năng dsh nằm ở Host ✓ và client native dùng **cùng API** với web client ✓. Profile desktop **không mang** package client-UI ✓ (web profile của upstream vẫn giữ nguyên ✓).
+
+**Sửa đổi âm danh (2026-10-31) — port sang gpui.** UI được viết lại bằng **Rust + gpui** (`gpui` 0.2.2, GPU-first qua wgpu) thay cho `eframe`/`egui`; hai bin song song trong `apps/desktop-tauri/native-app`: `dsh-desktop-native-app` (gpui, mặc định chạy) và `dsh-desktop-egui-legacy` (giữ `src/main.rs` + shell egui cho giai đoạn chuyển tiếp). Presentation layer (`shell/`: render modules, theme, text input, widgets, terminal state, app runtime) chuyển sang gpui; module chia theo vai đã chuyển cùng (`client-core` protocol, `host`, `explorer`, `session_list`, `question_card`, `transcript`, `terminal_ansi`, `fonts`, `ui_preferences`, `layout`) giữ nguyên contracts. ADR-0012 cũ giữ nguyên trong ngữ cảnh quyết định bỏ webview; đổi framework là sửa đổi âm danh của phương án implementation, không phải của nguyên tắc bỏ webview.
 
 **Hệ quả.**
 

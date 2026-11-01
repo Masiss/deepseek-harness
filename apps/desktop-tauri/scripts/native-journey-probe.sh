@@ -150,7 +150,6 @@ env -i PATH=/usr/bin:/bin HOME="$work/home" TMPDIR="$work/tmp" \
   XDG_RUNTIME_DIR="$work/run" WAYLAND_DISPLAY="$display" \
   XDG_CACHE_HOME="$work/cache" XDG_CONFIG_HOME="$work/config" \
   DSH_HOME="$work/home/.dsh" \
-  DSH_DESKTOP_AUTO_CONNECT=1 \
   DSH_DESKTOP_HOST_BIN="$tree/bin/desktop-host" \
   DSH_DESKTOP_RUNTIME_DIR="$tree/dsh" \
   DSH_DESKTOP_PROJECT_DIR="$project" \

@@ -1,7 +1,14 @@
 //! Shared sizing values and headless geometry checks for the desktop shell.
 
-/// Navigation rail width (icon-first).
-pub const NAV_RAIL_WIDTH: f32 = 62.0;
+/// V2 top bar height (px).
+pub const TOP_BAR_HEIGHT: f32 = 30.0;
+/// V2 agent tab height (px).
+#[allow(dead_code)]
+pub const AGENT_TAB_HEIGHT: f32 = 34.0;
+/// V2 bottom bar height (px).
+pub const BOTTOM_BAR_HEIGHT: f32 = 26.0;
+/// Navigation rail width for icon-first controls with single-line labels.
+pub const NAV_RAIL_WIDTH: f32 = 82.0;
 
 /// Context sidebar default and bounds.
 pub const SIDEBAR_DEFAULT: f32 = 278.0;
@@ -37,7 +44,7 @@ impl LayoutMetrics {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "legacy-egui"))]
 mod tests {
     use super::*;
     use eframe::egui::{self, Pos2, RawInput, Rect, Vec2};
@@ -98,5 +105,31 @@ mod tests {
             assert!(metrics.central.0 <= width);
             assert!(metrics.central.1 <= height);
         }
+    }
+}
+
+#[cfg(test)]
+mod bounds_tests {
+    use super::*;
+
+    #[test]
+    fn sidebar_bounds_are_ordered() {
+        assert!(SIDEBAR_MIN < SIDEBAR_DEFAULT);
+        assert!(SIDEBAR_DEFAULT < SIDEBAR_MAX);
+    }
+
+    #[test]
+    fn explorer_bounds_are_ordered() {
+        assert!(EXPLORER_MIN < EXPLORER_DEFAULT);
+        assert!(EXPLORER_DEFAULT < EXPLORER_MAX);
+        assert!(EXPLORER_SINGLE_PANE_MAX_WIDTH < EXPLORER_DOCK_MIN_WIDTH);
+    }
+
+    #[test]
+    fn bar_heights_are_positive() {
+        assert!(TOP_BAR_HEIGHT > 0.0);
+        assert!(AGENT_TAB_HEIGHT > 0.0);
+        assert!(BOTTOM_BAR_HEIGHT > 0.0);
+        assert!(NAV_RAIL_WIDTH > 0.0);
     }
 }

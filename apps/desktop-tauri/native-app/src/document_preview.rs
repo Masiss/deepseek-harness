@@ -1,5 +1,6 @@
 //! Display-only text previews; file access and document selection belong to the caller.
 
+#[cfg(feature = "legacy-egui")]
 use eframe::egui;
 
 /// Caller-supplied text and identity, kept separate from local filesystem paths.
@@ -45,11 +46,13 @@ pub enum PreviewDocument {
 }
 
 /// Viewer for decoded images; owns at most one uploaded texture.
+#[cfg(feature = "legacy-egui")]
 #[derive(Default)]
 pub struct ImagePreview {
     texture: Option<(String, egui::TextureHandle)>,
 }
 
+#[cfg(feature = "legacy-egui")]
 impl std::fmt::Debug for ImagePreview {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -59,10 +62,12 @@ impl std::fmt::Debug for ImagePreview {
     }
 }
 
+#[cfg(feature = "legacy-egui")]
 impl ImagePreview {
     /// Renders the decoded image scaled to the available width.
     ///
     /// The texture is rebuilt only when the target path or dimensions change.
+    #[cfg(feature = "legacy-egui")]
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -145,6 +150,7 @@ impl DocumentPreview {
     /// previously loaded. The caller must clear `document` when changing targets
     /// if the old content should not remain visible. Errors must be display-safe.
     /// Use distinct parent `push_id` scopes for multiple previews in one UI.
+    #[cfg(feature = "legacy-egui")]
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -211,7 +217,7 @@ impl DocumentPreview {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "legacy-egui"))]
 mod tests {
     use super::*;
 

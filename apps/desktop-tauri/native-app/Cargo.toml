@@ -3,11 +3,34 @@ name = "dsh-desktop-native-app"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "Native egui desktop shell for DeepSeek Harness"
+description = "Native desktop shell for DeepSeek Harness"
+default-run = "dsh-desktop-native-app"
+
+[[bin]]
+name = "dsh-desktop-native-app"
+path = "src/gpui_main.rs"
+doc = false
+
+[[bin]]
+name = "dsh-desktop-egui-legacy"
+path = "src/main.rs"
+doc = false
+required-features = ["legacy-egui"]
+
+[features]
+# The gpui shell is the shipped application; the retired egui shell is kept
+# buildable behind this feature so its renderers and tests stay intact without
+# linking eframe/epaint into the gpui binary.
+default = []
+legacy-egui = ["dep:eframe"]
 
 [dependencies]
-# eframe provides the native window lifecycle and egui rendering without a webview.
-eframe = { version = "0.36", default-features = true }
+# gpui provides the native window lifecycle and GPU rendering without a webview.
+gpui = "0.2.2"
+# unicode-segmentation moves the text-input caret over user-perceived characters.
+unicode-segmentation = "1"
+# eframe keeps the retired egui shell buildable until the gpui port reaches parity.
+eframe = { version = "0.36", default-features = true, optional = true }
 # client-core owns the Host transport and typed session viewer used by this shell.
 dsh-client-core = { package = "dsh-client-core", path = "../client-core" }
 # fs2 provides the cross-platform process lock used by the single-instance guard.
@@ -38,3 +61,9 @@ unicode-width = "0.2"
 egui_kittest = { version = "0.36", features = ["snapshot", "wgpu"] }
 # test-fixtures exposes wire-shaped Remote Event constructors for the UI fixture.
 dsh-client-core = { package = "dsh-client-core", path = "../client-core", features = ["test-fixtures"] }
+
+# xattr 0.2.3 (reached through gpui's archive client) reads the BSD ENOATTR
+# alias that current libc no longer defines on Linux; the patched copy maps it
+# to ENODATA. The patch satisfies the 0.2 requirement and leaves libc current.
+[patch.crates-io]
+xattr = { path = "vendor/xattr" }

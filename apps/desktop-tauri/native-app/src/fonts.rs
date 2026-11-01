@@ -6,7 +6,9 @@
 //! families for the picker, and builds the egui chains with the bundled faces
 //! kept behind the chosen family so missing scripts still fall through.
 
+#[cfg(feature = "legacy-egui")]
 use crate::ui_preferences::FontSettings;
+#[cfg(feature = "legacy-egui")]
 use eframe::egui;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -245,6 +247,7 @@ fn read_face(path: &Path) -> Option<Vec<u8>> {
 /// @param catalog - Installed families used to resolve a name to a file.
 /// @param include_cjk - Whether CJK text is on screen and needs the fallback.
 /// @returns One message per configured family that could not be loaded.
+#[cfg(feature = "legacy-egui")]
 pub fn install(
     context: &egui::Context,
     settings: &FontSettings,
@@ -380,5 +383,29 @@ Broken Family\t/usr/share/fonts/x.pfb\n";
         assert!(catalog.file_for("Mono").is_some());
         assert!(catalog.file_for("Missing Face").is_none());
         assert!(catalog.file_for("").is_none());
+    }
+}
+
+#[cfg(test)]
+mod script_tests {
+    use super::*;
+
+    #[test]
+    fn contains_cjk_detects_han_and_hangul() {
+        assert!(contains_cjk("中文"));
+        assert!(contains_cjk("한국"));
+        assert!(contains_cjk("日本語"));
+    }
+
+    #[test]
+    fn contains_cjk_ignores_latin_and_vietnamese() {
+        assert!(!contains_cjk("hello"));
+        assert!(!contains_cjk("việt"));
+        assert!(!contains_cjk(""));
+    }
+
+    #[test]
+    fn contains_cjk_detects_fullwidth_forms() {
+        assert!(contains_cjk("Ａ"));
     }
 }

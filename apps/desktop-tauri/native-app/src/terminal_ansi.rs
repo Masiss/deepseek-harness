@@ -7,13 +7,42 @@
 //! text. Attributes resolve into egui paint formats, and the result is rendered as
 //! one scrollable monospace layout.
 
+#[cfg(feature = "legacy-egui")]
 use eframe::egui::{self, Color32, FontId};
+
+/// One 8-bit sRGB terminal color, independent of the renderer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnsiColor {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+}
+
+impl AnsiColor {
+    /// Builds an opaque color.
+    pub(crate) const fn rgb(r: u8, g: u8, b: u8) -> Self {
+        Self { r, g, b, a: 255 }
+    }
+
+    /// Converts to the egui paint color used by the retired shell.
+    #[cfg(feature = "legacy-egui")]
+    pub(crate) fn to_color32(self) -> Color32 {
+        Color32::from_rgba_unmultiplied(self.r, self.g, self.b, self.a)
+    }
+}
+
+impl Default for AnsiColor {
+    fn default() -> Self {
+        Self { r: 0, g: 0, b: 0, a: 255 }
+    }
+}
 
 /// One resolved SGR attribute set.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AnsiStyle {
-    pub fg: Option<Color32>,
-    pub bg: Option<Color32>,
+    pub fg: Option<AnsiColor>,
+    pub bg: Option<AnsiColor>,
     pub bold: bool,
     pub dim: bool,
     pub italic: bool,
@@ -37,33 +66,33 @@ pub struct AnsiLine {
 const TAB_WIDTH: usize = 8;
 /// Rows retained before the oldest scrolls out of the view.
 const MAX_ROWS: usize = 5_000;
-const DEFAULT_FOREGROUND: Color32 = Color32::from_rgb(0xd8, 0xde, 0xe9);
-const DEFAULT_BACKGROUND: Color32 = Color32::from_rgb(0x1a, 0x1b, 0x26);
+const DEFAULT_FOREGROUND: AnsiColor = AnsiColor::rgb(0xd8, 0xde, 0xe9);
+const DEFAULT_BACKGROUND: AnsiColor = AnsiColor::rgb(0x1a, 0x1b, 0x26);
 
 /// Palette entry for the 16 basic SGR colors and their bright variants.
-fn basic_color(index: u8) -> Color32 {
-    const BASIC: [Color32; 16] = [
-        Color32::from_rgb(0x1a, 0x1b, 0x26),
-        Color32::from_rgb(0xf7, 0x76, 0x8e),
-        Color32::from_rgb(0x9e, 0xce, 0x6a),
-        Color32::from_rgb(0xe0, 0xaf, 0x68),
-        Color32::from_rgb(0x7a, 0xa2, 0xf7),
-        Color32::from_rgb(0xbb, 0x9a, 0xf7),
-        Color32::from_rgb(0x7d, 0xcf, 0xff),
-        Color32::from_rgb(0xa9, 0xb1, 0xd6),
-        Color32::from_rgb(0x41, 0x48, 0x68),
-        Color32::from_rgb(0xff, 0x89, 0x9f),
-        Color32::from_rgb(0xb9, 0xf2, 0x7c),
-        Color32::from_rgb(0xff, 0xc7, 0x77),
-        Color32::from_rgb(0x8c, 0xb4, 0xff),
-        Color32::from_rgb(0xc9, 0x9b, 0xff),
-        Color32::from_rgb(0x9d, 0xe6, 0xff),
-        Color32::from_rgb(0xd8, 0xde, 0xe9),
+fn basic_color(index: u8) -> AnsiColor {
+    const BASIC: [AnsiColor; 16] = [
+        AnsiColor::rgb(0x1a, 0x1b, 0x26),
+        AnsiColor::rgb(0xf7, 0x76, 0x8e),
+        AnsiColor::rgb(0x9e, 0xce, 0x6a),
+        AnsiColor::rgb(0xe0, 0xaf, 0x68),
+        AnsiColor::rgb(0x7a, 0xa2, 0xf7),
+        AnsiColor::rgb(0xbb, 0x9a, 0xf7),
+        AnsiColor::rgb(0x7d, 0xcf, 0xff),
+        AnsiColor::rgb(0xa9, 0xb1, 0xd6),
+        AnsiColor::rgb(0x41, 0x48, 0x68),
+        AnsiColor::rgb(0xff, 0x89, 0x9f),
+        AnsiColor::rgb(0xb9, 0xf2, 0x7c),
+        AnsiColor::rgb(0xff, 0xc7, 0x77),
+        AnsiColor::rgb(0x8c, 0xb4, 0xff),
+        AnsiColor::rgb(0xc9, 0x9b, 0xff),
+        AnsiColor::rgb(0x9d, 0xe6, 0xff),
+        AnsiColor::rgb(0xd8, 0xde, 0xe9),
     ];
     BASIC[usize::from(index) % BASIC.len()]
 }
 
-fn color_256(index: u8) -> Color32 {
+fn color_256(index: u8) -> AnsiColor {
     match index {
         0..=15 => basic_color(index),
         16..=231 => {
@@ -72,12 +101,12 @@ fn color_256(index: u8) -> Color32 {
             let r = steps[usize::from(index / 36) % 6];
             let g = steps[usize::from((index % 36) / 6) % 6];
             let b = steps[usize::from(index % 6) % 6];
-            Color32::from_rgb(r, g, b)
+            AnsiColor::rgb(r, g, b)
         }
         232..=255 => {
             let level = 8 + (u16::from(index) - 232) * 10;
             let value = u8::try_from(level).unwrap_or(u8::MAX);
-            Color32::from_rgb(value, value, value)
+            AnsiColor::rgb(value, value, value)
         }
     }
 }
@@ -807,7 +836,7 @@ fn apply_sgr(style: &mut AnsiStyle, parameters: &str) {
                         ) else {
                             return;
                         };
-                        let color = Color32::from_rgb(
+                        let color = AnsiColor::rgb(
                             u8::try_from(*r).unwrap_or(0),
                             u8::try_from(*g).unwrap_or(0),
                             u8::try_from(*b).unwrap_or(0),
@@ -829,10 +858,11 @@ fn apply_sgr(style: &mut AnsiStyle, parameters: &str) {
 }
 
 /// Resolves SGR attributes into concrete paint colors.
+#[cfg(feature = "legacy-egui")]
 fn format_for(style: AnsiStyle) -> egui::TextFormat {
     let (mut foreground, mut background) = (
-        style.fg.unwrap_or(DEFAULT_FOREGROUND),
-        style.bg.unwrap_or(DEFAULT_BACKGROUND),
+        style.fg.unwrap_or(DEFAULT_FOREGROUND).to_color32(),
+        style.bg.unwrap_or(DEFAULT_BACKGROUND).to_color32(),
     );
     if style.inverse {
         std::mem::swap(&mut foreground, &mut background);
@@ -854,6 +884,7 @@ fn format_for(style: AnsiStyle) -> egui::TextFormat {
     }
 }
 
+#[cfg(feature = "legacy-egui")]
 pub fn layout(lines: &[AnsiLine], wrap_width: f32) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     job.wrap.max_width = wrap_width;
@@ -1039,7 +1070,7 @@ mod tests {
         assert_eq!(spans[1].style, AnsiStyle::default());
         assert_eq!(spans[2].text, "bold");
         assert!(spans[2].style.bold);
-        assert_eq!(spans[2].style.fg, Some(Color32::from_rgb(10, 20, 30)));
+        assert_eq!(spans[2].style.fg, Some(AnsiColor::rgb(10, 20, 30)));
     }
 
     #[test]
@@ -1048,9 +1079,17 @@ mod tests {
         assert_eq!(lines[0].spans[0].style.fg, Some(color_256(196)));
         let inverse = lines[0].spans[1].style;
         assert!(inverse.inverse);
-        let format = format_for(inverse);
-        assert_eq!(format.color, basic_color(4));
-        assert_eq!(format.background, color_256(196));
+        assert_eq!(inverse.bg, Some(basic_color(4)));
+        assert_eq!(inverse.fg, Some(color_256(196)));
+    }
+
+    #[cfg(feature = "legacy-egui")]
+    #[test]
+    fn formatted_spans_swap_foreground_and_background_when_inverse() {
+        let lines = parse("\u{1b}[38;5;196mX\u{1b}[7;44mY");
+        let format = format_for(lines[0].spans[1].style);
+        assert_eq!(format.color, basic_color(4).to_color32());
+        assert_eq!(format.background, color_256(196).to_color32());
     }
 
     #[test]
@@ -1079,6 +1118,7 @@ mod tests {
         assert_eq!(text(&lines), "XY");
     }
 
+    #[cfg(feature = "legacy-egui")]
     #[test]
     fn layout_renders_each_line_with_a_trailing_newline_between_rows() {
         let job = layout(&parse("a\u{1b}[31mb\nc"), 200.0);

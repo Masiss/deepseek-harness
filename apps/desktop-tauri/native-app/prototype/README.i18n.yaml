@@ -1,0 +1,16 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write apps/desktop-tauri/native-app/prototype/README.md
+/native-desktop-gui-prototype:
+  en: 3407218726ac09d5
+  zh: 3891c80d5dce1087
+/native-desktop-gui-prototype/start-here:
+  en: 8395856d214402f7
+  zh: 5961adde7da3b8da
+/native-desktop-gui-prototype/preview:
+  en: 296696d5bda5364f
+  zh: 0d01df9a40bc330b
+/native-desktop-gui-prototype/relationship-to-the-application:
+  en: a5693f355ebfb8be
+  zh: bfd3240f8f3500da

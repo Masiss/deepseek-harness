@@ -1,7 +1,11 @@
 //! Client-local appearance preferences, separate from Host-owned settings.
 
+#[cfg(feature = "legacy-egui")]
 use eframe::egui;
+#[cfg(feature = "legacy-egui")]
 use egui::Color32;
+#[cfg(feature = "legacy-egui")]
+use crate::command_registry::CommandId;
 use serde::{Deserialize, Serialize};
 use std::error::Error as StdError;
 use std::fmt;
@@ -40,6 +44,7 @@ pub enum ThemeMode {
     Dark,
 }
 
+#[cfg(feature = "legacy-egui")]
 impl From<ThemeMode> for egui::ThemePreference {
     fn from(value: ThemeMode) -> Self {
         match value {
@@ -86,6 +91,7 @@ pub struct ThemeColor(pub String);
 
 impl ThemeColor {
     /// Formats an sRGB triplet the way the preferences file stores it.
+    #[allow(dead_code)]
     pub fn from_srgb(rgb: [u8; 3]) -> Self {
         Self(format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]))
     }
@@ -100,9 +106,9 @@ impl ThemeColor {
         Some([channel(0..2)?, channel(2..4)?, channel(4..6)?])
     }
 
-    fn color_or(&self, fallback: Color32) -> Color32 {
+    fn rgba8_or(&self, fallback: Rgba8) -> Rgba8 {
         match self.srgb() {
-            Some([red, green, blue]) => Color32::from_rgb(red, green, blue),
+            Some([red, green, blue]) => Rgba8::rgb(red, green, blue),
             None => fallback,
         }
     }
@@ -153,6 +159,7 @@ impl ThemePalette {
     }
 
     /// Every role as an editable field.
+#[cfg(feature = "legacy-egui")]
     pub fn roles_mut(&mut self) -> [(&'static str, &mut ThemeColor); 9] {
         [
             ("background", &mut self.background),
@@ -225,6 +232,7 @@ impl CustomTheme {
     }
 
     /// The palette the appearance editor mutates for the active scheme.
+#[cfg(feature = "legacy-egui")]
     pub fn for_scheme_mut(&mut self, dark: bool) -> &mut ThemePalette {
         if dark {
             &mut self.dark
@@ -297,9 +305,33 @@ impl Keybindings {
             KeyChord::parse(&self.new_session)?,
         ])
     }
+
+    /// Consumes the chord bound to one shared command, if any.
+    ///
+    /// @param command - The shared command to look up.
+    /// @param input - This frame's input state.
+    /// @returns Whether the bound chord fired.
+    #[cfg(feature = "legacy-egui")]
+    pub fn consume_command(
+        &mut self,
+        command: CommandId,
+        input: &mut egui::InputState,
+    ) -> bool {
+        let chord = match command {
+            CommandId::ToggleSettings => KeyChord::parse(&self.open_settings).ok().flatten(),
+            CommandId::ToggleMarketplace => {
+                KeyChord::parse(&self.open_marketplace).ok().flatten()
+            }
+            CommandId::ToggleGoals => KeyChord::parse(&self.open_goals).ok().flatten(),
+            CommandId::NewSession => KeyChord::parse(&self.new_session).ok().flatten(),
+            _ => None,
+        };
+        chord.is_some_and(|chord| chord.consume(input))
+    }
 }
 
 /// Looks a key up in egui's name table, accepting lower-case names.
+#[cfg(feature = "legacy-egui")]
 fn key_by_name(name: &str) -> Option<egui::Key> {
     egui::Key::from_name(name).or_else(|| {
         let mut characters = name.chars();
@@ -310,13 +342,19 @@ fn key_by_name(name: &str) -> Option<egui::Key> {
     })
 }
 
-/// One parsed shortcut chord.
+/// One parsed shortcut chord, independent of the renderer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyChord {
-    /// Modifiers the chord requires.
-    pub modifiers: egui::Modifiers,
-    /// Key the chord presses.
-    pub key: egui::Key,
+    /// Whether Ctrl must be held.
+    pub ctrl: bool,
+    /// Whether Alt must be held.
+    pub alt: bool,
+    /// Whether Shift must be held.
+    pub shift: bool,
+    /// Whether the platform command key (Super or Command) must be held.
+    pub cmd: bool,
+    /// Canonical name of the pressed key, matching [`KeyChord::parse`] input.
+    pub key: &'static str,
 }
 
 impl KeyChord {
@@ -329,20 +367,20 @@ impl KeyChord {
         if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("none") {
             return Ok(None);
         }
-        let mut modifiers = egui::Modifiers::NONE;
+        let (mut ctrl, mut alt, mut shift, mut cmd) = (false, false, false, false);
         let mut key = None;
         for part in trimmed.split('+') {
             let name = part.trim();
             match name.to_ascii_lowercase().as_str() {
-                "ctrl" | "control" if key.is_none() => modifiers.ctrl = true,
-                "alt" | "option" if key.is_none() => modifiers.alt = true,
-                "shift" if key.is_none() => modifiers.shift = true,
-                "cmd" | "command" | "super" | "meta" if key.is_none() => modifiers.mac_cmd = true,
+                "ctrl" | "control" if key.is_none() => ctrl = true,
+                "alt" | "option" if key.is_none() => alt = true,
+                "shift" if key.is_none() => shift = true,
+                "cmd" | "command" | "super" | "meta" if key.is_none() => cmd = true,
                 "ctrl" | "control" | "alt" | "option" | "shift" | "cmd" | "command" | "super"
                 | "meta" => return Err(UiPreferencesError::InvalidValue(INVALID_CHORD)),
                 "" => return Err(UiPreferencesError::InvalidValue(INVALID_CHORD)),
                 other => {
-                    let Some(parsed) = key_by_name(other) else {
+                    let Some(parsed) = canonical_key(other) else {
                         return Err(UiPreferencesError::InvalidValue(INVALID_CHORD));
                     };
                     if key.replace(parsed).is_some() {
@@ -354,18 +392,113 @@ impl KeyChord {
         let Some(key) = key else {
             return Err(UiPreferencesError::InvalidValue(INVALID_CHORD));
         };
-        modifiers.command = modifiers.ctrl || modifiers.mac_cmd;
-        Ok(Some(Self { modifiers, key }))
+        Ok(Some(Self {
+            ctrl,
+            alt,
+            shift,
+            cmd,
+            key,
+        }))
     }
 
     /// Consumes the chord when the frame reports it, so one press fires once.
     ///
     /// @param input - This frame's input state.
     /// @returns Whether the chord fired.
+    #[cfg(feature = "legacy-egui")]
     pub fn consume(&self, input: &mut egui::InputState) -> bool {
-        input.consume_key(self.modifiers, self.key)
+        let Some(key) = key_by_name(self.key) else {
+            return false;
+        };
+        let modifiers = egui::Modifiers {
+            alt: self.alt,
+            ctrl: self.ctrl,
+            shift: self.shift,
+            mac_cmd: self.cmd,
+            command: self.ctrl || self.cmd,
+        };
+        input.consume_key(modifiers, key)
     }
 }
+
+/// Key names a chord may press, written the way the preferences editor shows them.
+const NAMED_KEYS: [&str; 48] = [
+    "Comma",
+    "Period",
+    "Slash",
+    "Semicolon",
+    "Quote",
+    "Backslash",
+    "Minus",
+    "Equals",
+    "Backtick",
+    "Space",
+    "Tab",
+    "Enter",
+    "Escape",
+    "Backspace",
+    "Delete",
+    "Insert",
+    "Home",
+    "End",
+    "PageUp",
+    "PageDown",
+    "ArrowUp",
+    "ArrowDown",
+    "ArrowLeft",
+    "ArrowRight",
+    "F1",
+    "F2",
+    "F3",
+    "F4",
+    "F5",
+    "F6",
+    "F7",
+    "F8",
+    "F9",
+    "F10",
+    "F11",
+    "F12",
+    "F13",
+    "F14",
+    "F15",
+    "F16",
+    "F17",
+    "F18",
+    "F19",
+    "F20",
+    "F21",
+    "F22",
+    "F23",
+    "F24",
+];
+
+/// Resolves a case-insensitive key name to its canonical spelling.
+///
+/// @param name - One non-modifier chord part.
+/// @returns The canonical name, or `None` when the key is unsupported.
+fn canonical_key(name: &str) -> Option<&'static str> {
+    let mut characters = name.chars();
+    if let (Some(character), None) = (characters.next(), characters.next()) {
+        let upper = character.to_ascii_uppercase();
+        if upper.is_ascii_uppercase() || upper.is_ascii_digit() {
+            return LETTER_KEYS
+                .iter()
+                .copied()
+                .find(|candidate| candidate.starts_with(upper));
+        }
+    }
+    NAMED_KEYS
+        .iter()
+        .copied()
+        .find(|candidate| candidate.eq_ignore_ascii_case(name))
+}
+
+/// Canonical names for the single-character keys.
+const LETTER_KEYS: [&str; 36] = [
+    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R",
+    "S", "T", "U", "V", "W", "X", "Y", "Z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+];
 
 /// Persisted preferences owned by the native client, not the Host.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -532,6 +665,7 @@ impl UiPreferences {
     }
 
     /// Parses a complete JSON preferences object and validates its values.
+    #[allow(dead_code)]
     pub fn parse_json(text: &str) -> Result<Self, UiPreferencesError> {
         let mut preferences: Self = serde_json::from_str(text).map_err(UiPreferencesError::Json)?;
         if preferences.schema_version == SCHEMA_VERSION_V1 {
@@ -542,6 +676,7 @@ impl UiPreferences {
     }
 
     /// Serializes the current preferences as editable JSON.
+    #[allow(dead_code)]
     pub fn to_pretty_json(&self) -> Result<String, UiPreferencesError> {
         serde_json::to_string_pretty(self).map_err(UiPreferencesError::Json)
     }
@@ -597,6 +732,7 @@ impl UiPreferences {
 }
 
 /// Applies persisted appearance choices without replacing unrelated egui style values.
+#[cfg(feature = "legacy-egui")]
 pub fn apply(context: &egui::Context, preferences: &UiPreferences) {
     let theme: egui::ThemePreference = preferences.theme.into();
     if context.options(|options| options.theme_preference) != theme {
@@ -627,22 +763,52 @@ pub fn apply(context: &egui::Context, preferences: &UiPreferences) {
     });
 }
 
-/// One color pack resolved for the active light or dark scheme.
-struct Palette {
-    panel: Color32,
-    extreme: Color32,
-    text: Color32,
-    selection: Color32,
-    accent: Color32,
-    accent_text: Color32,
-    widget: Color32,
-    stroke: Color32,
-    muted: Color32,
-    warn: Color32,
-    error: Color32,
+/// One opaque 8-bit sRGB color, shared by both renderers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Rgba8 {
+    pub(crate) r: u8,
+    pub(crate) g: u8,
+    pub(crate) b: u8,
+    pub(crate) a: u8,
 }
 
-fn palette(pack: ThemePack, dark: bool, custom: &CustomTheme) -> Option<Palette> {
+impl Rgba8 {
+    pub(crate) const BLACK: Self = Self::rgb(0, 0, 0);
+    pub(crate) const WHITE: Self = Self::rgb(255, 255, 255);
+    pub(crate) const RED: Self = Self::rgb(255, 0, 0);
+    pub(crate) const YELLOW: Self = Self::rgb(255, 255, 0);
+    pub(crate) const GRAY: Self = Self::rgb(160, 160, 160);
+    pub(crate) const BLUE: Self = Self::rgb(0, 0, 255);
+    pub(crate) const LIGHT_BLUE: Self = Self::rgb(0xad, 0xd8, 0xe6);
+
+    /// Builds an opaque color.
+    pub(crate) const fn rgb(r: u8, g: u8, b: u8) -> Self {
+        Self { r, g, b, a: 255 }
+    }
+
+    /// Converts to the egui paint color used by the retired shell.
+    #[cfg(feature = "legacy-egui")]
+    pub(crate) fn to_color32(self) -> Color32 {
+        Color32::from_rgba_unmultiplied(self.r, self.g, self.b, self.a)
+    }
+}
+
+/// One color pack resolved for the active light or dark scheme.
+pub(crate) struct Palette {
+    pub(crate) panel: Rgba8,
+    pub(crate) extreme: Rgba8,
+    pub(crate) text: Rgba8,
+    pub(crate) selection: Rgba8,
+    pub(crate) accent: Rgba8,
+    pub(crate) accent_text: Rgba8,
+    pub(crate) widget: Rgba8,
+    pub(crate) stroke: Rgba8,
+    pub(crate) muted: Rgba8,
+    pub(crate) warn: Rgba8,
+    pub(crate) error: Rgba8,
+}
+
+pub(crate) fn palette(pack: ThemePack, dark: bool, custom: &CustomTheme) -> Option<Palette> {
     match (pack, dark) {
         (ThemePack::Default, dark) => {
             let palette = if dark {
@@ -651,107 +817,109 @@ fn palette(pack: ThemePack, dark: bool, custom: &CustomTheme) -> Option<Palette>
                 ThemePalette::light_default()
             };
             Some(Palette {
-                panel: palette.background.color_or(Color32::BLACK),
-                extreme: palette.surface.color_or(Color32::BLACK),
-                text: palette.text.color_or(Color32::WHITE),
-                selection: palette.selection.color_or(Color32::BLUE),
-                accent: palette.accent.color_or(Color32::LIGHT_BLUE),
+                panel: palette.background.rgba8_or(Rgba8::BLACK),
+                extreme: palette.surface.rgba8_or(Rgba8::BLACK),
+                text: palette.text.rgba8_or(Rgba8::WHITE),
+                selection: palette.selection.rgba8_or(Rgba8::BLUE),
+                accent: palette.accent.rgba8_or(Rgba8::LIGHT_BLUE),
                 accent_text: if dark {
-                    Color32::from_rgb(0xff, 0x9b, 0x70)
+                    Rgba8::rgb(0xff, 0x9b, 0x70)
                 } else {
-                    Color32::from_rgb(0xa8, 0x3b, 0x10)
+                    Rgba8::rgb(0xa8, 0x3b, 0x10)
                 },
-                widget: palette.surface.color_or(Color32::BLACK),
-                stroke: palette.border.color_or(Color32::GRAY),
-                muted: palette.muted.color_or(Color32::GRAY),
-                warn: palette.warn.color_or(Color32::YELLOW),
-                error: palette.error.color_or(Color32::RED),
+                widget: palette.surface.rgba8_or(Rgba8::BLACK),
+                stroke: palette.border.rgba8_or(Rgba8::GRAY),
+                muted: palette.muted.rgba8_or(Rgba8::GRAY),
+                warn: palette.warn.rgba8_or(Rgba8::YELLOW),
+                error: palette.error.rgba8_or(Rgba8::RED),
             })
         }
         (ThemePack::Custom, dark) => {
             let palette = custom.for_scheme(dark);
             let fallback = if dark {
-                Color32::from_rgb(0x1b, 0x1b, 0x1b)
+                Rgba8::rgb(0x1b, 0x1b, 0x1b)
             } else {
-                Color32::from_rgb(0xfa, 0xfa, 0xfa)
+                Rgba8::rgb(0xfa, 0xfa, 0xfa)
             };
             Some(Palette {
-                panel: palette.background.color_or(fallback),
-                extreme: palette.surface.color_or(fallback),
-                text: palette.text.color_or(Color32::WHITE),
-                selection: palette.selection.color_or(Color32::BLUE),
-                accent: palette.accent.color_or(Color32::LIGHT_BLUE),
-                accent_text: palette.accent.color_or(Color32::LIGHT_BLUE),
-                widget: palette.surface.color_or(fallback),
-                stroke: palette.border.color_or(Color32::GRAY),
-                muted: palette.muted.color_or(Color32::GRAY),
-                warn: palette.warn.color_or(Color32::YELLOW),
-                error: palette.error.color_or(Color32::RED),
+                panel: palette.background.rgba8_or(fallback),
+                extreme: palette.surface.rgba8_or(fallback),
+                text: palette.text.rgba8_or(Rgba8::WHITE),
+                selection: palette.selection.rgba8_or(Rgba8::BLUE),
+                accent: palette.accent.rgba8_or(Rgba8::LIGHT_BLUE),
+                accent_text: palette.accent.rgba8_or(Rgba8::LIGHT_BLUE),
+                widget: palette.surface.rgba8_or(fallback),
+                stroke: palette.border.rgba8_or(Rgba8::GRAY),
+                muted: palette.muted.rgba8_or(Rgba8::GRAY),
+                warn: palette.warn.rgba8_or(Rgba8::YELLOW),
+                error: palette.error.rgba8_or(Rgba8::RED),
             })
         }
         (ThemePack::HighContrast, true) => Some(Palette {
-            panel: Color32::BLACK,
-            extreme: Color32::BLACK,
-            text: Color32::WHITE,
-            selection: Color32::from_rgb(0xff, 0xf2, 0x00),
-            accent: Color32::from_rgb(0x00, 0xe5, 0xff),
-            accent_text: Color32::from_rgb(0x00, 0xe5, 0xff),
-            widget: Color32::BLACK,
-            stroke: Color32::WHITE,
-            muted: Color32::WHITE,
-            warn: Color32::from_rgb(0xff, 0xd6, 0x00),
-            error: Color32::from_rgb(0xff, 0x6b, 0x6b),
+            panel: Rgba8::BLACK,
+            extreme: Rgba8::BLACK,
+            text: Rgba8::WHITE,
+            selection: Rgba8::rgb(0xff, 0xf2, 0x00),
+            accent: Rgba8::rgb(0x00, 0xe5, 0xff),
+            accent_text: Rgba8::rgb(0x00, 0xe5, 0xff),
+            widget: Rgba8::BLACK,
+            stroke: Rgba8::WHITE,
+            muted: Rgba8::WHITE,
+            warn: Rgba8::rgb(0xff, 0xd6, 0x00),
+            error: Rgba8::rgb(0xff, 0x6b, 0x6b),
         }),
         (ThemePack::HighContrast, false) => Some(Palette {
-            panel: Color32::WHITE,
-            extreme: Color32::WHITE,
-            text: Color32::BLACK,
-            selection: Color32::from_rgb(0x00, 0x00, 0xff),
-            accent: Color32::from_rgb(0x00, 0x44, 0xaa),
-            accent_text: Color32::from_rgb(0x00, 0x44, 0xaa),
-            widget: Color32::WHITE,
-            stroke: Color32::BLACK,
-            muted: Color32::BLACK,
-            warn: Color32::from_rgb(0x7a, 0x4b, 0x00),
-            error: Color32::from_rgb(0xb3, 0x00, 0x00),
+            panel: Rgba8::WHITE,
+            extreme: Rgba8::WHITE,
+            text: Rgba8::BLACK,
+            selection: Rgba8::rgb(0x00, 0x00, 0xff),
+            accent: Rgba8::rgb(0x00, 0x44, 0xaa),
+            accent_text: Rgba8::rgb(0x00, 0x44, 0xaa),
+            widget: Rgba8::WHITE,
+            stroke: Rgba8::BLACK,
+            muted: Rgba8::BLACK,
+            warn: Rgba8::rgb(0x7a, 0x4b, 0x00),
+            error: Rgba8::rgb(0xb3, 0x00, 0x00),
         }),
         (ThemePack::Solarized, true) => Some(Palette {
-            panel: Color32::from_rgb(0x00, 0x2b, 0x36),
-            extreme: Color32::from_rgb(0x07, 0x36, 0x42),
-            text: Color32::from_rgb(0x83, 0x94, 0x96),
-            selection: Color32::from_rgb(0x26, 0x8b, 0xd2),
-            accent: Color32::from_rgb(0x2a, 0xa1, 0x98),
-            accent_text: Color32::from_rgb(0x2a, 0xa1, 0x98),
-            widget: Color32::from_rgb(0x07, 0x36, 0x42),
-            stroke: Color32::from_rgb(0x58, 0x6e, 0x75),
-            muted: Color32::from_rgb(0x93, 0xa1, 0xa1),
-            warn: Color32::from_rgb(0xb5, 0x89, 0x00),
-            error: Color32::from_rgb(0xdc, 0x32, 0x2f),
+            panel: Rgba8::rgb(0x00, 0x2b, 0x36),
+            extreme: Rgba8::rgb(0x07, 0x36, 0x42),
+            text: Rgba8::rgb(0x83, 0x94, 0x96),
+            selection: Rgba8::rgb(0x26, 0x8b, 0xd2),
+            accent: Rgba8::rgb(0x2a, 0xa1, 0x98),
+            accent_text: Rgba8::rgb(0x2a, 0xa1, 0x98),
+            widget: Rgba8::rgb(0x07, 0x36, 0x42),
+            stroke: Rgba8::rgb(0x58, 0x6e, 0x75),
+            muted: Rgba8::rgb(0x93, 0xa1, 0xa1),
+            warn: Rgba8::rgb(0xb5, 0x89, 0x00),
+            error: Rgba8::rgb(0xdc, 0x32, 0x2f),
         }),
         (ThemePack::Solarized, false) => Some(Palette {
-            panel: Color32::from_rgb(0xfd, 0xf6, 0xe3),
-            extreme: Color32::from_rgb(0xee, 0xe8, 0xd5),
-            text: Color32::from_rgb(0x65, 0x7b, 0x83),
-            selection: Color32::from_rgb(0x26, 0x8b, 0xd2),
-            accent: Color32::from_rgb(0x2a, 0xa1, 0x98),
-            accent_text: Color32::from_rgb(0x2a, 0xa1, 0x98),
-            widget: Color32::from_rgb(0xee, 0xe8, 0xd5),
-            stroke: Color32::from_rgb(0x93, 0xa1, 0xa1),
-            muted: Color32::from_rgb(0x65, 0x7b, 0x83),
-            warn: Color32::from_rgb(0xa1, 0x62, 0x07),
-            error: Color32::from_rgb(0xdc, 0x32, 0x2f),
+            panel: Rgba8::rgb(0xfd, 0xf6, 0xe3),
+            extreme: Rgba8::rgb(0xee, 0xe8, 0xd5),
+            text: Rgba8::rgb(0x65, 0x7b, 0x83),
+            selection: Rgba8::rgb(0x26, 0x8b, 0xd2),
+            accent: Rgba8::rgb(0x2a, 0xa1, 0x98),
+            accent_text: Rgba8::rgb(0x2a, 0xa1, 0x98),
+            widget: Rgba8::rgb(0xee, 0xe8, 0xd5),
+            stroke: Rgba8::rgb(0x93, 0xa1, 0xa1),
+            muted: Rgba8::rgb(0x65, 0x7b, 0x83),
+            warn: Rgba8::rgb(0xa1, 0x62, 0x07),
+            error: Rgba8::rgb(0xdc, 0x32, 0x2f),
         }),
     }
 }
 
 /// Returns the active accent fill for buttons that carry the primary action.
+#[cfg(feature = "legacy-egui")]
 pub(crate) fn accent_fill(preferences: &UiPreferences, dark: bool) -> Color32 {
     palette(preferences.theme_pack, dark, &preferences.custom_theme).map_or_else(
         || Color32::from_rgb(0xe9, 0x56, 0x18),
-        |palette| palette.accent,
+        |palette| palette.accent.to_color32(),
     )
 }
 
+#[cfg(feature = "legacy-egui")]
 fn apply_corner_radius(visuals: &mut egui::Visuals, radius: egui::CornerRadius) {
     visuals.window_corner_radius = radius;
     visuals.menu_corner_radius = radius;
@@ -766,37 +934,39 @@ fn apply_corner_radius(visuals: &mut egui::Visuals, radius: egui::CornerRadius) 
     }
 }
 
+#[cfg(feature = "legacy-egui")]
 fn apply_theme_pack(visuals: &mut egui::Visuals, pack: ThemePack, custom: &CustomTheme) {
     let Some(palette) = palette(pack, visuals.dark_mode, custom) else {
         return;
     };
-    visuals.panel_fill = palette.panel;
-    visuals.window_fill = palette.panel;
-    visuals.extreme_bg_color = palette.extreme;
-    visuals.faint_bg_color = palette.panel;
-    visuals.override_text_color = Some(palette.text);
-    visuals.hyperlink_color = palette.accent_text;
-    visuals.selection.bg_fill = palette.selection;
-    visuals.selection.stroke.color = palette.text;
-    visuals.widgets.noninteractive.bg_fill = palette.panel;
-    visuals.widgets.noninteractive.fg_stroke.color = palette.text;
+    visuals.panel_fill = palette.panel.to_color32();
+    visuals.window_fill = palette.panel.to_color32();
+    visuals.extreme_bg_color = palette.extreme.to_color32();
+    visuals.faint_bg_color = palette.panel.to_color32();
+    visuals.override_text_color = Some(palette.text.to_color32());
+    visuals.hyperlink_color = palette.accent_text.to_color32();
+    visuals.selection.bg_fill = palette.selection.to_color32();
+    visuals.selection.stroke.color = palette.text.to_color32();
+    visuals.widgets.noninteractive.bg_fill = palette.panel.to_color32();
+    visuals.widgets.noninteractive.fg_stroke.color = palette.text.to_color32();
     for widget in [
         &mut visuals.widgets.inactive,
         &mut visuals.widgets.hovered,
         &mut visuals.widgets.active,
         &mut visuals.widgets.open,
     ] {
-        widget.bg_fill = palette.widget;
-        widget.fg_stroke.color = palette.text;
-        widget.bg_stroke.color = palette.stroke;
+        widget.bg_fill = palette.widget.to_color32();
+        widget.fg_stroke.color = palette.text.to_color32();
+        widget.bg_stroke.color = palette.stroke.to_color32();
     }
-    visuals.widgets.noninteractive.bg_stroke.color = palette.stroke;
-    visuals.widgets.noninteractive.fg_stroke.color = palette.muted;
-    visuals.warn_fg_color = palette.warn;
-    visuals.error_fg_color = palette.error;
+    visuals.widgets.noninteractive.bg_stroke.color = palette.stroke.to_color32();
+    visuals.widgets.noninteractive.fg_stroke.color = palette.muted.to_color32();
+    visuals.warn_fg_color = palette.warn.to_color32();
+    visuals.error_fg_color = palette.error.to_color32();
 }
 
 /// Actions returned by the local preferences editor.
+#[cfg(feature = "legacy-egui")]
 pub enum UiPreferencesAction {
     /// Apply a draft for this session without writing it to disk.
     Preview(UiPreferences),
@@ -808,6 +978,7 @@ pub enum UiPreferencesAction {
     Reset,
 }
 
+#[cfg(feature = "legacy-egui")]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum UiPreferencesTab {
     #[default]
@@ -818,6 +989,7 @@ enum UiPreferencesTab {
 }
 
 /// Draft editor for client-local appearance preferences.
+#[cfg(feature = "legacy-egui")]
 pub struct UiPreferencesPanel {
     draft: UiPreferences,
     tab: UiPreferencesTab,
@@ -828,6 +1000,7 @@ pub struct UiPreferencesPanel {
     load_error: Option<String>,
 }
 
+#[cfg(feature = "legacy-egui")]
 impl UiPreferencesPanel {
     /// Creates the editor from loaded preferences and an optional load diagnostic.
     pub fn new(preferences: UiPreferences, load_error: Option<String>) -> Self {
@@ -1163,6 +1336,7 @@ impl UiPreferencesPanel {
 }
 
 /// Draws one section title with the spacing the appearance editor relies on.
+#[cfg(feature = "legacy-egui")]
 fn section(ui: &mut egui::Ui, title: &str) {
     ui.add_space(10.0);
     ui.label(egui::RichText::new(title).strong());
@@ -1171,6 +1345,7 @@ fn section(ui: &mut egui::Ui, title: &str) {
 /// Draws a swatch, its editable hex value, and the role name on one row.
 ///
 /// @returns Whether the color changed this frame.
+#[cfg(feature = "legacy-egui")]
 fn color_row(ui: &mut egui::Ui, role: &str, color: &mut ThemeColor) -> bool {
     let mut rgb = color.srgb().unwrap_or([0, 0, 0]);
     let mut changed = false;
@@ -1196,6 +1371,7 @@ fn color_row(ui: &mut egui::Ui, role: &str, color: &mut ThemeColor) -> bool {
 }
 
 /// Draws a family picker that keeps the bundled face available as the default.
+#[cfg(feature = "legacy-egui")]
 fn font_row(
     ui: &mut egui::Ui,
     label: &str,
@@ -1223,6 +1399,7 @@ fn font_row(
     });
 }
 
+#[cfg(feature = "legacy-egui")]
 fn theme_label(theme: ThemeMode) -> &'static str {
     match theme {
         ThemeMode::System => "System",
@@ -1521,6 +1698,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "legacy-egui")]
     fn custom_pack_paints_the_configured_roles_and_radius() {
         let context = egui::Context::default();
         let mut preferences = UiPreferences {
@@ -1614,8 +1792,8 @@ mod tests {
     #[test]
     fn parses_chords_and_rejects_ambiguous_ones() {
         let chord = KeyChord::parse("ctrl+shift+s").unwrap().unwrap();
-        assert!(chord.modifiers.ctrl && chord.modifiers.shift);
-        assert_eq!(chord.key, egui::Key::S);
+        assert!(chord.ctrl && chord.shift && !chord.alt && !chord.cmd);
+        assert_eq!(chord.key, "S");
         assert_eq!(KeyChord::parse("none").unwrap(), None);
         assert_eq!(KeyChord::parse("").unwrap(), None);
         for text in ["Ctrl+", "Ctrl", "Ctrl+S+Shift", "Ctrl+NotAKey"] {
@@ -1648,6 +1826,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "legacy-egui")]
     fn theme_pack_overrides_the_egui_palette_for_both_schemes() {
         let context = egui::Context::default();
         let preferences = UiPreferences {
@@ -1667,18 +1846,19 @@ mod tests {
     fn default_theme_uses_the_harness_dark_and_light_tokens() {
         let custom = CustomTheme::default();
         let dark = palette(ThemePack::Default, true, &custom).expect("dark Harness palette");
-        assert_eq!(dark.panel, Color32::from_rgb(0x17, 0x1a, 0x1f));
-        assert_eq!(dark.extreme, Color32::from_rgb(0x22, 0x27, 0x2e));
-        assert_eq!(dark.accent, Color32::from_rgb(0xe9, 0x56, 0x18));
-        assert_eq!(dark.accent_text, Color32::from_rgb(0xff, 0x9b, 0x70));
+        assert_eq!(dark.panel, Rgba8::rgb(0x17, 0x1a, 0x1f));
+        assert_eq!(dark.extreme, Rgba8::rgb(0x22, 0x27, 0x2e));
+        assert_eq!(dark.accent, Rgba8::rgb(0xe9, 0x56, 0x18));
+        assert_eq!(dark.accent_text, Rgba8::rgb(0xff, 0x9b, 0x70));
 
         let light = palette(ThemePack::Default, false, &custom).expect("light Harness palette");
-        assert_eq!(light.panel, Color32::from_rgb(0xf1, 0xf2, 0xf3));
-        assert_eq!(light.accent, Color32::from_rgb(0xe9, 0x56, 0x18));
-        assert_eq!(light.accent_text, Color32::from_rgb(0xa8, 0x3b, 0x10));
+        assert_eq!(light.panel, Rgba8::rgb(0xf1, 0xf2, 0xf3));
+        assert_eq!(light.accent, Rgba8::rgb(0xe9, 0x56, 0x18));
+        assert_eq!(light.accent_text, Rgba8::rgb(0xa8, 0x3b, 0x10));
     }
 
     #[test]
+    #[cfg(feature = "legacy-egui")]
     fn applies_theme_preference_and_density_to_both_color_schemes() {
         let context = egui::Context::default();
         let preferences = UiPreferences {
@@ -1698,5 +1878,21 @@ mod tests {
             assert_eq!(spacing.item_spacing, egui::vec2(5.0, 4.0));
             assert_eq!(spacing.button_padding, egui::vec2(6.0, 2.0));
         }
+    }
+
+    #[test]
+    fn parses_named_function_and_command_keys() {
+        let chord = KeyChord::parse("Cmd+Comma").unwrap().unwrap();
+        assert!(chord.cmd && !chord.ctrl && !chord.alt && !chord.shift);
+        assert_eq!(chord.key, "Comma");
+
+        assert_eq!(KeyChord::parse("F12").unwrap().unwrap().key, "F12");
+        assert_eq!(KeyChord::parse("f5").unwrap().unwrap().key, "F5");
+        assert_eq!(
+            KeyChord::parse("Ctrl+PageDown").unwrap().unwrap().key,
+            "PageDown"
+        );
+        assert!(KeyChord::parse("Ctrl+Shift").is_err());
+        assert!(KeyChord::parse("Ctrl+Comma+Period").is_err());
     }
 }

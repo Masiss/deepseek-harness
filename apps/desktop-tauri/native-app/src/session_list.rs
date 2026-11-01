@@ -1,7 +1,9 @@
 //! Session list rendering helpers.
 
 use dsh_client_core::session::SessionSummary;
+#[cfg(feature = "legacy-egui")]
 use dsh_client_core::sessions::SessionSearchResponse;
+#[cfg(feature = "legacy-egui")]
 use eframe::egui;
 
 /// Truncates a string to `max` characters with an ellipsis.
@@ -46,6 +48,7 @@ pub fn next_index(current: Option<usize>, direction: i8, len: usize) -> Option<u
 }
 
 /// Renders session summaries or search matches and returns a clicked session id.
+#[cfg(feature = "legacy-egui")]
 pub fn render(
     ui: &mut egui::Ui,
     sessions: &[SessionSummary],
@@ -54,7 +57,7 @@ pub fn render(
     now: i64,
 ) -> Option<String> {
     let mut selected = None;
-    let max_height = (ui.available_height() - 56.0).max(80.0);
+    let max_height = ui.available_height().max(80.0);
     egui::ScrollArea::vertical()
         .id_salt("session-inventory")
         .auto_shrink([false, false])
@@ -103,6 +106,7 @@ pub fn render(
     selected
 }
 
+#[cfg(feature = "legacy-egui")]
 fn session_row(
     ui: &mut egui::Ui,
     title: &str,
@@ -173,7 +177,7 @@ fn session_row(
 }
 
 /// Display title projected for a session, or its identity when no title exists.
-fn session_label(summary: &SessionSummary) -> String {
+pub(crate) fn session_label(summary: &SessionSummary) -> String {
     summary
         .projections
         .as_ref()
@@ -184,7 +188,7 @@ fn session_label(summary: &SessionSummary) -> String {
 }
 
 /// Relative update age, tolerant of second- or millisecond-scale timestamps.
-fn relative_time(updated_at: i64, now: i64) -> String {
+pub(crate) fn relative_time(updated_at: i64, now: i64) -> String {
     let updated_at = if updated_at < 1_000_000_000_000 {
         updated_at.saturating_mul(1000)
     } else {

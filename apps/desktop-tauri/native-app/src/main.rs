@@ -1,5 +1,6 @@
 //! Native desktop shell: a pure egui window that reads the Host session inventory through client-core.
 
+mod command_registry;
 mod composer_input;
 mod dialog;
 mod document_preview;
@@ -69,6 +70,7 @@ use dsh_client_core::{
     },
     Error,
 };
+use crate::command_registry::CommandId;
 use eframe::egui;
 use explorer::WorkspaceExplorer;
 use fs2::FileExt;
@@ -1616,6 +1618,8 @@ struct DesktopApp {
     approval_commands: Option<mpsc::Sender<ApprovalCommand>>,
     pending_approvals: Vec<PendingApproval>,
     pending_questions: Vec<QuestionCard>,
+    /// Height the question/approval stack used last frame, kept out of the transcript.
+    attention_reserved_height: f32,
     deliverables: Vec<DeliverableFile>,
     market_indexes: Vec<serde_json::Value>,
     market_results: Vec<serde_json::Value>,
@@ -1656,6 +1660,7 @@ struct DesktopApp {
     show_skills: bool,
     show_market: bool,
     show_goals: bool,
+    top_menu_open: bool,
     goal: Option<GoalView>,
     goal_loading: bool,
     goal_mutation_loading: bool,
@@ -1737,6 +1742,11 @@ struct ShellServices {
     spawn_host: bool,
 }
 
+/// Enables the initial Host connection unless explicitly disabled for a run.
+fn auto_connect_enabled(setting: Option<&str>) -> bool {
+    setting != Some("0")
+}
+
 impl DesktopApp {
     fn new(services: ShellServices) -> Self {
         let ShellServices {
@@ -1809,6 +1819,7 @@ impl DesktopApp {
             approval_commands: None,
             pending_approvals: Vec::new(),
             pending_questions: Vec::new(),
+            attention_reserved_height: 0.0,
             deliverables: Vec::new(),
             market_indexes: Vec::new(),
             market_results: Vec::new(),
@@ -1849,6 +1860,7 @@ impl DesktopApp {
             show_skills: false,
             show_market: false,
             show_goals: false,
+            top_menu_open: false,
             goal: None,
             goal_loading: false,
             goal_mutation_loading: false,
@@ -1914,7 +1926,9 @@ impl DesktopApp {
             hidden,
             viewport,
             tray_available,
-            auto_connect: std::env::var("DSH_DESKTOP_AUTO_CONNECT").as_deref() == Ok("1"),
+            auto_connect: auto_connect_enabled(
+                std::env::var("DSH_DESKTOP_AUTO_CONNECT").ok().as_deref(),
+            ),
         }
     }
 
@@ -3610,36 +3624,127 @@ impl DesktopApp {
 
 impl DesktopApp {
     /// Applies the client-local shortcut bindings; each chord toggles its view once.
-    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        let Ok([settings, marketplace, goals, new_session]) =
-            self.ui_preferences.keybindings.chords()
-        else {
-            return;
-        };
-        if let Some(chord) = settings {
-            if ctx.input_mut(|input| chord.consume(input)) {
+    /// Runs one shared shell command from the menu, shortcut, or palette.
+    fn run_command(&mut self, command: CommandId) {
+        match command {
+            CommandId::ToggleSettings => {
                 self.show_settings = !self.show_settings;
+                self.active_view = ActiveView::Settings;
             }
-        }
-        if let Some(chord) = marketplace {
-            if ctx.input_mut(|input| chord.consume(input)) {
+            CommandId::ToggleMarketplace => {
                 self.show_market = !self.show_market;
+                self.active_view = ActiveView::Marketplace;
             }
-        }
-        if let Some(chord) = goals {
-            if ctx.input_mut(|input| chord.consume(input)) {
+            CommandId::ToggleGoals => {
                 self.show_goals = !self.show_goals;
+                self.active_view = ActiveView::Goals;
             }
-        }
-        if let Some(chord) = new_session {
-            // Creating a Session replaces the view, so it must not fire while a
-            // text editor owns the keyboard and would lose the draft.
-            if !ctx.text_edit_focused() && ctx.input_mut(|input| chord.consume(input)) {
+            CommandId::NewSession => {
                 self.request_sessions(SessionOperation::Create);
                 self.focus_composer = true;
             }
+            CommandId::ToggleExplorer => {
+                self.show_explorer = !self.show_explorer;
+            }
+            CommandId::ToggleChanges => {}
+            CommandId::ToggleTerminal => {
+                self.bottom_tool = if self.bottom_tool == Some(BottomTool::Terminal) {
+                    None
+                } else {
+                    Some(BottomTool::Terminal)
+                };
+            }
+            CommandId::TogglePlugins => {
+                self.show_plugins = !self.show_plugins;
+                self.active_view = ActiveView::Plugins;
+            }
+            CommandId::ToggleSkills => {
+                self.show_skills = !self.show_skills;
+                self.active_view = ActiveView::Skills;
+            }
         }
     }
+
+    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        if self.top_menu_open && ctx.input(|i| i.key_down(egui::Key::Escape)) {
+            self.top_menu_open = false;
+        }
+        let fired_settings = ctx.input_mut(|i| {
+            self.ui_preferences
+                .keybindings
+                .consume_command(CommandId::ToggleSettings, i)
+        });
+        if fired_settings {
+            self.run_command(CommandId::ToggleSettings);
+        }
+        let fired_marketplace = ctx.input_mut(|i| {
+            self.ui_preferences
+                .keybindings
+                .consume_command(CommandId::ToggleMarketplace, i)
+        });
+        if fired_marketplace {
+            self.run_command(CommandId::ToggleMarketplace);
+        }
+        let fired_goals = ctx.input_mut(|i| {
+            self.ui_preferences
+                .keybindings
+                .consume_command(CommandId::ToggleGoals, i)
+        });
+        if fired_goals {
+            self.run_command(CommandId::ToggleGoals);
+        }
+        let fired_new_session = ctx.input_mut(|i| {
+            self.ui_preferences
+                .keybindings
+                .consume_command(CommandId::NewSession, i)
+        });
+        // Creating a Session replaces the view, so it must not fire while a
+        // text editor owns the keyboard and would lose the draft.
+        if fired_new_session && !ctx.text_edit_focused() {
+            self.run_command(CommandId::NewSession);
+        }
+    }
+}
+
+/// Estimates the approval card height before its first render so the transcript
+/// can reserve the space in the same frame.
+fn estimate_approval_height(ui: &egui::Ui, pending: &PendingApproval, has_commands: bool) -> f32 {
+    let style = ui.style();
+    let heading = style
+        .text_styles
+        .get(&egui::TextStyle::Heading)
+        .cloned()
+        .unwrap_or_else(|| egui::FontId::proportional(18.0));
+    let body = style
+        .text_styles
+        .get(&egui::TextStyle::Body)
+        .cloned()
+        .unwrap_or_else(|| egui::FontId::proportional(12.0));
+    let color = ui.visuals().text_color();
+    let width = ui.available_width().max(1.0);
+    let heading_height = ui.painter().fonts_mut(|fonts| {
+        fonts
+            .layout_no_wrap(
+                format!("Permission: {}", pending.request.tool_name),
+                heading,
+                color,
+            )
+            .rect
+            .height()
+    });
+    let reason_height = pending.request.reason.as_ref().map_or(0.0, |reason| {
+        ui.painter().fonts_mut(|fonts| {
+            fonts
+                .layout(reason.clone(), body, color, width)
+                .rect
+                .height()
+        })
+    });
+    let mut height = 6.0 + heading_height + style.spacing.item_spacing.y + reason_height;
+    if has_commands {
+        height += style.spacing.item_spacing.y + style.spacing.interact_size.y;
+    }
+    height + style.spacing.item_spacing.y
 }
 
 impl eframe::App for DesktopApp {
@@ -4562,7 +4667,53 @@ impl DesktopApp {
                 .store(true, std::sync::atomic::Ordering::Release);
             self.hidden.store(true, Ordering::Release);
         }
-        // Navigation rail: compact, icon-first, grouped.
+        // V2 top bar: thin, hamburger-led, no in-bar Settings icon of its own.
+        egui::Panel::top("top_bar")
+            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(8, 4)))
+            .exact_size(layout::TOP_BAR_HEIGHT)
+            .show(ui, |ui| {
+                ui.add_space(2.0);
+                let _menu = ui.menu_button("Top bar menu", |ui| {
+                    ui.menu_button("Workspace", |ui| {
+                        if ui.button("New session").clicked() {
+                            self.run_command(CommandId::NewSession);
+                            ui.close();
+                        }
+                        if ui.button("Toggle Explorer").clicked() {
+                            self.run_command(CommandId::ToggleExplorer);
+                            ui.close();
+                        }
+                    });
+                    ui.menu_button("Customize", |ui| {
+                        if ui.button("Preferences…").clicked() {
+                            self.run_command(CommandId::ToggleSettings);
+                            ui.close();
+                        }
+                        if ui.button("Extensions").clicked() {
+                            self.run_command(CommandId::TogglePlugins);
+                            ui.close();
+                        }
+                        if ui.button("Skills").clicked() {
+                            self.run_command(CommandId::ToggleSkills);
+                            ui.close();
+                        }
+                        if ui.button("Marketplace").clicked() {
+                            self.run_command(CommandId::ToggleMarketplace);
+                            ui.close();
+                        }
+                        if ui.button("Goals").clicked() {
+                            self.run_command(CommandId::ToggleGoals);
+                            ui.close();
+                        }
+                    });
+                    ui.menu_button("Help", |ui| {
+                        if ui.button("About DSH").clicked() {
+                            ui.close();
+                        }
+                    });
+                });
+            });
+        // Navigation rail: icon-first, with enough width to keep labels intact.
         egui::Panel::left("nav_rail")
             .resizable(false)
             .exact_size(layout::NAV_RAIL_WIDTH)
@@ -4615,7 +4766,7 @@ impl DesktopApp {
                         );
                         let button = ui.add(
                             egui::Button::new(label)
-                                .min_size(egui::vec2(50.0, 44.0))
+                                .min_size(egui::vec2(68.0, 44.0))
                                 .fill(if selected {
                                     ui.visuals().selection.bg_fill
                                 } else {
@@ -4854,6 +5005,45 @@ impl DesktopApp {
                             self.refresh_sessions();
                         }
                     }
+                    egui::Panel::bottom("sessions-footer")
+                        .resizable(false)
+                        .frame(egui::Frame::new())
+                        .show(ui, |ui| {
+                            ui.add_space(4.0);
+                            ui.separator();
+                            ui.horizontal(|ui| {
+                                ui.add_space(8.0);
+                                ui.label(
+                                    egui::RichText::new("DH")
+                                        .strong()
+                                        .size(11.0)
+                                        .color(ui.visuals().hyperlink_color),
+                                );
+                                ui.vertical(|ui| {
+                                    ui.label(
+                                        egui::RichText::new("DeepSeek Harness").size(11.0).strong(),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new("Native desktop client")
+                                            .size(9.0)
+                                            .weak(),
+                                    );
+                                });
+                            });
+                            ui.small(egui::RichText::new(&self.status).weak());
+                            ui.menu_button("File actions", |ui| {
+                                if ui.button("Open file…").clicked() {
+                                    self.dialog =
+                                        Some((DialogPurpose::Open, dialog::open_file_async()));
+                                    ui.close();
+                                }
+                                if ui.button("Save file…").clicked() {
+                                    self.dialog =
+                                        Some((DialogPurpose::Save, dialog::save_file_async()));
+                                    ui.close();
+                                }
+                            });
+                        });
                     ui.add_enabled_ui(!busy, |ui| {
                         let mut selected = session_list::render(
                             ui,
@@ -4897,36 +5087,6 @@ impl DesktopApp {
                         }
                         if let Some(session_id) = selected {
                             self.load_session(session_id);
-                        }
-                    });
-                    ui.add_space(4.0);
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.add_space(8.0);
-                        ui.label(
-                            egui::RichText::new("DH")
-                                .strong()
-                                .size(11.0)
-                                .color(ui.visuals().hyperlink_color),
-                        );
-                        ui.vertical(|ui| {
-                            ui.label(egui::RichText::new("DeepSeek Harness").size(11.0).strong());
-                            ui.label(
-                                egui::RichText::new("Native desktop client")
-                                    .size(9.0)
-                                    .weak(),
-                            );
-                        });
-                    });
-                    ui.small(egui::RichText::new(&self.status).weak());
-                    ui.menu_button("File actions", |ui| {
-                        if ui.button("Open file…").clicked() {
-                            self.dialog = Some((DialogPurpose::Open, dialog::open_file_async()));
-                            ui.close();
-                        }
-                        if ui.button("Save file…").clicked() {
-                            self.dialog = Some((DialogPurpose::Save, dialog::save_file_async()));
-                            ui.close();
                         }
                     });
                 });
@@ -5184,6 +5344,7 @@ impl DesktopApp {
         }
         egui::Panel::bottom("utility-toolbar")
             .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(8, 3)))
+            .exact_size(layout::BOTTOM_BAR_HEIGHT)
             .show(ui, |ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     for (tool, label) in [
@@ -5994,11 +6155,11 @@ impl DesktopApp {
                     ui.vertical(|ui| {
                         ui.label(
                             egui::RichText::new(
-                                self.session_title
-                                    .as_str()
-                                    .is_empty()
-                                    .then_some(self.selected_session.as_deref().unwrap_or("Session"))
-                                    .unwrap_or(self.session_title.as_str()),
+                                if self.session_title.is_empty() {
+                                    self.selected_session.as_deref().unwrap_or("Session")
+                                } else {
+                                    self.session_title.as_str()
+                                },
                             )
                             .size(14.0)
                             .strong(),
@@ -6053,13 +6214,37 @@ impl DesktopApp {
                     .iter()
                     .map(|item| (item.message_id.clone(), item.rating.clone()))
                     .collect();
+                let attention_height = if !self.pending_questions.is_empty()
+                    || !self.pending_approvals.is_empty()
+                {
+                    if self.attention_reserved_height > 0.0 {
+                        self.attention_reserved_height
+                    } else {
+                        self.pending_approvals.first().map_or(0.0, |pending| {
+                            estimate_approval_height(
+                                ui,
+                                pending,
+                                self.approval_commands.is_some(),
+                            )
+                        }) + if self.pending_questions.is_empty() {
+                            0.0
+                        } else {
+                            220.0
+                        }
+                    }
+                } else {
+                    0.0
+                };
                 render_transcript(
                     ui,
                     &self.transcript,
                     &self.assistant_draft,
                     &feedback,
-                    self.chat_loading,
-                    self.assistant_streaming,
+                    transcript_view::TranscriptViewState {
+                        loading: self.chat_loading,
+                        streaming: self.assistant_streaming,
+                        attention_height,
+                    },
                     &mut feedback_actions,
                 );
                 for action in feedback_actions {
@@ -6087,6 +6272,7 @@ impl DesktopApp {
                     self.feedback_put_receiver = Some(receiver);
                     self.feedback_status = Some(format!("Rating {}…", rating));
                 }
+                let attention_top = ui.cursor().top();
                 if let Some(card) = self.pending_questions.first_mut() {
                     let action = card.render(ui);
                     if let Some(action) = action {
@@ -6142,6 +6328,9 @@ impl DesktopApp {
                         }
                     }
                 }
+                // The next frame keeps this stack out of the transcript so an
+                // approval cannot push the composer past the viewport.
+                self.attention_reserved_height = (ui.cursor().top() - attention_top).max(0.0);
                         let composer_width = central_size.x.min(800.0);
                 ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                     egui::Frame::new()
@@ -7671,6 +7860,7 @@ mod probe_model_tests {
 mod transcript_render_tests {
     use super::render_transcript;
     use crate::transcript::Transcript;
+    use crate::transcript_view;
     use dsh_client_core::follow::SessionWireEvent;
     use eframe::egui;
     use serde_json::json;
@@ -7709,8 +7899,11 @@ mod transcript_render_tests {
             transcript,
             "",
             &std::collections::BTreeMap::new(),
-            false,
-            false,
+            transcript_view::TranscriptViewState {
+                loading: false,
+                streaming: false,
+                attention_height: 0.0,
+            },
             &mut Vec::new(),
         );
         assert!(ui.min_rect().is_finite());
@@ -7759,8 +7952,11 @@ mod transcript_render_tests {
             &Transcript::default(),
             "partial answer",
             &std::collections::BTreeMap::new(),
-            false,
-            true,
+            transcript_view::TranscriptViewState {
+                loading: false,
+                streaming: true,
+                attention_height: 0.0,
+            },
             &mut Vec::new(),
         );
         let mut output = ctx.end_pass();

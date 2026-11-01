@@ -3,30 +3,36 @@
 use crate::transcript::{RowKind, Transcript};
 use eframe::egui;
 
+/// Live transcript state and the height reserved below it.
+pub(super) struct TranscriptViewState {
+    pub loading: bool,
+    pub streaming: bool,
+    pub attention_height: f32,
+}
+
 /// Renders the projected transcript with bounded height.
 pub(super) fn render_transcript(
     ui: &mut egui::Ui,
     transcript: &Transcript,
     draft: &str,
     feedback: &std::collections::BTreeMap<String, String>,
-    loading: bool,
-    streaming: bool,
+    state: TranscriptViewState,
     feedback_actions: &mut Vec<(String, String)>,
 ) {
-    if loading || streaming {
+    if state.loading || state.streaming {
         ui.horizontal(|ui| {
             ui.spinner();
             ui.label("Waiting for assistant…");
         });
     }
-    let height = (ui.available_height() - 155.0).max(80.0);
+    let height = (ui.available_height() - 155.0 - state.attention_height).max(80.0);
     egui::ScrollArea::vertical()
         .id_salt("chat-transcript")
         .auto_shrink([false, false])
         .stick_to_bottom(true)
         .max_height(height)
         .show(ui, |ui| {
-            if transcript.is_empty() && !loading {
+            if transcript.is_empty() && !state.loading {
                 ui.add_space(18.0);
                 ui.label(
                     egui::RichText::new("No messages in this Session yet.")

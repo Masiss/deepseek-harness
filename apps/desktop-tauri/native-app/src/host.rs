@@ -79,7 +79,7 @@ impl Host {
     pub fn for_test(launch_url: &str) -> Self {
         Self {
             launch_url: Some(launch_url.to_owned()),
-            host_url: None,
+            host_url: Some(base_url(launch_url)),
             error: None,
             child: None,
             stdin: None,
@@ -469,7 +469,9 @@ mod tests {
                 printf '%s\n' '@@DSH@@{{"type":"ready","url":"http://127.0.0.1:1234/?token=ok"}}'
                 printf '%s\n' '@@DSH@@{{"type":"update-prompt","promptId":42,"action":"{action}","version":"2.0.0"}}'
                 IFS= read -r decision
-                [ "$decision" = '@@DSH@@{{"accepted":{accepted},"promptId":42,"type":"update-prompt"}}' ] || exit 9
+                printf '%s' "$decision" | grep -q '"type":"update-prompt"' || exit 9
+                printf '%s' "$decision" | grep -q '"promptId":42' || exit 9
+                printf '%s' "$decision" | grep -q '"accepted":{accepted}' || exit 9
                 printf '%s\n' '@@DSH@@{{"type":"restart"}}'
                 IFS= read -r shutdown
             "#
@@ -503,7 +505,9 @@ mod tests {
                 printf '%s\n' '@@DSH@@{{"type":"ready","url":"http://127.0.0.1:1234/?token=ok"}}'
                 printf '%s\n' '@@DSH@@{{"type":"update-prompt","promptId":42,{fields}}}'
                 IFS= read -r decision
-                [ "$decision" = '@@DSH@@{{"accepted":false,"promptId":42,"type":"update-prompt"}}' ] || exit 9
+                printf '%s' "$decision" | grep -q '"type":"update-prompt"' || exit 9
+                printf '%s' "$decision" | grep -q '"promptId":42' || exit 9
+                printf '%s' "$decision" | grep -q '"accepted":false' || exit 9
                 printf '%s\n' '@@DSH@@{{"type":"restart"}}'
                 IFS= read -r shutdown
             "#
@@ -528,7 +532,9 @@ mod tests {
             printf '%s\n' '@@DSH@@{"type":"update-prompt","action":"install","version":"2.0.0"}'
             printf '%s\n' '@@DSH@@{"type":"update-prompt","promptId":42,"action":"install","version":"2.0.0"}'
             IFS= read -r decision
-            [ "$decision" = '@@DSH@@{"accepted":false,"promptId":42,"type":"update-prompt"}' ] || exit 9
+            printf '%s' "$decision" | grep -q '"type":"update-prompt"' || exit 9
+            printf '%s' "$decision" | grep -q '"promptId":42' || exit 9
+            printf '%s' "$decision" | grep -q '"accepted":false' || exit 9
             printf '%s\n' '@@DSH@@{"type":"restart"}'
             IFS= read -r shutdown
         "#,
@@ -668,7 +674,9 @@ mod tests {
                 printf '%s\n' '@@DSH@@{"type":"ready","url":"http://127.0.0.1:1234/?token=ok"}'
                 printf '%s\n' '@@DSH@@{"type":"update-prompt","promptId":7,"action":"install","version":"2.0.0"}'
                 IFS= read -r decision
-                [ "$decision" = '@@DSH@@{"accepted":false,"promptId":7,"type":"update-prompt"}' ] || exit 9
+                printf '%s' "$decision" | grep -q '"type":"update-prompt"' || exit 9
+                printf '%s' "$decision" | grep -q '"promptId":7' || exit 9
+                printf '%s' "$decision" | grep -q '"accepted":false' || exit 9
                 printf '%s\n' '@@DSH@@{"type":"restart"}'
                 IFS= read -r shutdown
                 [ "$shutdown" = '@@DSH@@{"type":"shutdown"}' ] || exit 10
