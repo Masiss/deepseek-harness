@@ -414,3 +414,9 @@ cargo test --locked --offline --manifest-path apps/desktop-tauri/native-app/Carg
 Phần trình bày egui trong các module dùng chung được gate theo feature thay vì bị xoá: `fonts::install`, `terminal_ansi::{format_for, layout}`, `explorer` (ui + render + source preview), `question_card::render`, `session_list::render`, `document_preview` (ImagePreview + DocumentPreview::ui), `ui_preferences` (ThemeMode→ThemePreference, KeyChord::consume, key_by_name, apply/apply_theme_pack/accent_fill, UiPreferencesPanel + editor helpers), `layout` tests. Trạng thái/model/protocol vẫn dùng chung: `KeyChord` giờ là dữ liệu thuần (`ctrl/alt/shift/cmd` + tên phím chuẩn hoá) nên `UiPreferences::validate` kiểm trùng phím cho cả hai bin, còn `KeyChord::consume` chỉ tồn tại ở bản egui. `Palette`/`AnsiStyle` chuyển sang màu 8-bit thuần (`Rgba8`, `AnsiColor`) và chỉ convert sang `Color32` trong code egui.
 
 Hai test terminal trước đây kiểm cả parse lẫn format egui được tách: phần parse ở lại bin gpui, phần format chuyển sang `formatted_spans_swap_foreground_and_background_when_inverse` (legacy). Clippy: **66 warning ở bin gpui** (đều là dead code/visibility có sẵn trong `shell/`, không phải lỗi) và **0 warning code** ở bin legacy.
+
+## AppImage native gpui — 2026-11-01
+
+`DSH_DESKTOP_SHELL=native apps/desktop-tauri/scripts/pack-appimage.sh` đóng gói lại `apps/desktop/.desktop-build/targets/linux-x64/appimage/DeepSeek-Harness-native-0.2.1-rc.4-x86_64.AppImage`: **87.181.816 byte** (bản cũ 87.833.080). Binary nhúng giống hệt bản release vừa build (**43.989.408 byte**), `strings` không còn ký hiệu `egui::`/`eframe::`.
+
+Kiểm chứng: `scripts/appimage-probe.sh` pass cả hai chặng (AppRun contract + Host packaged boot/shutdown, `RESULT host=OK`); chạy thật bằng `APPIMAGE_EXTRACT_AND_RUN=1` trên Hyprland với Home/TMPDIR cô lập: `host=ready in 1414ms`, `auth=ok in 1495ms`, `events=ready`, cửa sổ render đủ nav rail, Sessions panel, empty state và bottom bar.
