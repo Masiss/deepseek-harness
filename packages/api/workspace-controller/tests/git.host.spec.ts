@@ -309,7 +309,13 @@ describe('GitController Session scope', () => {
     ctx.provide('sessionPersistence', { stat } as never)
     const sessions = await ctx.plugin(SessionStore)
     const typert = await ctx.plugin(TypertRegistry)
-    const plugin = await ctx.plugin(GitController, { timeoutMs: 5_000 })
+    const plugin = await ctx.plugin(GitController, {
+      // Short local timeout so a hung child fails the test instead of the suite.
+      timeoutMs: 5_000,
+      networkTimeoutMs: 120_000,
+      maxDiffBytes: 512 * 1024,
+      maxOutputBytes: 32 * 1024,
+    })
     const controller = ctx.gitController
 
     try {
