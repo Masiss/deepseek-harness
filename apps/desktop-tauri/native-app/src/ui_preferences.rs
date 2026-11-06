@@ -835,6 +835,49 @@ impl UiPreferences {
         }
     }
 
+    /// Clears a workspace's Explorer width override and restores the default.
+    ///
+    /// A double-click on the divider is the reset gesture, so it also drops the
+    /// override instead of pinning the default as an explicit workspace value.
+    pub fn reset_workspace_panel_width(&mut self, workspace: Option<&str>) {
+        if let Some(workspace) = workspace {
+            if let Some(prefs) = self.workspace_overrides.get_mut(workspace) {
+                prefs.workspace_panel_width = None;
+                if prefs.theme.is_none()
+                    && prefs.density.is_none()
+                    && prefs.session_panel_width.is_none()
+                    && prefs.show_workspace_explorer.is_none()
+                    && prefs.workspace_panel_width.is_none()
+                    && prefs.changes_panel_width.is_none()
+                {
+                    self.workspace_overrides.remove(workspace);
+                }
+            }
+        } else {
+            self.workspace_panel_width = default_workspace_panel_width();
+        }
+    }
+
+    /// Clears a workspace's Changes width override and restores the default.
+    pub fn reset_changes_panel_width(&mut self, workspace: Option<&str>) {
+        if let Some(workspace) = workspace {
+            if let Some(prefs) = self.workspace_overrides.get_mut(workspace) {
+                prefs.changes_panel_width = None;
+                if prefs.theme.is_none()
+                    && prefs.density.is_none()
+                    && prefs.session_panel_width.is_none()
+                    && prefs.show_workspace_explorer.is_none()
+                    && prefs.workspace_panel_width.is_none()
+                    && prefs.changes_panel_width.is_none()
+                {
+                    self.workspace_overrides.remove(workspace);
+                }
+            }
+        } else {
+            self.changes_panel_width = default_changes_panel_width();
+        }
+    }
+
     /// Records a Changes width as an override for the selected workspace, or
     /// updates the global value when no workspace is selected.
     pub fn set_changes_panel_width(&mut self, workspace: Option<&str>, width: f32) {
@@ -1332,6 +1375,71 @@ mod tests {
         ] {
             assert!(UiPreferences::parse_json(text).is_err(), "{text}");
         }
+    }
+
+    fn expect_workspace_panel_width(preferences: &UiPreferences, workspace: &str, expected: f32) {
+        assert_eq!(
+            preferences
+                .workspace_prefs(Some(workspace))
+                .workspace_panel_width
+                .unwrap_or(preferences.workspace_panel_width),
+            expected
+        );
+    }
+
+    fn expect_changes_panel_width(preferences: &UiPreferences, workspace: &str, expected: f32) {
+        assert_eq!(
+            preferences
+                .workspace_prefs(Some(workspace))
+                .changes_panel_width
+                .unwrap_or(preferences.changes_panel_width),
+            expected
+        );
+    }
+
+    #[test]
+    fn resetting_a_panel_width_drops_the_override_and_uses_the_default() {
+        let mut preferences = UiPreferences::default();
+        preferences.workspace_overrides.insert(
+            "w1".to_owned(),
+            WorkspacePrefs {
+                workspace_panel_width: Some(300.),
+                changes_panel_width: Some(280.),
+                ..WorkspacePrefs::default()
+            },
+        );
+        preferences.reset_workspace_panel_width(Some("w1"));
+        expect_workspace_panel_width(&preferences, "w1", default_workspace_panel_width());
+        expect_changes_panel_width(&preferences, "w1", 280.);
+        preferences.reset_changes_panel_width(Some("w1"));
+        expect_changes_panel_width(&preferences, "w1", default_changes_panel_width());
+        // The last override is gone, so the workspace key is not retained.
+        assert!(!preferences.workspace_overrides.contains_key("w1"));
+
+        preferences.workspace_panel_width = 300.;
+        preferences.reset_workspace_panel_width(None);
+        assert_eq!(preferences.workspace_panel_width, default_workspace_panel_width());
+        preferences.changes_panel_width = 280.;
+        preferences.reset_changes_panel_width(None);
+        assert_eq!(preferences.changes_panel_width, default_changes_panel_width());
+    }
+
+    #[test]
+    fn resetting_one_width_keeps_the_workspace_other_overrides() {
+        let mut preferences = UiPreferences::default();
+        preferences.workspace_overrides.insert(
+            "w1".to_owned(),
+            WorkspacePrefs {
+                workspace_panel_width: Some(300.),
+                theme: Some(ThemeMode::Light),
+                ..WorkspacePrefs::default()
+            },
+        );
+        preferences.reset_workspace_panel_width(Some("w1"));
+        assert_eq!(
+            preferences.workspace_overrides.get("w1").and_then(|prefs| prefs.theme),
+            Some(ThemeMode::Light)
+        );
     }
 
     #[test]

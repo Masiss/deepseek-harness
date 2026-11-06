@@ -64,6 +64,7 @@ use dsh_client_core::{
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// Reads the opt-out switch for the initial Host connection.
 fn auto_connect_enabled(setting: Option<&str>) -> bool {
@@ -683,6 +684,8 @@ pub(crate) struct DesktopApp {
     pub(crate) show_session_menu: bool,
     /// The panel edge being dragged, while the pointer is down.
     pub(crate) panel_drag: Option<PanelDrag>,
+    /// Last divider press, used to recognize the double-click reset gesture.
+    last_divider_click: Option<(ResizeTarget, Instant)>,
     /// Whether the About dialog is open.
     pub(crate) show_about: bool,
     /// Whether the command palette is open.
@@ -1063,6 +1066,7 @@ impl DesktopApp {
             git_receiver: None,
             show_session_menu: false,
             panel_drag: None,
+            last_divider_click: None,
             show_about: false,
             palette_open: false,
             palette_query: String::new(),
@@ -4154,6 +4158,18 @@ impl DesktopApp {
 
     /// Starts resizing one docked panel from a pointer position.
     pub(crate) fn begin_panel_drag(&mut self, target: ResizeTarget, start_x: f32) {
+        // gpui 0.2.2 has no double-click event, so the divider times its own
+        // presses: two on the same divider inside 400 ms reset that width.
+        let now = Instant::now();
+        let repeated = self
+            .last_divider_click
+            .is_some_and(|(last, at)| last == target && now.duration_since(at) <= Duration::from_millis(400));
+        self.last_divider_click = Some((target, now));
+        if repeated {
+            self.last_divider_click = None;
+            self.reset_panel_width(target);
+            return;
+        }
         let (start_width, start_secondary) = match target {
             ResizeTarget::Explorer => (
                 self.ui_preferences
@@ -4224,6 +4240,20 @@ impl DesktopApp {
                 }
             }
         }
+    }
+
+    /// Restores one panel's default width after the divider's reset gesture.
+    fn reset_panel_width(&mut self, target: ResizeTarget) {
+        let workspace = self.selected_workspace.as_deref();
+        match target {
+            ResizeTarget::Explorer => self.ui_preferences.reset_workspace_panel_width(workspace),
+            ResizeTarget::Changes => self.ui_preferences.reset_changes_panel_width(workspace),
+            ResizeTarget::TerminalPane(_) => {
+                self.terminal_pane_widths.clear();
+                return;
+            }
+        }
+        self.persist_preferences();
     }
 
     /// Ends a resize and stores the resulting width.

@@ -42,7 +42,7 @@ Ghi chú transport quan trọng cho §3.3 và §7.3 của spec:
 |---|---|---|
 | Top bar 30px: hamburger, workspace selector, search, ẩn/hiện Changes | Hamburger menu (Workspace / Customize / Help gồm About DSH), chip workspace (tên thư mục `cwd` của Session, mở bộ chuyển Session), tiêu đề căn giữa, nút Search, nút Changes | Đạt; chip workspace là bộ chuyển Session vì Host chưa có workspace registry RPC |
 | Không có Activity Bar | Đã bỏ nav rail; Preferences / Extensions / Skills / Marketplace / Goals / Open file mở từ menu hamburger | Đạt |
-| Explorer cột trái | Dock trái, kéo vách 4 px để đổi rộng (`workspace_panel_width`, lưu khi thả) | Đạt; chưa có double-click reset về mặc định |
+| Explorer cột trái | Dock trái, kéo vách 4 px để đổi rộng (`workspace_panel_width`, lưu khi thả) | Đạt: double-click vách Explorer/Changes trả width về mặc định và xoá override của workspace (gpui 0.2.2 không có sự kiện double-click nên divider tự đo 400 ms) |
 | Tab Agent 34px thuộc cột giữa | Dải tab 34px với tab `Agent` gạch chân accent + tiêu đề Session | Đạt một phần: chưa có nhiều buffer |
 | Không có danh sách Session thường trực; `+` và dropdown ở đáy Explorer | Popover Session (search/rename/fork) mở từ chip top bar, nút Search, hoặc footer Explorer có `＋` và tên Session | Đạt |
 | Changes cột phải: Diff/Files | Cột phải có tab Diff/Files, kéo vách để đổi rộng (`changes_panel_width`), đóng bằng `×`; nội dung là diff thật (`git/diff`) và danh sách file thật (`git/status`/`workspaceFiles/changes`) | Đạt: auto-refresh khi focus/mutation, confirm + stale guard, cảnh báo binary/truncated |
