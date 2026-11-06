@@ -679,6 +679,28 @@ fn plugins(
     if snapshot.management_available == Some(false) {
         content = content.child(line(theme, "Plugin management is unavailable for this Host."));
     }
+    let failed = snapshot
+        .entries
+        .iter()
+        .filter(|entry| entry.fiber_phase == Some(dsh_client_core::plugins::PluginFiberPhase::Failed))
+        .count();
+    let active = snapshot
+        .entries
+        .iter()
+        .filter(|entry| entry.fiber_phase == Some(dsh_client_core::plugins::PluginFiberPhase::Active))
+        .count();
+    content = content.child(section(theme, "HEALTH")).child(
+        div()
+            .text_size(theme.fs(10.5))
+            .text_color(if failed > 0 { theme.error } else { theme.muted })
+            .child(if failed > 0 {
+                format!(
+                    "{active} active · {failed} failed — the Loader reported a failed fiber; check the Host log for the diagnostic"
+                )
+            } else {
+                format!("{active} active · no failed fibers reported")
+            }),
+    );
     content = content.child(section(theme, "CONFIGURED PLUGINS"));
     if snapshot.entries.is_empty() {
         content = content.child(line(theme, "No configured plugins."));
@@ -903,6 +925,21 @@ fn skills(
                 .child(section(theme, "When it applies"))
                 .child(line(theme, when));
         }
+        let mut provenance = Vec::new();
+        if let Some(source) = skill.source.clone() {
+            provenance.push(format!("scope {source}"));
+        }
+        if let Some(provider) = skill.provider.clone() {
+            provenance.push(format!("provider {provider}"));
+        }
+        provenance.push(if skill.model_invocable {
+            "model + /command".to_owned()
+        } else {
+            "/command only".to_owned()
+        });
+        detail = detail
+            .child(section(theme, "Source"))
+            .child(line(theme, provenance.join(" · ")));
         if let Some(path) = skill.path.clone() {
             detail = detail.child(line(theme, path));
         }
@@ -1003,6 +1040,72 @@ fn marketplace(
             .and_then(|install| install.get("spec"))
             .and_then(serde_json::Value::as_str)
             .map(str::to_owned);
+        let installation = entry.get("installation");
+        let install_status = installation
+            .and_then(|value| value.get("status"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("not-installed")
+            .to_owned();
+        let installed_version = installation
+            .and_then(|value| value.get("installedVersion"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let default_version = entry
+            .get("defaultVersion")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let author = entry
+            .get("author")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let repository_host = entry
+            .get("repository")
+            .and_then(|value| value.get("url"))
+            .and_then(serde_json::Value::as_str)
+            .and_then(|url| url.split('/').nth(2).map(str::to_owned))
+            .unwrap_or_default();
+        let compatibility = entry
+            .get("versions")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|versions| versions.first())
+            .and_then(|version| version.get("compatibility"))
+            .and_then(|value| value.get("compatible"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(true);
+        let mut trust = Vec::new();
+        if !author.is_empty() {
+            trust.push(format!("by {author}"));
+        }
+        if !repository_host.is_empty() {
+            trust.push(format!("source on {repository_host}"));
+        }
+        match install_status.as_str() {
+            "installed" => trust.push(if installed_version.is_empty() {
+                "installed".to_owned()
+            } else {
+                format!("installed v{installed_version}")
+            }),
+            "update-available" => trust.push(format!(
+                "update from v{} to v{default_version}",
+                installed_version
+            )),
+            "different-version" => trust.push(if installed_version.is_empty() {
+                "different installed version".to_owned()
+            } else {
+                format!("installed v{installed_version} differs from index")
+            }),
+            "provided" => trust.push("provided by this DSH".to_owned()),
+            _ => {}
+        }
+        if !compatibility {
+            trust.push("not compatible with this DSH version".to_owned());
+        }
+        let trust_line = trust.join(" · ");
+        let update_available = install_status == "update-available";
+        let update_spec = spec.clone();
         content = content.child(
             div()
                 .flex()
@@ -1024,10 +1127,10 @@ fn marketplace(
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .child(name.clone()),
                         )
-                        .when_some(spec, |element, spec| {
+                        .when_some(spec.clone(), |element, spec| {
                             element.child(
                                 widgets::Button::new(theme, "Install")
-                                    .enabled(connected && !loading)
+                                    .enabled(connected && !loading && install_status == "not-installed")
                                     .build()
                                     .id(gpui::SharedString::from(format!("market-install-{name}")))
                                     .on_click(cx.listener(move |app, _, _, cx| {
@@ -1035,8 +1138,32 @@ fn marketplace(
                                         cx.notify();
                                     })),
                             )
-                        }),
+                        })
+                        .when(
+                            update_available,
+                            |element| {
+                                element.child(
+                                    widgets::Button::new(theme, "Update")
+                                        .enabled(connected && !loading)
+                                        .build()
+                                        .id(gpui::SharedString::from(format!("market-update-{name}")))
+                                        .on_click(cx.listener(move |app, _, _, cx| {
+                                            if let Some(spec) = &update_spec {
+                                                app.update_market_entry(
+                                                    spec.clone(),
+                                                    name.clone(),
+                                                    default_version.clone(),
+                                                );
+                                            }
+                                            cx.notify();
+                                        })),
+                                )
+                            },
+                        ),
                 )
+                .when(!trust_line.is_empty(), |element| {
+                    element.child(line(theme, trust_line))
+                })
                 .when(!description.is_empty(), |element| {
                     element.child(line(theme, description))
                 }),

@@ -2605,6 +2605,64 @@ impl DesktopApp {
         self.market_status = Some(format!("Installing {status_spec}…"));
     }
 
+    fn update_market_entry(&mut self, spec: String, name: String, version: String) {
+        if self.market_loading {
+            return;
+        }
+        let Some(transport) = self.transport.clone() else {
+            self.market_status = Some("Connect to install".to_owned());
+            return;
+        };
+        let was_enabled = self
+            .plugin_bundles
+            .iter()
+            .find(|bundle| bundle.name == name)
+            .map(|bundle| bundle.enabled);
+        let status_text = format!("Updating {name} to {version}…");
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let market = MarketplaceClient::new(&transport);
+            let plugins = PluginsClient::new(&transport);
+            let result = (|| -> Result<String, Error> {
+                plugins.remove_bundle(&name)?;
+                let inspect = market.inspect(&spec, &MarketplaceInstallOptions { registry: None })?;
+                let status = inspect
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                if status != "accepted" {
+                    let problem = inspect
+                        .get("problem")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unknown");
+                    let reason = inspect
+                        .get("reason")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("the Host refused this install target");
+                    return Err(Error::Remote {
+                        code: "inspect-rejected".into(),
+                        message: format!("removed {name}, then inspect refused {spec}: {problem}: {reason}; reinstall to restore"),
+                        details: serde_json::Map::new(),
+                    });
+                }
+                let install =
+                    market.install_bundle(&spec, &MarketplaceInstallOptions { registry: None })?;
+                let application = install
+                    .get("application")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| Error::InvalidEnvelope("missing application result"))?;
+                if was_enabled == Some(true) {
+                    plugins.set_bundle_enabled(&name, true)?;
+                }
+                Ok(format!("{name} -> {version} ({application})"))
+            })();
+            let _ = sender.send(result.map(serde_json::Value::String));
+        });
+        self.market_receiver = Some(receiver);
+        self.market_loading = true;
+        self.market_status = Some(status_text);
+    }
+
     fn refresh_skills(&mut self) {
         if self.skills_loading {
             return;
@@ -6274,13 +6332,59 @@ impl DesktopApp {
                                     .and_then(serde_json::Value::as_str)
                                     .unwrap_or("plugin");
                                 ui.horizontal(|ui| {
-                                    ui.label(name);
+                                    ui.label(name.clone());
                                     let default_install = entry
                                         .get("versions")
                                         .and_then(serde_json::Value::as_array)
                                         .and_then(|versions| versions.first())
                                         .and_then(|version| version.get("install"))
                                         .and_then(serde_json::Value::as_object);
+                                    let install_status = entry
+                                        .get("installation")
+                                        .and_then(|value| value.get("status"))
+                                        .and_then(serde_json::Value::as_str)
+                                        .unwrap_or("not-installed")
+                                        .to_owned();
+                                    let installed_version = entry
+                                        .get("installation")
+                                        .and_then(|value| value.get("installedVersion"))
+                                        .and_then(serde_json::Value::as_str)
+                                        .unwrap_or_default()
+                                        .to_owned();
+                                    let default_version = entry
+                                        .get("defaultVersion")
+                                        .and_then(serde_json::Value::as_str)
+                                        .unwrap_or_default()
+                                        .to_owned();
+                                    let mut trust = Vec::new();
+                                    if let Some(author) =
+                                        entry.get("author").and_then(serde_json::Value::as_str)
+                                    {
+                                        trust.push(format!("by {author}"));
+                                    }
+                                    if let Some(host) = entry
+                                        .get("repository")
+                                        .and_then(|value| value.get("url"))
+                                        .and_then(serde_json::Value::as_str)
+                                        .and_then(|url| url.split('/').nth(2))
+                                    {
+                                        trust.push(format!("source on {host}"));
+                                    }
+                                    match install_status.as_str() {
+                                        "installed" => trust.push(if installed_version.is_empty() {
+                                            "installed".to_owned()
+                                        } else {
+                                            format!("installed v{installed_version}")
+                                        }),
+                                        "update-available" => trust.push(format!(
+                                            "update from v{installed_version} to v{default_version}"
+                                        )),
+                                        "different-version" => trust.push(format!(
+                                            "installed v{installed_version} differs from index"
+                                        )),
+                                        "provided" => trust.push("provided by this DSH".to_owned()),
+                                        _ => {}
+                                    }
                                     if let Some(install) = default_install {
                                         let spec = install
                                             .get("spec")
@@ -6291,20 +6395,36 @@ impl DesktopApp {
                                             .and_then(serde_json::Value::as_str)
                                             .map(str::to_owned);
                                         if let Some(spec) = spec {
-                                            if ui
-                                                .add_enabled(
-                                                    !self.market_loading,
-                                                    egui::Button::new("Install").small(),
-                                                )
-                                                .clicked()
+                                            if install_status == "not-installed"
+                                                && ui
+                                                    .add_enabled(
+                                                        !self.market_loading,
+                                                        egui::Button::new("Install").small(),
+                                                    )
+                                                    .clicked()
                                             {
                                                 install_target = Some((
-                                                    spec,
-                                                    MarketplaceInstallOptions { registry },
+                                                    spec.clone(),
+                                                    MarketplaceInstallOptions { registry: registry.clone() },
                                                 ));
+                                            }
+                                            if install_status == "update-available"
+                                                && ui
+                                                    .add_enabled(
+                                                        !self.market_loading,
+                                                        egui::Button::new("Update").small(),
+                                                    )
+                                                    .clicked()
+                                            {
+                                                self.update_market_entry(
+                                                    spec,
+                                                    name.clone(),
+                                                    default_version.clone(),
+                                                );
                                             }
                                         }
                                     }
+                                    ui.label(egui::RichText::new(trust.join(" · ")).small().weak());
                                 });
                                 if let Some(description) =
                                     entry.get("description").and_then(serde_json::Value::as_str)
@@ -6439,6 +6559,20 @@ impl DesktopApp {
                                         } else {
                                             "Loaded in the profile; not model-invocable."
                                         });
+                                        let mut provenance = Vec::new();
+                                        if let Some(source) = &skill.source {
+                                            provenance.push(format!("scope {source}"));
+                                        }
+                                        if let Some(provider) = &skill.provider {
+                                            provenance.push(format!("provider {provider}"));
+                                        }
+                                        if !provenance.is_empty() {
+                                            ui.label(
+                                                egui::RichText::new(provenance.join(" · "))
+                                                    .size(10.0)
+                                                    .weak(),
+                                            );
+                                        }
                                         if let Some(path) = &skill.path {
                                             ui.add_space(8.0);
                                             ui.label(egui::RichText::new("Source").strong());

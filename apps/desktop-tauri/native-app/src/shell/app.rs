@@ -4125,6 +4125,65 @@ impl DesktopApp {
         self.install_market_entry(spec, MarketplaceInstallOptions { registry: None });
     }
 
+    /// Updates one installed package by removing it and installing the index
+    /// spec, then restoring its previous enablement when known.
+    pub(crate) fn update_market_entry(&mut self, spec: String, name: String, version: String) {
+        if self.market_loading {
+            return;
+        }
+        let Some(transport) = self.transport.clone() else {
+            self.market_status = Some("Connect to install".to_owned());
+            return;
+        };
+        let was_enabled = self
+            .plugin_bundles
+            .iter()
+            .find(|bundle| bundle.name == name)
+            .map(|bundle| bundle.enabled);
+        let status_text = format!("Updating {name} to {version}…");
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let market = MarketplaceClient::new(&transport);
+            let plugins = PluginsClient::new(&transport);
+            let result = (|| -> Result<String, Error> {
+                plugins.remove_bundle(&name)?;
+                let inspect = market.inspect(&spec, &MarketplaceInstallOptions { registry: None })?;
+                let status = inspect
+                    .get("status")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
+                if status != "accepted" {
+                    let problem = inspect
+                        .get("problem")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("unknown");
+                    let reason = inspect
+                        .get("reason")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("the Host refused this install target");
+                    return Err(Error::Remote {
+                        code: "inspect-rejected".into(),
+                        message: format!("removed {name}, then inspect refused {spec}: {problem}: {reason}; reinstall to restore"),
+                        details: serde_json::Map::new(),
+                    });
+                }
+                let install = market.install_bundle(&spec, &MarketplaceInstallOptions { registry: None })?;
+                let application = install
+                    .get("application")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| Error::InvalidEnvelope("missing application result"))?;
+                if was_enabled == Some(true) {
+                    plugins.set_bundle_enabled(&name, true)?;
+                }
+                Ok(format!("{name} -> {version} ({application})"))
+            })();
+            let _ = sender.send(result.map(serde_json::Value::String));
+        });
+        self.market_receiver = Some(receiver);
+        self.market_loading = true;
+        self.market_status = Some(status_text);
+    }
+
     /// Runs one shared shell command from the menu, shortcut, or palette.
     pub(crate) fn run_command(&mut self, command: CommandId) {
         self.show_session_menu = false;
