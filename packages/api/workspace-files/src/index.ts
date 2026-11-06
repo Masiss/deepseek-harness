@@ -43,6 +43,8 @@ import type {
   WorkspaceFileWatchFrame,
   WorkspaceFileWriteResult,
   WorkspaceSearchMatch,
+  WorkspacePathSearchOptions,
+  WorkspacePathSearchValue,
   WorkspaceSearchOptions,
   WorkspaceSearchValue,
 } from './types.ts'
@@ -474,6 +476,68 @@ export class WorkspaceFiles extends TypertRemoteService {
     }
     if (queue.length > 0) truncated = true
     return { matches, scannedFiles, truncated }
+  }
+
+  /**
+   * Search workspace paths for a literal substring, bounded by caller caps.
+   * Symlinks are not followed and no file content is read, so this stays cheap
+   * enough to run while a palette filters on every keystroke.
+   * @param workspaceFileScope - header-derived workspace root for the Session identity on the wire.
+   * @param query - non-empty literal substring of the relative path.
+   * @param options - caller bounds for examined files and returned paths.
+   * @param signal - caller cancellation.
+   * @returns matching relative paths plus a truncation flag when any cap dropped content.
+   */
+  @Remote
+  async searchPaths(
+    workspaceFileScope: WorkspaceFileScope,
+    query: string,
+    options: WorkspacePathSearchOptions | undefined,
+    signal: AbortSignal,
+  ): Promise<WorkspacePathSearchValue> {
+    if (query.length === 0 || query.length > 200) {
+      throw new RemoteError('gateway/bad-request', 'query must be 1 to 200 characters', {})
+    }
+    const maxResults = options?.maxResults ?? 50
+    const maxFiles = options?.maxFiles ?? 2000
+    if (!Number.isSafeInteger(maxResults) || maxResults <= 0 || maxResults > 500) {
+      throw new RemoteError('gateway/bad-request', 'maxResults must be a safe integer 1 to 500', {})
+    }
+    if (!Number.isSafeInteger(maxFiles) || maxFiles <= 0 || maxFiles > 5000) {
+      throw new RemoteError('gateway/bad-request', 'maxFiles must be a safe integer 1 to 5000', {})
+    }
+    const needle = query.toLowerCase()
+    const paths: string[] = []
+    let examined = 0
+    let truncated = false
+    const queue: string[] = ['.']
+    while (queue.length > 0 && examined < maxFiles && paths.length < maxResults) {
+      signal.throwIfAborted()
+      const directory = queue.shift() as string
+      const listing = await this.list(workspaceFileScope, directory, signal)
+      for (const child of listing.entries) {
+        const path = directory === '.' ? child.name : `${directory}/${child.name}`
+        if (child.type === 'directory') {
+          queue.push(path)
+          continue
+        }
+        if (child.type !== 'file') continue
+        if (examined >= maxFiles) {
+          truncated = true
+          break
+        }
+        examined += 1
+        if (!path.toLowerCase().includes(needle)) continue
+        paths.push(path)
+        if (paths.length >= maxResults) {
+          truncated = true
+          break
+        }
+      }
+      if (listing.truncated) truncated = true
+    }
+    if (queue.length > 0) truncated = true
+    return { paths: paths.sort(), truncated }
   }
 
   /**

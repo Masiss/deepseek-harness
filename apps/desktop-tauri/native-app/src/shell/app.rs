@@ -56,7 +56,8 @@ use dsh_client_core::{
     workspace::{WorkspaceArchiveValue, WorkspaceClient, WorkspacePinValue},
     workspace_files::{
         WorkspaceByteRange, WorkspaceByteReadOptions, WorkspaceFileRange, WorkspaceFileScope,
-        WorkspaceFileWriteResult, WorkspaceFilesClient, WorkspaceSearchMatch, WorkspaceSearchValue,
+        WorkspaceFileWriteResult, WorkspaceFilesClient, WorkspacePathSearchValue,
+        WorkspaceSearchMatch, WorkspaceSearchValue,
     },
     Error,
 };
@@ -480,6 +481,11 @@ pub(crate) struct DesktopApp {
     pub(crate) file_search_loading: bool,
     pub(crate) file_search_error: Option<String>,
     pub(crate) file_search_receiver: Option<mpsc::Receiver<Result<WorkspaceSearchValue, Error>>>,
+    /// Workspace paths matching the palette query, and the query they answer.
+    pub(crate) palette_paths: Vec<String>,
+    pub(crate) palette_paths_for: String,
+    pub(crate) palette_paths_receiver:
+        Option<mpsc::Receiver<Result<WorkspacePathSearchValue, Error>>>,
     /// Workspace-relative path the handoff summary is written to.
     pub(crate) handoff_path: String,
     /// Last rendered handoff summary, kept for preview and writing.
@@ -891,6 +897,9 @@ impl DesktopApp {
             file_search_loading: false,
             file_search_error: None,
             file_search_receiver: None,
+            palette_paths: Vec::new(),
+            palette_paths_for: String::new(),
+            palette_paths_receiver: None,
             handoff_path: "HANDOFF.md".to_owned(),
             handoff_preview: None,
             handoff_status: None,
@@ -3917,6 +3926,7 @@ impl DesktopApp {
                 super::text_input::TextInputEvent::Changed(text) if key == "palette-query" => {
                     app.palette_query = text.clone();
                     app.palette_selected = 0;
+                    app.request_palette_paths();
                     cx.notify();
                     return;
                 }
@@ -4412,6 +4422,40 @@ impl DesktopApp {
     }
 
     /// One row the palette can run.
+    /// Keeps the palette's workspace path matches in step with its query.
+    ///
+    /// One request is in flight at a time; a result that answers an older query
+    /// is dropped and the current query is asked again.
+    pub(crate) fn request_palette_paths(&mut self) {
+        let query = self.palette_query.trim().to_lowercase();
+        if query.is_empty() || self.transport.is_none() || self.selected_session.is_none() {
+            self.palette_paths.clear();
+            self.palette_paths_for.clear();
+            return;
+        }
+        if self.palette_paths_receiver.is_some() || self.palette_paths_for == query {
+            return;
+        }
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        let requested = query.clone();
+        std::thread::spawn(move || {
+            let client = WorkspaceFilesClient::new(&transport);
+            let result = client.search_paths(
+                WorkspaceFileScope { session_id },
+                requested,
+                PALETTE_PATH_RESULTS,
+            );
+            let _ = sender.send(result);
+        });
+        self.palette_paths_for = query;
+        self.palette_paths_receiver = Some(receiver);
+    }
+
     pub(crate) fn palette_entries(&self) -> Vec<PaletteEntry> {
         let query = self.palette_query.trim().to_lowercase();
         let mut entries: Vec<PaletteEntry> = CommandId::matching(&self.palette_query)
@@ -4424,18 +4468,27 @@ impl DesktopApp {
                 .map(PaletteEntry::Host),
         );
         if !query.is_empty() {
-            entries.extend(
-                self.explorer
-                    .visible_rows()
-                    .into_iter()
-                    .filter(|row| matches!(row.kind, crate::explorer::ExplorerRowKind::File { .. }))
-                    .filter(|row| {
-                        row.label.to_ascii_lowercase().contains(&query)
-                            || row.path.to_ascii_lowercase().contains(&query)
-                    })
-                    .take(8)
-                    .map(|row| PaletteEntry::File(row.path)),
-            );
+            let mut files: Vec<String> = self
+                .explorer
+                .visible_rows()
+                .into_iter()
+                .filter(|row| matches!(row.kind, crate::explorer::ExplorerRowKind::File { .. }))
+                .filter(|row| {
+                    row.label.to_ascii_lowercase().contains(&query)
+                        || row.path.to_ascii_lowercase().contains(&query)
+                })
+                .map(|row| row.path)
+                .collect();
+            // A loaded directory tree only covers the folders the user opened, so
+            // the Host's bounded path search widens it without reading content.
+            if self.palette_paths_for == query {
+                for path in &self.palette_paths {
+                    if !files.contains(path) {
+                        files.push(path.clone());
+                    }
+                }
+            }
+            entries.extend(files.into_iter().take(8).map(PaletteEntry::File));
         }
         entries
     }
@@ -5047,6 +5100,29 @@ impl DesktopApp {
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.sessions_error = Some("Open folder worker stopped unexpectedly".into());
                     self.workspace_create_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.repaint_soon = true;
+                }
+            }
+        }
+        if let Some(receiver) = &self.palette_paths_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(value)) => {
+                    self.palette_paths_receiver = None;
+                    if self.palette_paths_for == self.palette_query.trim().to_lowercase() {
+                        self.palette_paths = value.paths;
+                    }
+                    // Typing during the request leaves the answer stale; ask again.
+                    self.request_palette_paths();
+                }
+                Ok(Err(_)) => {
+                    self.palette_paths_receiver = None;
+                    self.palette_paths.clear();
+                    self.palette_paths_for.clear();
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.palette_paths_receiver = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     self.repaint_soon = true;
@@ -5871,6 +5947,9 @@ fn append_stream_text(draft: &mut String, chunk: &serde_json::Value) {
 }
 
 /// Largest image preview read; larger files are rejected instead of fetched.
+/// Path matches one palette query asks the Host for; the palette shows eight.
+const PALETTE_PATH_RESULTS: u64 = 20;
+
 const PREVIEW_IMAGE_LIMIT: usize = 16 * 1024 * 1024;
 /// Largest decoded image side accepted by the preview.
 const PREVIEW_IMAGE_MAX_DIMENSION: u32 = 8192;
@@ -6046,6 +6125,7 @@ fn has_pending_workers(app: &DesktopApp) -> bool {
         || app.schedule_delete_receiver.is_some()
         || app.handoff_receiver.is_some()
         || app.file_search_receiver.is_some()
+        || app.palette_paths_receiver.is_some()
         || app.workspace_create_receiver.is_some()
         || app.terminal.inventory.is_some()
         || app.terminal.updates.is_some()

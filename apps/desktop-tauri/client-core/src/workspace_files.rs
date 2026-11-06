@@ -153,6 +153,14 @@ pub struct WorkspaceSearchValue {
     pub truncated: bool,
 }
 
+/// Result of one bounded workspace path search.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspacePathSearchValue {
+    pub paths: Vec<String>,
+    pub truncated: bool,
+}
+
 /// Native client for workspace file operations.
 pub struct WorkspaceFilesClient<'a> {
     transport: &'a HttpTransport,
@@ -242,6 +250,23 @@ impl<'a> WorkspaceFilesClient<'a> {
                 "workspaceFileScopeId": scope.session_id,
                 "query": query.into(),
                 "options": {}
+            }),
+        )
+    }
+
+    /// Searches workspace paths for a literal substring.
+    pub fn search_paths(
+        &self,
+        scope: WorkspaceFileScope,
+        query: impl Into<String>,
+        max_results: u64,
+    ) -> Result<WorkspacePathSearchValue, Error> {
+        self.call(
+            "workspaceFiles/searchPaths",
+            serde_json::json!({
+                "workspaceFileScopeId": scope.session_id,
+                "query": query.into(),
+                "options": { "maxResults": max_results }
             }),
         )
     }

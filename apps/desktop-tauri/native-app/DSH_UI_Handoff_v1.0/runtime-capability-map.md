@@ -57,7 +57,7 @@ Ghi chú transport quan trọng cho §3.3 và §7.3 của spec:
 | WS-02 | Như trên | Chuyển Session không gọi `session/cancel` nên job cũ không bị hủy ngầm; draft composer được lưu riêng cho từng Session và khôi phục khi quay lại | Chưa giữ luồng live của Session cũ; quay lại tải snapshot runtime |
 | WS-03 | `workspaceFiles/list` trả children trực tiếp + `truncated` | `explorer.rs`: lazy expand, state theo Session (`select_session`) | Không có đệ quy; không phân loại symlink/permission |
 | WS-04 | `workspaceFiles/read` (text + offset/limit/eof), `readBytes`, `stat` | Preview text có phân trang, ảnh, tài liệu Office qua `officeToPdf/render` | Không có "open externally"; binary do client tự đoán |
-| WS-05 | `workspaceFiles/search` (RPC mới 06/11, có giới hạn) | Ô Search content trong Sessions panel; click kết quả mở document và đặt caret đúng dòng (viewport cuộn theo caret) | Quick-open theo tên có trong command palette nhưng chỉ trên cây Explorer đã tải; chưa index toàn workspace |
+| WS-05 | `workspaceFiles/search` (RPC mới 06/11, có giới hạn) | Ô Search content trong Sessions panel; click kết quả mở document và đặt caret đúng dòng (viewport cuộn theo caret) | Quick-open theo tên gộp cây Explorer đã tải với `workspaceFiles/searchPaths` (bounded, không đọc nội dung) nên phủ cả workspace chưa mở |
 | WS-06 | Không có RPC; `ui_preferences.rs` lưu `workspace_panel_width`, `show_workspace_explorer` | Resize/toggle có, lưu file JSON client-local có `schemaVersion` | `ui_preferences` schema v5 có `workspace_overrides`: giá trị của workspace đang chọn thắng global cho panel width/density |
 | WS-07 | `workspaceFiles/changes` → frame `Ready` hoặc `Change {absolutePath, version, absent}`; watch theo **một target** mỗi stream | `explorer.rs`: mỗi thư mục đang mở và file đang preview có một watch; version lặp bị bỏ, thư mục đổi thì list lại và prune entry đã mất, file đổi thì banner stale, file mất thì banner absent (giữ trang cuối) | Frame chỉ nói target đó đổi, không nói entry con nào và không có rename; watch bị Host từ chối thì báo một lần và chỉ thử lại khi bấm refresh |
 | WS-08 | `workspaceFiles/write` (stale-version guard + create-if-absent) | Ghi nội dung qua document editor + Save to Host (cả gpui lẫn egui) | Rename/delete file chưa có RPC |
@@ -157,7 +157,7 @@ Ranh giới: shell tool của agent (`packages/shell`, `packages/subprocess`) t�
 
 Chặn một UI trung thực theo spec:
 
-1. Search nội dung đã có (`workspaceFiles/search` + UI, WS-09), click kết quả nhảy tới dòng; quick-open theo tên có trong palette trên cây Explorer đã tải, chưa index toàn workspace → WS-05; `workspaceFiles/write` đã nối UI (document editor + Save to Host, version guard) ở cả gpui lẫn egui.
+1. Search nội dung đã có (`workspaceFiles/search` + UI, WS-09), click kết quả nhảy tới dòng; quick-open gộp cây Explorer đã tải với `workspaceFiles/searchPaths` → WS-05; `workspaceFiles/write` đã nối UI (document editor + Save to Host, version guard) ở cả gpui lẫn egui.
 2. Git P0 đã có `git/status`, `git/diff`, `git/stage`, `git/unstage`, `git/discard`, `git/commit`, `git/branches`, `git/checkout`; GIT-06/07 có fetch/pull/push và state/merge/rebase/cherry-pick/revert/continue/abort. Còn: interactive rebase, auto-resolve conflict.
 3. Session archive/unarchive + pin đã có (SES-06); hard delete chưa có RPC và cố tình chưa giả lập.
 4. Không có mode agent Ask/Plan/Build → AG-06; `run.status` là suy ra từ `turn/end` (Queue/Steer + queue khi busy đã có) → AG-09, AG-12.

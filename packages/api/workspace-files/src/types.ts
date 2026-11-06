@@ -158,6 +158,22 @@ export interface WorkspaceSearchValue {
   readonly truncated: boolean
 }
 
+/** Bounds for one workspace path search. */
+export interface WorkspacePathSearchOptions {
+  /** Maximum number of paths returned. Defaults to 50. */
+  readonly maxResults?: number
+  /** Maximum number of files examined. Defaults to 2000. */
+  readonly maxFiles?: number
+}
+
+/** Result of one bounded workspace path search. */
+export interface WorkspacePathSearchValue {
+  /** Relative POSIX paths whose full path contains the query, sorted. */
+  readonly paths: readonly string[]
+  /** Whether the file or result cap dropped anything. */
+  readonly truncated: boolean
+}
+
 /**
  * Current target metadata after a filesystem invalidation. File consumers may
  * ignore an already known version; directory consumers relist on every frame

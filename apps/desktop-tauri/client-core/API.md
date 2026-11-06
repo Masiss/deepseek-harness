@@ -110,6 +110,7 @@ Every plain request is a POST unless noted otherwise. `request` and `response` u
 | `workspaceFiles/readBytes` | `{workspaceFileScopeId: SessionId, path, options}` | `WorkspaceFileBytes` with bytes | Desktop |
 | `workspaceFiles/stat` | `{workspaceFileScope, path}` | `WorkspaceFileStat` | Desktop |
 | `workspaceFiles/list` | `{workspaceFileScope, path}` | `WorkspaceDirectoryListing` | Desktop |
+| `workspaceFiles/searchPaths` | `{workspaceFileScopeId: SessionId, query, options?}` | `{paths, truncated}` | Desktop |
 | `/api/file` (`GET`/`HEAD`) | query `path=<absolute path>` | authenticated bounded file `Response` | Desktop exact Fetch route |
 
 ## Streams
