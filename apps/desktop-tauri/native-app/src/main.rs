@@ -1625,6 +1625,7 @@ struct DesktopApp {
     chat_loading: bool,
     chat_receiver: Option<mpsc::Receiver<Result<FollowFrame, Error>>>,
     transcript: Transcript,
+    session_transcripts: std::collections::VecDeque<(String, Transcript)>,
     assistant_streaming: bool,
     assistant_draft: String,
     approval_events_receiver: Option<mpsc::Receiver<Result<RemoteEvent, RemoteEventError>>>,
@@ -1839,6 +1840,7 @@ impl DesktopApp {
             chat_loading: false,
             chat_receiver: None,
             transcript: Transcript::default(),
+            session_transcripts: std::collections::VecDeque::new(),
             assistant_streaming: false,
             assistant_draft: String::new(),
             approval_events_receiver: None,
@@ -2837,6 +2839,15 @@ impl DesktopApp {
         let retain_loaded_view =
             retain_loaded_view && self.selected_session.as_deref() == Some(session_id.as_str());
         if !retain_loaded_view {
+            if let Some(previous) = self.selected_session.clone() {
+                if previous != session_id {
+                    self.session_transcripts.retain(|(id, _)| id != &previous);
+                    self.session_transcripts.push_back((previous, self.transcript.clone()));
+                    while self.session_transcripts.len() > 6 {
+                        self.session_transcripts.pop_front();
+                    }
+                }
+            }
             self.session_title.clear();
             self.active_view = ActiveView::Sessions;
             self.show_settings = false;
@@ -2895,6 +2906,17 @@ impl DesktopApp {
         self.assistant_draft.clear();
         if !retain_loaded_view {
             self.transcript.reset();
+            if let Some(index) = self
+                .session_transcripts
+                .iter()
+                .position(|(id, _)| id == &session_id)
+            {
+                self.transcript = self
+                    .session_transcripts
+                    .remove(index)
+                    .map(|(_, transcript)| transcript)
+                    .unwrap_or_default();
+            }
             self.deliverables.clear();
             self.feedback_items.clear();
             self.preview_document = None;

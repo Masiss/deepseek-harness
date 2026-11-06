@@ -47,7 +47,7 @@ pub struct TranscriptRow {
 /// History pages and live follow frames project through the same function, so a
 /// Session renders one ordered, deduplicated log regardless of where each event
 /// came from.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Transcript {
     rows: Vec<TranscriptRow>,
     applied: BTreeSet<i64>,
