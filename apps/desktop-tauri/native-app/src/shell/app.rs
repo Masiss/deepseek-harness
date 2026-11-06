@@ -57,7 +57,7 @@ use dsh_client_core::{
     workspace::{WorkspaceArchiveValue, WorkspaceClient, WorkspacePinValue},
     workspace_files::{
         WorkspaceByteRange, WorkspaceByteReadOptions, WorkspaceFileRange, WorkspaceFileScope,
-        WorkspaceFileWriteResult, WorkspaceFilesClient,
+        WorkspaceFileWriteResult, WorkspaceFilesClient, WorkspaceSearchMatch, WorkspaceSearchValue,
     },
     Error,
 };
@@ -478,6 +478,13 @@ pub(crate) struct DesktopApp {
     pub(crate) workspace_receiver: Option<mpsc::Receiver<Result<WorkspaceFollowFrame, String>>>,
     pub(crate) workspace_error: Option<String>,
     pub(crate) workspace_create_receiver: Option<mpsc::Receiver<Result<dsh_client_core::workspace::WorkspaceCreateValue, Error>>>,
+    pub(crate) file_search_query: String,
+    pub(crate) file_search_items: Vec<WorkspaceSearchMatch>,
+    pub(crate) file_search_scanned: u64,
+    pub(crate) file_search_truncated: bool,
+    pub(crate) file_search_loading: bool,
+    pub(crate) file_search_error: Option<String>,
+    pub(crate) file_search_receiver: Option<mpsc::Receiver<Result<WorkspaceSearchValue, Error>>>,
     pub(crate) session_query: String,
     pub(crate) session_search: Option<SessionSearchResponse>,
     pub(crate) session_title: String,
@@ -872,6 +879,13 @@ impl DesktopApp {
             workspace_receiver: None,
             workspace_error: None,
             workspace_create_receiver: None,
+            file_search_query: String::new(),
+            file_search_items: Vec::new(),
+            file_search_scanned: 0,
+            file_search_truncated: false,
+            file_search_loading: false,
+            file_search_error: None,
+            file_search_receiver: None,
             session_query: String::new(),
             session_search: None,
             session_title: String::new(),
@@ -3319,6 +3333,31 @@ impl DesktopApp {
         self.write_archive(session_id, false, false);
     }
 
+    /// Runs the bounded workspace content search for the current query.
+    pub(crate) fn run_file_search(&mut self) {
+        if self.file_search_receiver.is_some() {
+            return;
+        }
+        let query = self.file_search_query.trim().to_owned();
+        if query.is_empty() {
+            return;
+        }
+        let (Some(session_id), Some(transport)) = (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.file_search_error = Some("Select a connected session to search files.".into());
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let client = WorkspaceFilesClient::new(&transport);
+            let result = client.search(WorkspaceFileScope { session_id }, query);
+            let _ = sender.send(result);
+        });
+        self.file_search_receiver = Some(receiver);
+        self.file_search_loading = true;
+        self.file_search_error = None;
+    }
+
     fn write_archive(&mut self, session_id: String, stop_activity: bool, archive: bool) {
         if self.archive_receiver.is_some() {
             return;
@@ -3794,6 +3833,7 @@ impl DesktopApp {
                 "session-title" => app.session_title = text,
                 "session-fork-seq" => app.fork_seq_text = text,
                 "file-picker-query" => app.file_picker_query = text,
+                "file-search-query" => app.file_search_query = text,
                 "document-body" => app.preview_draft = text,
                 "market-query" => {
                     app.market_query = text;
@@ -3867,6 +3907,7 @@ impl DesktopApp {
             ("palette-query", &mut self.palette_query),
             ("session-fork-seq", &mut self.fork_seq_text),
             ("file-picker-query", &mut self.file_picker_query),
+            ("file-search-query", &mut self.file_search_query),
             ("document-body", &mut self.preview_draft),
         ] {
             if let Some(input) = self.inputs.get(key) {
@@ -4767,6 +4808,30 @@ impl DesktopApp {
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.sessions_error = Some("Open folder worker stopped unexpectedly".into());
                     self.workspace_create_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.repaint_soon = true;
+                }
+            }
+        }
+        if let Some(receiver) = &self.file_search_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(value)) => {
+                    self.file_search_items = value.matches;
+                    self.file_search_scanned = value.scanned_files;
+                    self.file_search_truncated = value.truncated;
+                    self.file_search_loading = false;
+                    self.file_search_receiver = None;
+                }
+                Ok(Err(error)) => {
+                    self.file_search_loading = false;
+                    self.file_search_receiver = None;
+                    self.file_search_error = Some(format!("File search failed: {error}"));
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.file_search_loading = false;
+                    self.file_search_receiver = None;
+                    self.file_search_error = Some("File search worker stopped unexpectedly".into());
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     self.repaint_soon = true;

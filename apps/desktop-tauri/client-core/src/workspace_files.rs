@@ -135,6 +135,24 @@ pub struct WorkspaceDirectoryListing {
     pub truncated: bool,
 }
 
+/// One line matching a workspace content search.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceSearchMatch {
+    pub path: String,
+    pub line: u64,
+    pub text: String,
+}
+
+/// Result of one bounded workspace content search.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceSearchValue {
+    pub matches: Vec<WorkspaceSearchMatch>,
+    pub scanned_files: u64,
+    pub truncated: bool,
+}
+
 /// Native client for workspace file operations.
 pub struct WorkspaceFilesClient<'a> {
     transport: &'a HttpTransport,
@@ -209,6 +227,22 @@ impl<'a> WorkspaceFilesClient<'a> {
         self.call(
             "workspaceFiles/list",
             serde_json::json!({"workspaceFileScopeId":scope.session_id,"path":path.into()}),
+        )
+    }
+
+    /// Searches workspace text files for a literal query within caller caps.
+    pub fn search(
+        &self,
+        scope: WorkspaceFileScope,
+        query: impl Into<String>,
+    ) -> Result<WorkspaceSearchValue, Error> {
+        self.call(
+            "workspaceFiles/search",
+            serde_json::json!({
+                "workspaceFileScopeId": scope.session_id,
+                "query": query.into(),
+                "options": {}
+            }),
         )
     }
 

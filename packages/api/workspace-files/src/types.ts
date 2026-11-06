@@ -130,6 +130,34 @@ export interface WorkspaceDirectoryListing {
   readonly truncated: boolean
 }
 
+/** One line matching a workspace search query. */
+export interface WorkspaceSearchMatch {
+  /** Workspace-relative path of the matching file. */
+  readonly path: string
+  /** 1-based line number of the match. */
+  readonly line: number
+  /** The matching line, trimmed to a bounded prefix. */
+  readonly text: string
+}
+
+/** Caller bounds for one workspace search. */
+export interface WorkspaceSearchOptions {
+  /** Maximum number of matches returned. Defaults to 100. */
+  readonly maxResults?: number
+  /** Maximum number of files scanned. Defaults to 1000. */
+  readonly maxFiles?: number
+}
+
+/** Result of one bounded workspace content search. */
+export interface WorkspaceSearchValue {
+  /** Matching lines, ordered by file path then line number up to the result cap. */
+  readonly matches: readonly WorkspaceSearchMatch[]
+  /** Number of regular text files fully scanned. */
+  readonly scannedFiles: number
+  /** Whether the file, result, or byte cap dropped anything. */
+  readonly truncated: boolean
+}
+
 /**
  * Current target metadata after a filesystem invalidation. File consumers may
  * ignore an already known version; directory consumers relist on every frame

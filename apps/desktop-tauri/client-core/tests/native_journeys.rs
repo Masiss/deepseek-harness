@@ -750,6 +750,27 @@ fn marketplace_install_options_reach_inspect_and_install() {
 }
 
 #[test]
+fn workspace_search_uses_literal_query_arguments() {
+    use dsh_client_core::workspace_files::{WorkspaceFileScope, WorkspaceFilesClient};
+    let mut fixture = HostFixture::new();
+    fixture.ok(
+        "workspaceFiles/search",
+        json!({"workspaceFileScopeId": "s1", "query": "needle", "options": {}}),
+        json!({
+            "matches": [{"path": "notes.txt", "line": 2, "text": "Needle here"}],
+            "scannedFiles": 4,
+            "truncated": false
+        }),
+    );
+    let value = WorkspaceFilesClient::new(&fixture.transport)
+        .search(WorkspaceFileScope { session_id: "s1".into() }, "needle")
+        .unwrap();
+    assert_eq!(value.matches.len(), 1);
+    assert_eq!(value.matches[0].line, 2);
+    assert_eq!(value.scanned_files, 4);
+    assert!(!value.truncated);
+}
+
 fn document_and_office_previews_decode_multipart_bytes_and_unavailable_errors() {
     let mut host = HostFixture::new();
     host.ok("workspaceFiles/read", json!({"workspaceFileScopeId":"s1","path":"notes.txt","range":{"offset":0,"limit":2}}), json!({"absolutePath":"/workspace/notes.txt","version":"v1","bytes":6,"offset":0,"text":"hello\n","lines":1,"eof":true}));

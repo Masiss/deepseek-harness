@@ -441,6 +441,104 @@ pub(crate) fn panel(
         );
     }
 
+    let search_input = app.text_field("file-search-query", "Search file content", false, cx);
+    let mut search_block = div()
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+        .px(theme.sp(8.))
+        .pb(theme.sp(6.))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(4.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(60.))
+                        .h(theme.control_height())
+                        .px(theme.sp(6.))
+                        .rounded(theme.corner())
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.code_background)
+                        .overflow_hidden()
+                        .child(crate::shell::text_input::text_input_element(
+                            &search_input,
+                            theme,
+                            theme.control_height() - px(2.),
+                        )),
+                )
+                .child(
+                    widgets::Button::new(theme, "Search")
+                        .enabled(connected && !app.file_search_loading)
+                        .build()
+                        .id("file-search-run")
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.run_file_search();
+                            cx.notify();
+                        })),
+                ),
+        );
+    if app.file_search_loading {
+        search_block = search_block.child(
+            div()
+                .text_size(theme.fs(10.))
+                .text_color(theme.muted)
+                .child("Searching…"),
+        );
+    }
+    if let Some(error) = app.file_search_error.clone() {
+        search_block = search_block.child(
+            div()
+                .text_size(theme.fs(10.))
+                .text_color(theme.error)
+                .child(error),
+        );
+    }
+    if !app.file_search_items.is_empty() {
+        search_block = search_block.child(widgets::section_label(
+            theme,
+            &format!(
+                "MATCHES ({} scanned{})",
+                app.file_search_items.len(),
+                if app.file_search_truncated { ", truncated" } else { "" }
+            ),
+        ));
+        for found in app.file_search_items.iter().take(12) {
+            let path = found.path.clone();
+            search_block = search_block.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(theme.sp(4.))
+                    .px(theme.sp(6.))
+                    .py(px(2.))
+                    .rounded(theme.corner())
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme.surface))
+                    .id(gpui::SharedString::from(format!("file-search-result-{}:{}", found.path, found.line)))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(theme.fs(10.))
+                            .truncate()
+                            .child(format!("{}:{} — {}", found.path, found.line, found.text)),
+                    )
+                    .on_click(cx.listener(move |app, _, _, cx| {
+                        app.preview_path = path.clone();
+                        app.show_document = true;
+                        app.active_view = crate::shell::app::ActiveView::Document;
+                        app.read_document();
+                        cx.notify();
+                    })),
+            );
+        }
+    }
+
     let mut column = div()
         .flex()
         .flex_col()
@@ -453,6 +551,7 @@ pub(crate) fn panel(
         .bg(theme.surface)
         .child(header)
         .child(workspace_row)
+        .child(search_block)
         .child(
             div()
                 .flex()

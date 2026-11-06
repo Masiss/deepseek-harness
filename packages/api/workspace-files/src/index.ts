@@ -42,6 +42,9 @@ import type {
   WorkspaceFileText,
   WorkspaceFileWatchFrame,
   WorkspaceFileWriteResult,
+  WorkspaceSearchMatch,
+  WorkspaceSearchOptions,
+  WorkspaceSearchValue,
 } from './types.ts'
 
 export type * from './types.ts'
@@ -389,6 +392,88 @@ export class WorkspaceFiles extends TypertRemoteService {
       entries: children.slice(0, this.config.maxEntries).map(directoryEntry),
       truncated: children.length > this.config.maxEntries,
     }
+  }
+
+  /**
+   * Search workspace text files for a literal query, bounded by caller caps.
+   * Symlinks are not followed, binary files (carrying a NUL byte in the first
+   * megabyte) and files above that cap are skipped, and at most one
+   * `{@link maxFiles}` files are scanned in depth-first order.
+   * @param workspaceFileScope - header-derived workspace root for the Session identity on the wire.
+   * @param query - non-empty literal substring to find.
+   * @param options - caller bounds for scanned files and returned matches.
+   * @param signal - caller cancellation.
+   * @returns matching lines plus a truncation flag when any cap dropped content.
+   */
+  @Remote
+  async search(
+    workspaceFileScope: WorkspaceFileScope,
+    query: string,
+    options: WorkspaceSearchOptions | undefined,
+    signal: AbortSignal,
+  ): Promise<WorkspaceSearchValue> {
+    if (query.length === 0 || query.length > 200) {
+      throw new RemoteError('gateway/bad-request', 'query must be 1 to 200 characters', {})
+    }
+    const maxResults = options?.maxResults ?? 100
+    const maxFiles = options?.maxFiles ?? 1000
+    if (!Number.isSafeInteger(maxResults) || maxResults <= 0 || maxResults > 500) {
+      throw new RemoteError('gateway/bad-request', 'maxResults must be a safe integer 1 to 500', {})
+    }
+    if (!Number.isSafeInteger(maxFiles) || maxFiles <= 0 || maxFiles > 5000) {
+      throw new RemoteError('gateway/bad-request', 'maxFiles must be a safe integer 1 to 5000', {})
+    }
+    const needle = query.toLowerCase()
+    const matches: WorkspaceSearchMatch[] = []
+    let scannedFiles = 0
+    let truncated = false
+    const queue: string[] = ['.']
+    while (queue.length > 0 && scannedFiles < maxFiles && matches.length < maxResults) {
+      signal.throwIfAborted()
+      const directory = queue.shift() as string
+      const listing = await this.list(workspaceFileScope, directory, signal)
+      for (const child of listing.entries) {
+        if (child.type === 'directory') {
+          queue.push(directory === '.' ? child.name : `${directory}/${child.name}`)
+          continue
+        }
+        if (child.type !== 'file') continue
+        if (child.size !== undefined && child.size > 1_000_000) {
+          truncated = true
+          continue
+        }
+        if (scannedFiles >= maxFiles || matches.length >= maxResults) {
+          truncated = true
+          break
+        }
+        const path = directory === '.' ? child.name : `${directory}/${child.name}`
+        const bytes = await this.readBytes(
+          workspaceFileScope, path,
+          { range: { offset: 0, length: 1_000_000 } }, signal,
+        )
+        if (bytes.data.includes(0)) continue
+        const text = new TextDecoder().decode(bytes.data)
+        scannedFiles += 1
+        const lines = text.split('\n')
+        for (let index = 0; index < lines.length; index += 1) {
+          const line = lines[index] as string
+          if (line.toLowerCase().includes(needle)) {
+            matches.push({
+              path,
+              line: index + 1,
+              text: line.length > 200 ? `${line.slice(0, 197)}...` : line,
+            })
+            if (matches.length >= maxResults) {
+              truncated = true
+              break
+            }
+          }
+        }
+      }
+      if (listing.truncated) truncated = true
+    }
+    if (queue.length > 0) truncated = true
+    return { matches, scannedFiles, truncated }
   }
 
   /**
