@@ -45,8 +45,8 @@ Ghi chú transport quan trọng cho §3.3 và §7.3 của spec:
 | Explorer cột trái | Dock trái, kéo vách 4 px để đổi rộng (`workspace_panel_width`, lưu khi thả) | Đạt; chưa có double-click reset về mặc định |
 | Tab Agent 34px thuộc cột giữa | Dải tab 34px với tab `Agent` gạch chân accent + tiêu đề Session | Đạt một phần: chưa có nhiều buffer |
 | Không có danh sách Session thường trực; `+` và dropdown ở đáy Explorer | Popover Session (search/rename/fork) mở từ chip top bar, nút Search, hoặc footer Explorer có `＋` và tên Session | Đạt |
-| Changes cột phải: Diff/Files | Cột phải có tab Diff/Files, kéo vách để đổi rộng (`changes_panel_width`), đóng bằng `×`; nội dung là empty state nói rõ Host chưa expose diff | Đạt khung; dữ liệu là `NOT_SUPPORTED` cho tới khi có RPC |
-| Bottom bar: trái branch + Git + sync; phải terminal + diagnostics + dot | Trái: `⎇ No repository`, `Git`, `Sync` (mờ, không có capability); phải: Jobs / Schedules / Deliverables / Terminal dạng icon + chấm kết nối | Đạt một phần: không hiển thị branch giả, nhưng Git panel chưa tồn tại và diagnostics chưa có |
+| Changes cột phải: Diff/Files | Cột phải có tab Diff/Files, kéo vách để đổi rộng (`changes_panel_width`), đóng bằng `×`; nội dung là diff thật (`git/diff`) và danh sách file thật (`git/status`/`workspaceFiles/changes`) | Đạt: auto-refresh khi focus/mutation, confirm + stale guard, cảnh báo binary/truncated |
+| Bottom bar: trái branch + Git + sync; phải terminal + diagnostics + dot | Trái: `⎇ No repository`, `Git`, `Sync` (mờ, không có capability); phải: Jobs / Schedules / Deliverables / Terminal dạng icon + chấm kết nối | Đạt một phần: branch thật hoặc `No repository`, Git panel có status/branch/remote ops; diagnostics chưa có cả seam phía Host nên không hiển thị |
 | Preferences một cửa sổ, sidebar General/Appearance/Keymap/Extensions/Skills/Marketplace/About | Vẫn là trang full-pane; Extensions/Skills/Marketplace/Goals là trang riêng | Một phần: chưa gộp thành một cửa sổ Preferences |
 
 ## 2. Workspace & Explorer
@@ -57,8 +57,8 @@ Ghi chú transport quan trọng cho §3.3 và §7.3 của spec:
 | WS-02 | Như trên | Chuyển Session không gọi `session/cancel` nên job cũ không bị hủy ngầm; draft composer được lưu riêng cho từng Session và khôi phục khi quay lại | Chưa giữ luồng live của Session cũ; quay lại tải snapshot runtime |
 | WS-03 | `workspaceFiles/list` trả children trực tiếp + `truncated` | `explorer.rs`: lazy expand, state theo Session (`select_session`) | Không có đệ quy; không phân loại symlink/permission |
 | WS-04 | `workspaceFiles/read` (text + offset/limit/eof), `readBytes`, `stat` | Preview text có phân trang, ảnh, tài liệu Office qua `officeToPdf/render` | Không có "open externally"; binary do client tự đoán |
-| WS-05 | `workspaceFiles/search` (RPC mới 06/11, có giới hạn) | Ô Search content trong Sessions panel; click kết quả mở document | Quick-open theo tên trong Explorer chưa có; match chỉ tới dòng, chưa jump tới dòng |
-| WS-06 | Không có RPC; `ui_preferences.rs` lưu `workspace_panel_width`, `show_workspace_explorer` | Resize/toggle có, lưu file JSON client-local có `schemaVersion` | Chưa có precedence global → workspace của spec |
+| WS-05 | `workspaceFiles/search` (RPC mới 06/11, có giới hạn) | Ô Search content trong Sessions panel; click kết quả mở document | Quick-open theo tên có trong command palette nhưng chỉ trên cây Explorer đã tải; match chỉ tới dòng, chưa jump tới dòng |
+| WS-06 | Không có RPC; `ui_preferences.rs` lưu `workspace_panel_width`, `show_workspace_explorer` | Resize/toggle có, lưu file JSON client-local có `schemaVersion` | `ui_preferences` schema v5 có `workspace_overrides`: giá trị của workspace đang chọn thắng global cho panel width/density |
 | WS-07 | `workspaceFiles/changes` → frame `Ready` hoặc `Change {absolutePath, version, absent}`; watch theo **một target** mỗi stream | `explorer.rs`: mỗi thư mục đang mở và file đang preview có một watch; version lặp bị bỏ, thư mục đổi thì list lại và prune entry đã mất, file đổi thì banner stale, file mất thì banner absent (giữ trang cuối) | Frame chỉ nói target đó đổi, không nói entry con nào và không có rename; watch bị Host từ chối thì báo một lần và chỉ thử lại khi bấm refresh |
 | WS-08 | `workspaceFiles/write` (stale-version guard + create-if-absent) | Ghi nội dung qua document editor + Save to Host (cả gpui lẫn egui) | Rename/delete file chưa có RPC |
 | WS-09 | `workspaceFiles/search` (RPC mới 06/11, có giới hạn) | Như WS-05 | Bỏ qua symlink, NUL binary và file >1MiB; line không jump |
@@ -72,7 +72,7 @@ Sandbox/permission: `packages/fs/fs-sandbox/src/containment.ts`, `packages/fs/fs
 |---|---|---|---|
 | SES-01 | `session/create` (`workspace_id`, `cwd`, `session_id`, `agent_preset`) | `new_session()` tạo và focus composer | Ổn |
 | SES-02 | `session/list` (cursor), `session/search` (chỉ trả `sessionId` + snippet); `workspace/follow` cho workspace + archived/pinned set | Panel Sessions có search/rename/fork/archive/pin; chấm chạy cập nhật bằng poll 3 giây khi có lượt hoạt động; lọc theo workspace đang chọn bằng membership từ Host | Membership/archived/pinned đến từ stream, không qua `session/list` |
-| SES-03 | `session/page` (`throughSeq`, `beforeSeq`, `maxMessages`, `turnWindow`), `session/follow` snapshot | `load_older_session_page()`, scroll anchor client-local; draft theo Session trong `ui_preferences` | Ổn; chưa chứng minh bằng snapshot test cho paging |
+| SES-03 | `session/page` (`throughSeq`, `beforeSeq`, `maxMessages`, `turnWindow`), `session/follow` snapshot | `load_older_session_page()`, scroll anchor client-local; draft theo Session trong `ui_preferences` | Ổn: `transcript::tests::older_page_prepends_in_sequence_order` và `windowed_snapshot_keeps_older_history` phủ paging |
 | SES-04 | Không có bản ghi "last session" phía Host | `ui_preferences` lưu `lastSessionId`; **Restore last Session** mở lại khi khởi động, fallback Session mới nhất kèm lý do nếu Session cũ không còn | Chỉ lưu phía client; workspace đi theo `cwd` của Session |
 | SES-05 | `session/follow` resume qua `fromSeq`; `session/cancel` chỉ khi user bấm Stop | Đổi Session không cancel; `send_prompt` mở luồng follow riêng và resume từ `Transcript::last_seq`; badge **● Running** đọc `session/list` | Session đổi đi rồi quay lại (khác session) vẫn snapshot mới vì transcript reset; resume chỉ khi giữ view, nhất là reconnect |
 | SES-06 | `session/rename` có; `workspace/archiveSession` + `unarchiveSession` đã có ở Host | Rename + Archive/Archive&stop/Unarchive + Pin/Unpin (cả gpui lẫn egui, `stopActivity` tách riêng hai nút) | Hard delete chưa có RPC — archive là đường an toàn được hỗ trợ |
@@ -85,23 +85,23 @@ Sandbox/permission: `packages/fs/fs-sandbox/src/containment.ts`, `packages/fs/fs
 | Spec ID | Host RPC | Shell gpui | Gaps |
 |---|---|---|---|
 | AG-01 | `session/page`, `session/follow` (`SessionWireEvent {type, seq, time, data}`) | `transcript.rs` dựng row theo event type | Map role nằm ở client |
-| AG-02 | `session/follow` với `assistant_stream`, frame `assistant-stream` | Ghép delta vào `transcript` | Dedupe `runId+seq` chưa có test chống lặp frame |
+| AG-02 | `session/follow` với `assistant_stream`, frame `assistant-stream` | Ghép delta vào `transcript` | `transcript::tests::ignores_internal_events_and_duplicate_sequences` và `merge_orders_events_from_any_source_and_drops_duplicates` phủ dedupe |
 | AG-03 | Nội dung nằm trong event data | Markdown/code block tự vẽ; preview ảnh/tài liệu có | Chưa có sanitize URL/protocol tập trung; link `path:line` chưa điều hướng |
 | AG-04 | `session/page` trả `ToolCall {call_id, name, status}` | Tool activity nhóm, mở rộng được | Không có stdout/stderr/duration/exit code trong client type |
 | AG-05 | `ToolCallStatus` = `Pending / Succeeded / Failed / Unknown` | Hiển thị theo enum | Thiếu `Running / Cancelled`; client phải đặt `Unknown` khi mất kết nối |
 | AG-06 | `PromptMode` chỉ có `Queue / Steer`; không có mode Ask/Plan/Build | `send_prompt` cố định `PromptMode::Queue` | Không có UI mode; cần xác nhận Host có mode agent hay không |
 | AG-07 | `session/cancel` trả `AcceptedResponse {accepted}` | `cancel_turn()` chờ ack rồi mới đổi trạng thái | Ổn |
 | AG-08 | `approval/request` (`toolName`, `callId?`, `reason?`, `displayReason?`) + `ApprovalDecision` = `allowed-once / rejected` | Hàng đợi approval inline, hiện request đầu + số còn lại | Không có `requestId`/expiry/scope trong payload; chỉ 2 quyết định |
-| AG-09 | Không có `run.status` RPC; trạng thái suy ra từ event | Chưa phân biệt `partial/blocked` với `completed` | Cần event turn-outline hoặc luật suy ra rõ ràng |
+| AG-09 | Không có `run.status` RPC; trạng thái suy ra từ `turn/end` | `run_state` phân biệt `blocked/partial/interrupted/completed`; Queue/Steer + queue khi busy | Đạt theo `turn/end`; không suy diễn từ lỗi tool |
 | AG-10 | Không có event thinking trong client type | Không render | Đúng hướng: không bịa |
-| AG-11 | `packages/session/session-turn-outline`, `packages/goal` | Goals có UI riêng | Handoff/summary chưa nối |
+| AG-11 | `packages/session/session-turn-outline`, `packages/goal` | Goals có UI riêng; handoff dựng Markdown từ log bền vững (`handoff.rs`), Save/Overwrite qua `workspaceFiles/write` | Đạt |
 | AG-12 | Không có queue/parallel RPC | Không có | Phải coi là không hỗ trợ |
 | CMP-01 | — | `composer_input.rs` + `shell/text_input.rs` (IME, selection, multiline) | Chưa có test composition tiếng Việt |
 | CMP-02 | — | Nút `＠` mở danh sách file từ Explorer đã tải kèm ô lọc theo tên/đường dẫn (`file-picker-query`); chọn file chèn `@<path>` vào composer | Duyệt + lọc trong cây đã tải; chưa tìm trong workspace |
 | CMP-03 | `upload.rs` (upload + receipt), `officeToPdf` | `pick_attachment` / `attach_path` / `poll_attachment` | Một tệp/lần, chưa có drop |
 | CMP-04 | `session/modelCatalog`, `session/selectModel`, `session/initializeDefaultModel` | Picker + nhãn lý do không chọn được | Ổn |
 | CMP-05 | Không có capability mode | Không có | `NOT_SUPPORTED` cho tới khi Host có |
-| CMP-06 | `PromptRequest.request_id` (client sinh qua `chat.next_request_id()`) | Sinh id mỗi lần gửi, chặn khi `chat_loading` | Chưa xác nhận Host dedupe theo `request_id` |
+| CMP-06 | `PromptRequest.request_id` (client sinh qua `chat.next_request_id()`) | Sinh id mỗi lần gửi, chặn khi `chat_loading` | Host dedupe theo `request_id` (inbox + log, `hasPromptRequest`), có 2 test host |
 | CMP-07 | `PromptMode::Queue / Steer` | Hai nút Queue/Steer trong composer; `send_prompt`/`queue_prompt` gửi `mode` hiện tại | Đạt; mode agent Ask/Plan/Build vẫn chưa có (Host không expose) |
 | CMP-08 | Không có | `chat_text` là draft theo Session, lưu vào `sessionDrafts` của preferences và xoá khi gửi; lịch sử prompt có nút History/Next | Đạt |
 | EV-01..03 | `session/follow` (`fromSeq` resume cursor), `session/control`, `session/page` | Snapshot resume từ `Transcript::last_seq` sau giữ view (reconnect) và lúc submit prompt; dedupe theo `seq` vẫn là lưới thứ hai | Resume có giới hạn bởi cửa sổ `maxMessages` như snapshot thường; khoảng trống giữa được điền bằng `session/page` |
@@ -141,7 +141,7 @@ Ranh giới: shell tool của agent (`packages/shell`, `packages/subprocess`) t�
 | Spec ID | Host RPC | Shell gpui | Gaps |
 |---|---|---|---|
 | PREF-01 | Không có RPC; client-local | Tùy chọn Restore last Session trong preferences mở lại Session cuối, fallback Session mới nhất kèm lý do; draft composer theo Session lưu debounce 750 ms | Đạt |
-| PREF-02 | Không có RPC cho layout UI | `ui_preferences.rs` lưu width/visibility panel | Client-local, chưa có override theo workspace |
+| PREF-02 | Không có RPC cho layout UI | `ui_preferences.rs` lưu width/visibility panel | Client-local; `workspace_overrides` (schema v5) cho phép override theo workspace |
 | PREF-03 | `settings/*` với `expected_revision`, `SettingsConflictError`, redact (`packages/settings/settings`) | Preferences ghi JSON có `schemaVersion`, hiển thị lỗi load | Hai kho khác nhau: Host settings (plugin config) vs file UI client-local; cần nói rõ trong UI |
 | PREF-04 | Không có export/import | Có sửa JSON trực tiếp trong trang Preferences | Thiếu reset theo nhóm |
 | APP-01..04 | Không có | `ThemeMode` (System/Light/Dark), `ThemePack` (Default/HighContrast/Solarized/Custom), `UiDensity`, `ui_scale`, font UI/mono | Không có bộ Dark/Midnight/Light + accent Blue/Teal/Violet đúng như V2; accent chỉ đổi qua `ThemePack`/custom |
@@ -157,13 +157,13 @@ Ranh giới: shell tool của agent (`packages/shell`, `packages/subprocess`) t�
 
 Chặn một UI trung thực theo spec:
 
-1. Search nội dung đã có (`workspaceFiles/search` + UI, WS-09); quick-open theo tên trong Explorer chưa có (nút Search chỉ đổi view) → WS-05; `workspaceFiles/write` đã nối UI (document editor + Save to Host, version guard) ở cả gpui lẫn egui.
+1. Search nội dung đã có (`workspaceFiles/search` + UI, WS-09); quick-open theo tên có trong palette trên cây Explorer đã tải, chưa index toàn workspace → WS-05; `workspaceFiles/write` đã nối UI (document editor + Save to Host, version guard) ở cả gpui lẫn egui.
 2. Git P0 đã có `git/status`, `git/diff`, `git/stage`, `git/unstage`, `git/discard`, `git/commit`, `git/branches`, `git/checkout`; GIT-06/07 có fetch/pull/push và state/rebase/cherry-pick/continue/abort. Còn: interactive rebase, merge/revert continue, auto-resolve conflict.
 3. Session archive/unarchive + pin đã có (SES-06); hard delete chưa có RPC và cố tình chưa giả lập.
 4. Không có mode agent Ask/Plan/Build → AG-06; `run.status` là suy ra từ `turn/end` (Queue/Steer + queue khi busy đã có) → AG-09, AG-12.
-5. Skill chỉ đọc danh sách, nay kèm scope/provider → SKL-01/02/03 (enable/disable bền vững cần quyết định Host).
+5. Skill đọc danh sách kèm scope/provider, enable/disable bền vững qua `skills/setDisabled` và settings namespace → SKL-01/02/03.
 6. Host `TerminalState` chỉ có 3 giá trị `Running/Exited/Failed`; shell tự suy ra `idle/starting/attached/detached/error` từ attachment và lỗi → TER-03.
-7. Last-session restore đã có client-local (PREF-01); layout/theme/keymap vẫn client-local, chưa có override theo workspace → PREF-02, APP, KEY (một phần).
+7. Last-session restore đã có client-local (PREF-01); layout/theme/keymap có override theo workspace từ schema v5 → PREF-02, APP, KEY (một phần: chưa gộp Preferences một cửa sổ).
 8. `session/follow` đã có cursor `fromSeq`; reconnect giữ view resume từ sequence đã giữ, fallback snapshot mới khi đổi session.
 9. Tool result đã tách stdout/stderr + exit code + duration từ log (không thêm RPC) → AG-04.
 10. Approval chỉ có `allowed-once`/`rejected`, không có expiry/scope → AG-08 (một phần).
