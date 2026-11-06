@@ -1,0 +1,6 @@
+shell-root 0.0 0.0 1920.0 1080.0
+top-bar 0.0 0.0 1920.0 30.0
+explorer-panel 0.0 30.0 390.0 1024.0
+agent-column 394.0 30.0 1142.0 1024.0
+changes-panel 1540.0 30.0 380.0 1024.0
+bottom-bar 0.0 1054.0 1920.0 26.0

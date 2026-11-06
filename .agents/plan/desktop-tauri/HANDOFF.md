@@ -421,6 +421,8 @@ Hai test terminal trước đây kiểm cả parse lẫn format egui được t�
 
 Bin `dsh-desktop-egui-legacy`, feature `legacy-egui`, optional `eframe`, `egui_kittest` dev-dependency, `src/main.rs`, `src/ui_harness.rs` + `src/ui_harness/audit.rs`, `src/settings_panel.rs`, `src/transcript_view.rs`, `tests/snapshots/*.png` và toàn bộ khối `#[cfg(feature = "legacy-egui")]` trong module dùng chung đã bị xoá. Lý do: chỉ còn một renderer cần bảo trì; hai bản UI song song buộc mọi feature phải làm hai lần và đã phát sinh đúng lỗi đó trong các slice UI V2.
 
+**Harness thay thế (06/11):** `src/harness.rs` mở `DesktopApp` thật trong test window của gpui rồi đọc hình học renderer tạo ra (`debug_bounds`), so với baseline `tests/snapshots/shell-1366x768.txt` và `shell-1920x1080.txt`; `cargo test harness` phủ bar 30/34/26, ngưỡng dock Explorer/Changes, và toggle Changes. Chưa có pixel/accessibility tree.
+
 **Mất mát phải bù:** harness `egui_kittest` là nơi duy nhất chạy headless UI (AccessKit + snapshot PNG) và là L2 cho các journey `panels`/`model-default`/`update-ui`. Vì vậy ba probe GUI đó đã bị gỡ khỏi `native-journey-probe.sh`, `office-component-probe.sh`, `model-default-probe.sh`, `update-flow-probe.mjs`; hiện **chưa có harness UI tự động cho gpui**. `native-journey-probe.sh terminal|timed-question|model-default` vẫn chạy qua probe hook env của gpui. Việc dựng lại harness tương đương trên gpui là mục mở, không được tính là đã xong.
 
 ## AppImage native gpui — 2026-11-01

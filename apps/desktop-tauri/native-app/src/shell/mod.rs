@@ -2,6 +2,9 @@
 
 mod app;
 mod render;
+
+#[cfg(test)]
+pub(crate) use app::DesktopApp as HarnessApp;
 mod terminal_state;
 mod theme;
 mod text_input;

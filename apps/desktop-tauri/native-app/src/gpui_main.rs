@@ -17,6 +17,9 @@ mod explorer;
 mod fonts;
 #[path = "handoff.rs"]
 mod handoff;
+#[cfg(test)]
+#[path = "harness.rs"]
+mod harness;
 #[path = "host.rs"]
 mod host;
 #[path = "layout.rs"]

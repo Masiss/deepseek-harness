@@ -42,6 +42,9 @@ ring = "0.17"
 unicode-width = "0.2"
 
 [dev-dependencies]
+# gpui's test-support feature provides TestAppContext and the headless visual test
+# window the shell harness drives.
+gpui = { version = "0.2.2", features = ["test-support"] }
 # test-fixtures exposes wire-shaped Remote Event constructors for the UI fixture.
 dsh-client-core = { package = "dsh-client-core", path = "../client-core", features = ["test-fixtures"] }
 
