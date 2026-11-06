@@ -15,6 +15,12 @@ pub struct SkillEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when_to_use: Option<String>,
     pub model_invocable: bool,
+    /// Discovery source that produced the winning skill (project/user/bundled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Provider package that owns the skill body.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 /// Skill list response.
@@ -71,10 +77,12 @@ mod tests {
             description: "Review code".into(),
             when_to_use: Some("when asked".into()),
             model_invocable: true,
+            source: Some("project-agents".into()),
+            provider: Some("@deepseek-ai/dsh-skill".into()),
         };
         assert_eq!(
             serde_json::to_value(entry).unwrap(),
-            serde_json::json!({"name":"review","description":"Review code","whenToUse":"when asked","modelInvocable":true})
+            serde_json::json!({"name":"review","description":"Review code","whenToUse":"when asked","modelInvocable":true,"source":"project-agents","provider":"@deepseek-ai/dsh-skill"})
         );
     }
     #[test]
@@ -84,5 +92,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(response.skills[0].name, "x");
+        assert_eq!(response.skills[0].source, None);
     }
 }

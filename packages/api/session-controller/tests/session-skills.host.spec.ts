@@ -63,6 +63,8 @@ describe('SessionSkillCatalog', () => {
         whenToUse: 'Before publishing.',
         path: '/cold/project/.agents/skills/review/SKILL.md',
         invocation: { modelInvocable: true, userInvocable: true },
+        source: 'project-agents',
+        provider: '@deepseek-ai/dsh-skill',
       },
       {
         name: 'model-only',
@@ -80,6 +82,8 @@ describe('SessionSkillCatalog', () => {
         whenToUse: 'Before publishing.',
         path: '/cold/project/.agents/skills/review/SKILL.md',
         modelInvocable: true,
+        source: 'project-agents',
+        provider: '@deepseek-ai/dsh-skill',
       }],
     })
     expect(observeSession).toHaveBeenCalledWith(sessionId)

@@ -83,6 +83,8 @@ export class SessionSkillCatalog extends TypertRemoteService {
           description: skill.description,
           ...skill.whenToUse === undefined ? {} : { whenToUse: skill.whenToUse },
           modelInvocable: skill.invocation.modelInvocable,
+          source: skill.source,
+          provider: skill.provider,
         })),
       }
     } catch (error: unknown) {
