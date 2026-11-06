@@ -1,8 +1,7 @@
 //! Application state for the gpui shell.
 //!
-//! The Host transport, session projection, and worker channels are the same
-//! ones the egui shell used; this module owns their lifecycle and lets the
-//! renderer read a single state value.
+//! The Host transport, session projection, and worker channels live here; this
+//! module owns their lifecycle and lets the renderer read a single state value.
 
 use crate::command_registry::CommandId;
 use crate::dialog;
@@ -89,11 +88,6 @@ enum ApprovalCommand {
     Answer(PendingApproval, ApprovalDecision),
     Delegate(dsh_client_core::remote_events::RemoteEventInvocation),
     AnswerQuestion(PendingQuestion, AskUserQuestionAnswer),
-}
-
-enum ApprovalChoice {
-    Answer(ApprovalDecision),
-    Delegate,
 }
 
 enum GoalMutation {
@@ -416,7 +410,6 @@ pub(crate) enum GoalAction {
 enum DialogPurpose {
     Attach,
     Open,
-    Save,
     Folder,
 }
 
@@ -2791,20 +2784,6 @@ impl DesktopApp {
         }
     }
 
-    /// Writes the previewed text to a local path chosen through the save picker.
-    fn save_preview_path(&mut self, path: PathBuf) {
-        let Some(document) = self.preview_document.clone() else {
-            self.status = "Save a document after previewing one".to_owned();
-            return;
-        };
-        let text = document.text;
-        let name = path.display().to_string();
-        match std::fs::write(&path, text) {
-            Ok(()) => self.status = format!("Saved preview to {name}"),
-            Err(error) => self.status = format!("Could not save {name}: {error}"),
-        }
-    }
-
     fn poll_dialog(&mut self) {
         let Some((purpose, receiver)) = &self.dialog else {
             return;
@@ -2816,7 +2795,6 @@ impl DesktopApp {
                 match (purpose, path) {
                     (DialogPurpose::Attach, Some(path)) => self.attach_path(path),
                     (DialogPurpose::Open, Some(path)) => self.open_preview_path(&path),
-                    (DialogPurpose::Save, Some(path)) => self.save_preview_path(path),
                     (DialogPurpose::Folder, Some(path)) => self.open_folder_path(path),
                     (_, None) => self.status = "File picker cancelled".to_owned(),
                 }
@@ -4187,11 +4165,6 @@ impl DesktopApp {
     /// Opens the native file picker for the attachment flow.
     pub(crate) fn open_file_dialog(&mut self) {
         self.dialog = Some((DialogPurpose::Open, dialog::open_file_async()));
-    }
-
-    /// Opens the native save picker for the Document surface.
-    pub(crate) fn save_file_dialog(&mut self) {
-        self.dialog = Some((DialogPurpose::Save, dialog::save_file_async()));
     }
 
     /// Opens the native folder picker for the workspace flow.

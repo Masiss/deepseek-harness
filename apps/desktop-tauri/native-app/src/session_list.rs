@@ -1,10 +1,6 @@
 //! Session list rendering helpers.
 
 use dsh_client_core::session::SessionSummary;
-#[cfg(feature = "legacy-egui")]
-use dsh_client_core::sessions::SessionSearchResponse;
-#[cfg(feature = "legacy-egui")]
-use eframe::egui;
 
 /// Truncates a string to `max` characters with an ellipsis.
 pub fn truncate(value: &str, max: usize) -> String {
@@ -48,133 +44,7 @@ pub fn next_index(current: Option<usize>, direction: i8, len: usize) -> Option<u
 }
 
 /// Renders session summaries or search matches and returns a clicked session id.
-#[cfg(feature = "legacy-egui")]
-pub fn render(
-    ui: &mut egui::Ui,
-    sessions: &[SessionSummary],
-    search: Option<&SessionSearchResponse>,
-    selected_session: Option<&str>,
-    now: i64,
-) -> Option<String> {
-    let mut selected = None;
-    let max_height = ui.available_height().max(80.0);
-    egui::ScrollArea::vertical()
-        .id_salt("session-inventory")
-        .auto_shrink([false, false])
-        .max_height(max_height)
-        .show(ui, |ui| {
-            if let Some(results) = search {
-                for item in &results.items {
-                    let title = truncate(&item.session_id, 34);
-                    let meta = truncate(&item.snippet, 42);
-                    let row = session_row(
-                        ui,
-                        &title,
-                        &meta,
-                        false,
-                        selected_session == Some(item.session_id.as_str()),
-                    )
-                    .on_hover_text(format!("{}\n{}", item.session_id, item.snippet));
-                    if row.clicked() {
-                        selected = Some(item.session_id.clone());
-                    }
-                }
-                if results.has_more {
-                    ui.small("More matches exist; refine your search.");
-                }
-            } else {
-                for summary in sessions {
-                    let title = session_label(summary);
-                    let mut meta = relative_time(summary.updated_at, now);
-                    if summary.blank {
-                        meta.push_str(" · blank");
-                    }
-                    let row = session_row(
-                        ui,
-                        &title,
-                        &meta,
-                        summary.running,
-                        selected_session == Some(summary.session_id.as_str()),
-                    )
-                    .on_hover_text(format!("{}\n{}", summary.session_id, title));
-                    if row.clicked() {
-                        selected = Some(summary.session_id.clone());
-                    }
-                }
-            }
-        });
-    selected
-}
 
-#[cfg(feature = "legacy-egui")]
-fn session_row(
-    ui: &mut egui::Ui,
-    title: &str,
-    meta: &str,
-    running: bool,
-    selected: bool,
-) -> egui::Response {
-    let primary = if selected {
-        ui.visuals().hyperlink_color
-    } else {
-        ui.visuals().widgets.noninteractive.fg_stroke.color
-    };
-    let mut job = egui::text::LayoutJob::default();
-    if running {
-        job.append(
-            "● ",
-            0.0,
-            egui::TextFormat {
-                font_id: egui::FontId::proportional(9.0),
-                color: ui.visuals().hyperlink_color,
-                ..Default::default()
-            },
-        );
-    }
-    job.append(
-        title,
-        0.0,
-        egui::TextFormat {
-            font_id: egui::FontId::proportional(12.0),
-            color: primary,
-            ..Default::default()
-        },
-    );
-    job.append(
-        "\n",
-        0.0,
-        egui::TextFormat {
-            font_id: egui::FontId::proportional(10.0),
-            color: ui.visuals().weak_text_color(),
-            ..Default::default()
-        },
-    );
-    job.append(
-        meta,
-        0.0,
-        egui::TextFormat {
-            font_id: egui::FontId::proportional(10.0),
-            color: ui.visuals().weak_text_color(),
-            ..Default::default()
-        },
-    );
-    let (fill, stroke) = if selected {
-        (
-            ui.visuals().selection.bg_fill,
-            egui::Stroke::new(1.0, ui.visuals().widgets.active.bg_stroke.color),
-        )
-    } else {
-        (egui::Color32::TRANSPARENT, egui::Stroke::NONE)
-    };
-    let width = ui.available_width();
-    ui.add(
-        egui::Button::new(job)
-            .min_size(egui::vec2(width, 40.0))
-            .fill(fill)
-            .stroke(stroke)
-            .corner_radius(5.0),
-    )
-}
 
 /// Display title projected for a session, or its identity when no title exists.
 pub(crate) fn session_label(summary: &SessionSummary) -> String {

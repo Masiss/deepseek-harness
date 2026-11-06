@@ -37,7 +37,7 @@ mkdir -p "$work/home" "$work/tmp"
 # Probe inputs that name read-only paths survive the clear; everything else the
 # caller exported stays out of the sandbox.
 forward=()
-for name in DSH_OFFICE_ROOT DSH_OFFICE_COMPONENTS DSH_DESKTOP_TARGET DSH_OFFICE_PANEL_TEST DSH_NATIVE_UI_PANEL_TEST_BIN DSH_NATIVE_UI_TEST_BIN NODE_OPTIONS MALLOC_ARENA_MAX FLAGS ARENA; do
+for name in DSH_OFFICE_ROOT DSH_OFFICE_COMPONENTS DSH_DESKTOP_TARGET NODE_OPTIONS MALLOC_ARENA_MAX FLAGS ARENA; do
   value=${!name:-}
   if [ -n "$value" ]; then forward+=(--setenv "$name" "$value"); fi
 done

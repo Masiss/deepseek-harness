@@ -1,9 +1,5 @@
 //! Client-local appearance preferences, separate from Host-owned settings.
 
-#[cfg(feature = "legacy-egui")]
-use eframe::egui;
-#[cfg(feature = "legacy-egui")]
-use egui::Color32;
 use crate::command_registry::CommandId;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -42,28 +38,18 @@ pub enum ThemeMode {
     /// Follow the system's current theme.
     #[default]
     System,
-    /// Use the light egui theme.
+    /// Use the light theme.
     Light,
-    /// Use the dark egui theme.
+    /// Use the dark theme.
     Dark,
 }
 
-#[cfg(feature = "legacy-egui")]
-impl From<ThemeMode> for egui::ThemePreference {
-    fn from(value: ThemeMode) -> Self {
-        match value {
-            ThemeMode::System => Self::System,
-            ThemeMode::Light => Self::Light,
-            ThemeMode::Dark => Self::Dark,
-        }
-    }
-}
 
 /// Controls spacing between native interface elements.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum UiDensity {
-    /// Use the default egui spacing.
+    /// Use the default spacing.
     #[default]
     Comfortable,
     /// Reduce spacing between controls and rows.
@@ -219,20 +205,6 @@ impl ThemePalette {
     }
 
     /// Every role as an editable field.
-#[cfg(feature = "legacy-egui")]
-    pub fn roles_mut(&mut self) -> [(&'static str, &mut ThemeColor); 9] {
-        [
-            ("background", &mut self.background),
-            ("surface", &mut self.surface),
-            ("text", &mut self.text),
-            ("muted", &mut self.muted),
-            ("accent", &mut self.accent),
-            ("selection", &mut self.selection),
-            ("border", &mut self.border),
-            ("warn", &mut self.warn),
-            ("error", &mut self.error),
-        ]
-    }
 
     fn dark_default() -> Self {
         Self {
@@ -263,7 +235,7 @@ impl ThemePalette {
     }
 }
 
-/// Custom palettes for both egui color schemes.
+/// Custom palettes for both color schemes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CustomTheme {
@@ -290,22 +262,12 @@ impl CustomTheme {
             &self.light
         }
     }
-
-    /// The palette the appearance editor mutates for the active scheme.
-#[cfg(feature = "legacy-egui")]
-    pub fn for_scheme_mut(&mut self, dark: bool) -> &mut ThemePalette {
-        if dark {
-            &mut self.dark
-        } else {
-            &mut self.light
-        }
-    }
 }
 
 /// Font families chosen for the interface and for code.
 ///
-/// A family name matches an installed face; an empty name keeps the face egui
-/// bundles, which is what every preference file written before this field had.
+/// A family name matches an installed face; an empty name keeps the bundled
+/// face, which is what every preference file written before this field had.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FontSettings {
@@ -380,23 +342,6 @@ impl Keybindings {
     /// @param command - The shared command to look up.
     /// @param input - This frame's input state.
     /// @returns Whether the bound chord fired.
-    #[cfg(feature = "legacy-egui")]
-    pub fn consume_command(
-        &mut self,
-        command: CommandId,
-        input: &mut egui::InputState,
-    ) -> bool {
-        let chord = match command {
-            CommandId::ToggleSettings => KeyChord::parse(&self.open_settings).ok().flatten(),
-            CommandId::ToggleMarketplace => {
-                KeyChord::parse(&self.open_marketplace).ok().flatten()
-            }
-            CommandId::ToggleGoals => KeyChord::parse(&self.open_goals).ok().flatten(),
-            CommandId::NewSession => KeyChord::parse(&self.new_session).ok().flatten(),
-            _ => None,
-        };
-        chord.is_some_and(|chord| chord.consume(input))
-    }
 
     /// Applies one preset to the four overridable shortcuts.
     pub fn apply_preset(&mut self, preset: KeymapPreset) {
@@ -421,18 +366,6 @@ impl Keybindings {
             }
         }
     }
-}
-
-/// Looks a key up in egui's name table, accepting lower-case names.
-#[cfg(feature = "legacy-egui")]
-fn key_by_name(name: &str) -> Option<egui::Key> {
-    egui::Key::from_name(name).or_else(|| {
-        let mut characters = name.chars();
-        let capitalized = characters
-            .next()
-            .map(|first| first.to_ascii_uppercase().to_string() + characters.as_str())?;
-        egui::Key::from_name(&capitalized)
-    })
 }
 
 /// One parsed shortcut chord, independent of the renderer.
@@ -492,25 +425,6 @@ impl KeyChord {
             cmd,
             key,
         }))
-    }
-
-    /// Consumes the chord when the frame reports it, so one press fires once.
-    ///
-    /// @param input - This frame's input state.
-    /// @returns Whether the chord fired.
-    #[cfg(feature = "legacy-egui")]
-    pub fn consume(&self, input: &mut egui::InputState) -> bool {
-        let Some(key) = key_by_name(self.key) else {
-            return false;
-        };
-        let modifiers = egui::Modifiers {
-            alt: self.alt,
-            ctrl: self.ctrl,
-            shift: self.shift,
-            mac_cmd: self.cmd,
-            command: self.ctrl || self.cmd,
-        };
-        input.consume_key(modifiers, key)
     }
 }
 
@@ -600,10 +514,10 @@ pub struct UiPreferences {
     /// Version of the on-disk preferences format.
     #[serde(default = "schema_version")]
     pub schema_version: u32,
-    /// Theme selection for the egui application.
+    /// Theme selection for the application.
     #[serde(default)]
     pub theme: ThemeMode,
-    /// egui zoom factor applied to the whole interface.
+    /// Zoom factor applied to the whole interface.
     #[serde(default = "default_ui_scale")]
     pub ui_scale: f32,
     /// Spacing density for controls and panels.
@@ -1001,40 +915,7 @@ impl UiPreferences {
     }
 }
 
-/// Applies persisted appearance choices without replacing unrelated egui style values.
-#[cfg(feature = "legacy-egui")]
-pub fn apply(context: &egui::Context, preferences: &UiPreferences) {
-    let theme: egui::ThemePreference = preferences.theme.into();
-    if context.options(|options| options.theme_preference) != theme {
-        context.set_theme(theme);
-    }
-    if (context.zoom_factor() - preferences.ui_scale).abs() > f32::EPSILON {
-        context.set_zoom_factor(preferences.ui_scale);
-    }
-
-    let (item_spacing, button_padding) = match preferences.density {
-        UiDensity::Comfortable => (egui::vec2(8.0, 8.0), egui::vec2(8.0, 4.0)),
-        UiDensity::Compact => (egui::vec2(5.0, 4.0), egui::vec2(6.0, 2.0)),
-    };
-    let radius = egui::CornerRadius::same(preferences.radius.round() as u8);
-    context.all_styles_mut(|style| {
-        if style.spacing.item_spacing != item_spacing {
-            style.spacing.item_spacing = item_spacing;
-        }
-        if style.spacing.button_padding != button_padding {
-            style.spacing.button_padding = button_padding;
-        }
-        apply_corner_radius(&mut style.visuals, radius);
-        apply_theme_pack(
-            &mut style.visuals,
-            preferences.theme_pack,
-            &preferences.custom_theme,
-            preferences.accent_scheme,
-        );
-    });
-}
-
-/// One opaque 8-bit sRGB color, shared by both renderers.
+/// One opaque 8-bit sRGB color.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Rgba8 {
     pub(crate) r: u8,
@@ -1055,12 +936,6 @@ impl Rgba8 {
     /// Builds an opaque color.
     pub(crate) const fn rgb(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b, a: 255 }
-    }
-
-    /// Converts to the egui paint color used by the retired shell.
-    #[cfg(feature = "legacy-egui")]
-    pub(crate) fn to_color32(self) -> Color32 {
-        Color32::from_rgba_unmultiplied(self.r, self.g, self.b, self.a)
     }
 }
 
@@ -1183,519 +1058,23 @@ pub(crate) fn palette(
 }
 
 /// Returns the active accent fill for buttons that carry the primary action.
-#[cfg(feature = "legacy-egui")]
-pub(crate) fn accent_fill(preferences: &UiPreferences, dark: bool) -> Color32 {
-    palette(preferences.theme_pack, dark, &preferences.custom_theme, preferences.accent_scheme).map_or_else(
-        || Color32::from_rgb(0xe9, 0x56, 0x18),
-        |palette| palette.accent.to_color32(),
-    )
-}
 
-#[cfg(feature = "legacy-egui")]
-fn apply_corner_radius(visuals: &mut egui::Visuals, radius: egui::CornerRadius) {
-    visuals.window_corner_radius = radius;
-    visuals.menu_corner_radius = radius;
-    for widget in [
-        &mut visuals.widgets.noninteractive,
-        &mut visuals.widgets.inactive,
-        &mut visuals.widgets.hovered,
-        &mut visuals.widgets.active,
-        &mut visuals.widgets.open,
-    ] {
-        widget.corner_radius = radius;
-    }
-}
 
-#[cfg(feature = "legacy-egui")]
-fn apply_theme_pack(visuals: &mut egui::Visuals, pack: ThemePack, custom: &CustomTheme, accent: AccentScheme) {
-    let Some(palette) = palette(pack, visuals.dark_mode, custom, accent) else {
-        return;
-    };
-    visuals.panel_fill = palette.panel.to_color32();
-    visuals.window_fill = palette.panel.to_color32();
-    visuals.extreme_bg_color = palette.extreme.to_color32();
-    visuals.faint_bg_color = palette.panel.to_color32();
-    visuals.override_text_color = Some(palette.text.to_color32());
-    visuals.hyperlink_color = palette.accent_text.to_color32();
-    visuals.selection.bg_fill = palette.selection.to_color32();
-    visuals.selection.stroke.color = palette.text.to_color32();
-    visuals.widgets.noninteractive.bg_fill = palette.panel.to_color32();
-    visuals.widgets.noninteractive.fg_stroke.color = palette.text.to_color32();
-    for widget in [
-        &mut visuals.widgets.inactive,
-        &mut visuals.widgets.hovered,
-        &mut visuals.widgets.active,
-        &mut visuals.widgets.open,
-    ] {
-        widget.bg_fill = palette.widget.to_color32();
-        widget.fg_stroke.color = palette.text.to_color32();
-        widget.bg_stroke.color = palette.stroke.to_color32();
-    }
-    visuals.widgets.noninteractive.bg_stroke.color = palette.stroke.to_color32();
-    visuals.widgets.noninteractive.fg_stroke.color = palette.muted.to_color32();
-    visuals.warn_fg_color = palette.warn.to_color32();
-    visuals.error_fg_color = palette.error.to_color32();
-}
 
 /// Actions returned by the local preferences editor.
-#[cfg(feature = "legacy-egui")]
-pub enum UiPreferencesAction {
-    /// Apply a draft for this session without writing it to disk.
-    Preview(UiPreferences),
-    /// Persist and apply a complete validated preferences value.
-    Save(UiPreferences),
-    /// Reload the on-disk preferences file.
-    Reload,
-    /// Persist and apply the default preferences.
-    Reset,
-}
 
-#[cfg(feature = "legacy-egui")]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-enum UiPreferencesTab {
-    #[default]
-    Appearance,
-    Layout,
-    Shortcuts,
-    Advanced,
-}
 
 /// Draft editor for client-local appearance preferences.
-#[cfg(feature = "legacy-egui")]
-pub struct UiPreferencesPanel {
-    draft: UiPreferences,
-    tab: UiPreferencesTab,
-    config_text: String,
-    config_dirty: bool,
-    config_error: Option<String>,
-    status: Option<String>,
-    load_error: Option<String>,
-}
 
-#[cfg(feature = "legacy-egui")]
-impl UiPreferencesPanel {
-    /// Creates the editor from loaded preferences and an optional load diagnostic.
-    pub fn new(preferences: UiPreferences, load_error: Option<String>) -> Self {
-        let config_text = preferences
-            .to_pretty_json()
-            .unwrap_or_else(|_| "{}".to_owned());
-        Self {
-            draft: preferences,
-            tab: UiPreferencesTab::Appearance,
-            config_text,
-            config_dirty: false,
-            config_error: None,
-            status: None,
-            load_error,
-        }
-    }
-
-    /// Draws local preferences and returns a persistence action for its owner.
-    ///
-    /// @param ui - Panel that hosts the editor.
-    /// @param path - Preferences file shown in the JSON section.
-    /// @param catalog - Installed families, or `None` while the scan runs.
-    /// @returns The action the owning shell should perform, if any.
-    pub fn ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        path: &Path,
-        catalog: Option<&crate::fonts::FontCatalog>,
-    ) -> Option<UiPreferencesAction> {
-        let mut action = None;
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.heading(egui::RichText::new("Settings").size(16.0));
-                ui.label(
-                    egui::RichText::new("Local interface preferences · Host settings are separate")
-                        .size(10.0)
-                        .weak(),
-                );
-            });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(egui::RichText::new("CLIENT-LOCAL").size(9.0).weak());
-            });
-        });
-        if let Some(error) = &self.load_error {
-            ui.colored_label(
-                ui.visuals().error_fg_color,
-                format!("Could not load UI preferences: {error}"),
-            );
-            ui.label("Defaults are active. The existing file was left unchanged.");
-        }
-        if let Some(error) = &self.config_error {
-            ui.colored_label(
-                ui.visuals().error_fg_color,
-                format!("UI config is invalid: {error}"),
-            );
-        }
-        if let Some(status) = &self.status {
-            ui.label(status);
-        }
-
-        ui.horizontal(|ui| {
-            for (tab, label) in [
-                (UiPreferencesTab::Appearance, "Appearance"),
-                (UiPreferencesTab::Layout, "Layout"),
-                (UiPreferencesTab::Shortcuts, "Shortcuts"),
-                (UiPreferencesTab::Advanced, "Advanced"),
-            ] {
-                ui.selectable_value(&mut self.tab, tab, label);
-            }
-        });
-        ui.separator();
-
-        let original_draft = self.draft.clone();
-        if self.tab == UiPreferencesTab::Appearance {
-            section(ui, "Appearance");
-            egui::ComboBox::from_label("Theme")
-                .selected_text(theme_label(self.draft.theme))
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.draft.theme, ThemeMode::System, "System");
-                    ui.selectable_value(&mut self.draft.theme, ThemeMode::Light, "Light");
-                    ui.selectable_value(&mut self.draft.theme, ThemeMode::Dark, "Dark");
-                });
-            ui.add(
-                egui::Slider::new(&mut self.draft.ui_scale, UI_SCALE_MIN..=UI_SCALE_MAX)
-                    .step_by(0.05)
-                    .text("UI scale"),
-            );
-            ui.horizontal(|ui| {
-                ui.label("Density");
-                ui.selectable_value(
-                    &mut self.draft.density,
-                    UiDensity::Comfortable,
-                    "Comfortable",
-                );
-                ui.selectable_value(&mut self.draft.density, UiDensity::Compact, "Compact");
-            });
-            ui.add(
-                egui::Slider::new(&mut self.draft.radius, RADIUS_MIN..=RADIUS_MAX)
-                    .step_by(1.0)
-                    .text("Corner radius"),
-            );
-
-            section(ui, "Colors");
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Theme pack");
-                for (pack, label) in [
-                    (ThemePack::Default, "Harness"),
-                    (ThemePack::HighContrast, "High contrast"),
-                    (ThemePack::Solarized, "Solarized"),
-                    (ThemePack::Custom, "Custom"),
-                ] {
-                    ui.selectable_value(&mut self.draft.theme_pack, pack, label);
-                }
-            });
-            if self.draft.theme_pack == ThemePack::Custom {
-                let dark = ui.visuals().dark_mode;
-                ui.small(format!(
-                    "Editing the {} palette. The Theme above chooses which palette renders.",
-                    if dark { "dark" } else { "light" }
-                ));
-                let mut changed = false;
-                for (role, color) in self.draft.custom_theme.for_scheme_mut(dark).roles_mut() {
-                    changed |= color_row(ui, role, color);
-                }
-                if ui.button("Reset custom colors").clicked() {
-                    let defaults = CustomTheme::default();
-                    *self.draft.custom_theme.for_scheme_mut(dark) =
-                        defaults.for_scheme(dark).clone();
-                    changed = true;
-                }
-                let _ = changed;
-            } else {
-                ui.small(
-                    "Choose Custom to edit every role color for the active light or dark theme.",
-                );
-            }
-
-            section(ui, "Fonts");
-            font_row(
-                ui,
-                "Interface font",
-                &mut self.draft.fonts.proportional,
-                catalog,
-            );
-            font_row(ui, "Code font", &mut self.draft.fonts.monospace, catalog);
-            let missing: Vec<&str> = [&self.draft.fonts.proportional, &self.draft.fonts.monospace]
-                .into_iter()
-                .filter(|family| {
-                    !family.is_empty()
-                        && catalog.is_some_and(|catalog| catalog.file_for(family).is_none())
-                })
-                .map(String::as_str)
-                .collect();
-            if !missing.is_empty() {
-                ui.colored_label(
-                    ui.visuals().error_fg_color,
-                    format!(
-                    "Not installed: {}. The bundled face is used until another family is chosen.",
-                    missing.join(", ")
-                ),
-                );
-            }
-            let sample = egui::RichText::new("Aa 0123 — việt · →  { code }");
-            ui.label(sample);
-            if catalog.is_none() {
-                ui.small("Scanning installed fonts…");
-            }
-        }
-
-        if self.tab == UiPreferencesTab::Shortcuts {
-            ui.add_space(8.0);
-            ui.separator();
-            ui.collapsing("Keyboard shortcuts", |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Keymap preset");
-                    for (label, preset) in [
-                        ("DSH", KeymapPreset::Dsh),
-                        ("Zed", KeymapPreset::Zed),
-                        ("VS Code", KeymapPreset::Vscode),
-                    ] {
-                        let current = self.draft.keymap_preset == preset;
-                        if ui
-                            .add_enabled(!current, egui::Button::new(label).small())
-                            .clicked()
-                        {
-                            self.draft.keymap_preset = preset;
-                            self.draft.keybindings.apply_preset(preset);
-                        }
-                    }
-                });
-                for (label, value) in [
-                    ("Open settings", &mut self.draft.keybindings.open_settings),
-                    (
-                        "Open marketplace",
-                        &mut self.draft.keybindings.open_marketplace,
-                    ),
-                    ("Open goals", &mut self.draft.keybindings.open_goals),
-                    ("New session", &mut self.draft.keybindings.new_session),
-                ] {
-                    ui.horizontal(|ui| {
-                        ui.label(label);
-                        ui.add(egui::TextEdit::singleline(value).desired_width(160.0));
-                    });
-                }
-                ui.small("Write a chord like Ctrl+Shift+S, or none to disable it.");
-            });
-        }
-
-        if self.tab == UiPreferencesTab::Layout {
-            ui.add(
-                egui::Slider::new(
-                    &mut self.draft.session_panel_width,
-                    SESSION_PANEL_WIDTH_MIN..=SESSION_PANEL_WIDTH_MAX,
-                )
-                .step_by(10.0)
-                .text("Sessions panel default width"),
-            );
-            ui.small("The default width applies when the Sessions panel opens on the next launch.");
-            section(ui, "Workspace Explorer");
-            ui.checkbox(
-                &mut self.draft.show_workspace_explorer,
-                "Show the Explorer beside the conversation",
-            );
-            ui.add(
-                egui::Slider::new(
-                    &mut self.draft.workspace_panel_width,
-                    WORKSPACE_PANEL_WIDTH_MIN..=WORKSPACE_PANEL_WIDTH_MAX,
-                )
-                .step_by(10.0)
-                .text("Explorer panel default width"),
-            );
-            ui.small(
-                "The dock opens above 1240px. Drag its divider to resize it for this session.",
-            );
-        }
-        if self.draft != original_draft {
-            self.status =
-                Some("Form controls changed; JSON draft refreshed and remains unsaved.".into());
-            self.config_text = self
-                .draft
-                .to_pretty_json()
-                .unwrap_or_else(|_| "{}".to_owned());
-            self.config_dirty = false;
-            self.config_error = None;
-        }
-
-        if self.tab == UiPreferencesTab::Advanced {
-            ui.collapsing("Advanced JSON config", |ui| {
-                ui.label(path.display().to_string());
-                if ui
-                    .add(
-                        egui::TextEdit::multiline(&mut self.config_text)
-                            .code_editor()
-                            .desired_rows(10)
-                            .desired_width(f32::INFINITY),
-                    )
-                    .changed()
-                {
-                    self.config_dirty = true;
-                }
-                if ui.button("Apply JSON draft").clicked() {
-                    if let Some(preferences) = self.parse_config_draft() {
-                        self.status =
-                            Some("Draft applied for this session; save to keep it.".into());
-                        action = Some(UiPreferencesAction::Preview(preferences));
-                    }
-                }
-            });
-        }
-
-        ui.horizontal(|ui| {
-            if ui.button("Preview changes").clicked() {
-                if let Some(preferences) = self.parse_config_draft() {
-                    self.status =
-                        Some("Preview active for this session; changes are not saved.".into());
-                    action = Some(UiPreferencesAction::Preview(preferences));
-                }
-            }
-            if ui.button("Save preferences").clicked() {
-                if let Some(preferences) = self.parse_config_draft() {
-                    action = Some(UiPreferencesAction::Save(preferences));
-                }
-            }
-            if ui.button("Reset to defaults").clicked() {
-                self.draft = UiPreferences::default();
-                self.config_text = self
-                    .draft
-                    .to_pretty_json()
-                    .unwrap_or_else(|_| "{}".to_owned());
-                self.config_dirty = false;
-                self.config_error = None;
-                action = Some(UiPreferencesAction::Reset);
-            }
-            if ui.button("Reload file").clicked() {
-                action = Some(UiPreferencesAction::Reload);
-            }
-        });
-        action
-    }
-
-    /// Marks a successfully persisted value as the current editor draft.
-    pub fn saved(&mut self, preferences: UiPreferences) {
-        self.draft = preferences;
-        self.config_text = self
-            .draft
-            .to_pretty_json()
-            .unwrap_or_else(|_| "{}".to_owned());
-        self.config_dirty = false;
-        self.config_error = None;
-        self.load_error = None;
-        self.status = Some("UI preferences saved.".into());
-    }
-
-    /// Keeps the draft visible and reports a failed load or save.
-    pub fn failed(&mut self, error: String) {
-        self.status = Some(error);
-    }
-
-    /// Replaces the draft after reloading an on-disk value.
-    pub fn reloaded(&mut self, preferences: UiPreferences) {
-        self.draft = preferences;
-        self.config_text = self
-            .draft
-            .to_pretty_json()
-            .unwrap_or_else(|_| "{}".to_owned());
-        self.config_dirty = false;
-        self.config_error = None;
-        self.load_error = None;
-        self.status = Some("UI preferences reloaded.".into());
-    }
-
-    fn parse_config_draft(&mut self) -> Option<UiPreferences> {
-        if !self.config_dirty {
-            self.config_error = None;
-            return Some(self.draft.clone());
-        }
-        match UiPreferences::parse_json(&self.config_text) {
-            Ok(preferences) => {
-                self.draft = preferences.clone();
-                self.config_dirty = false;
-                self.config_error = None;
-                Some(preferences)
-            }
-            Err(error) => {
-                self.config_error = Some(error.to_string());
-                None
-            }
-        }
-    }
-}
 
 /// Draws one section title with the spacing the appearance editor relies on.
-#[cfg(feature = "legacy-egui")]
-fn section(ui: &mut egui::Ui, title: &str) {
-    ui.add_space(10.0);
-    ui.label(egui::RichText::new(title).strong());
-}
 
 /// Draws a swatch, its editable hex value, and the role name on one row.
 ///
 /// @returns Whether the color changed this frame.
-#[cfg(feature = "legacy-egui")]
-fn color_row(ui: &mut egui::Ui, role: &str, color: &mut ThemeColor) -> bool {
-    let mut rgb = color.srgb().unwrap_or([0, 0, 0]);
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        if ui.color_edit_button_srgb(&mut rgb).changed() {
-            *color = ThemeColor::from_srgb(rgb);
-            changed = true;
-        }
-        let text_color = if color.srgb().is_some() {
-            ui.visuals().text_color()
-        } else {
-            ui.visuals().error_fg_color
-        };
-        let response = ui.add(
-            egui::TextEdit::singleline(&mut color.0)
-                .desired_width(88.0)
-                .text_color(text_color),
-        );
-        changed |= response.changed();
-        ui.label(role);
-    });
-    changed
-}
 
 /// Draws a family picker that keeps the bundled face available as the default.
-#[cfg(feature = "legacy-egui")]
-fn font_row(
-    ui: &mut egui::Ui,
-    label: &str,
-    family: &mut String,
-    catalog: Option<&crate::fonts::FontCatalog>,
-) {
-    ui.horizontal(|ui| {
-        ui.label(label);
-        let selected = if family.is_empty() {
-            "Bundled (default)"
-        } else {
-            family.as_str()
-        };
-        egui::ComboBox::from_id_salt(label)
-            .selected_text(selected)
-            .width(240.0)
-            .show_ui(ui, |ui| {
-                ui.selectable_value(family, String::new(), "Bundled (default)");
-                if let Some(catalog) = catalog {
-                    for installed in catalog.families() {
-                        ui.selectable_value(family, installed.name.clone(), &installed.name);
-                    }
-                }
-            });
-    });
-}
 
-#[cfg(feature = "legacy-egui")]
-fn theme_label(theme: ThemeMode) -> &'static str {
-    match theme {
-        ThemeMode::System => "System",
-        ThemeMode::Light => "Light",
-        ThemeMode::Dark => "Dark",
-    }
-}
 
 /// An on-disk error names the operation and retains its source error.
 #[derive(Debug)]
@@ -2087,38 +1466,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "legacy-egui")]
-    fn custom_pack_paints_the_configured_roles_and_radius() {
-        let context = egui::Context::default();
-        let mut preferences = UiPreferences {
-            theme_pack: ThemePack::Custom,
-            theme: ThemeMode::Dark,
-            radius: 2.0,
-            ..UiPreferences::default()
-        };
-        preferences.custom_theme.dark.background = ThemeColor("#101820".to_owned());
-        preferences.custom_theme.dark.text = ThemeColor("#F0EAD6".to_owned());
-        preferences.custom_theme.dark.border = ThemeColor("#334455".to_owned());
-        preferences.custom_theme.light.background = ThemeColor("#FDFDF5".to_owned());
-        apply(&context, &preferences);
-
-        let dark = context.style_of(egui::Theme::Dark).visuals.clone();
-        assert_eq!(dark.panel_fill, egui::Color32::from_rgb(0x10, 0x18, 0x20));
-        assert_eq!(
-            dark.override_text_color,
-            Some(egui::Color32::from_rgb(0xF0, 0xEA, 0xD6))
-        );
-        assert_eq!(
-            dark.widgets.inactive.bg_stroke.color,
-            egui::Color32::from_rgb(0x33, 0x44, 0x55)
-        );
-        assert_eq!(
-            dark.widgets.inactive.corner_radius,
-            egui::CornerRadius::same(2)
-        );
-        let light = context.style_of(egui::Theme::Light).visuals.clone();
-        assert_eq!(light.panel_fill, egui::Color32::from_rgb(0xFD, 0xFD, 0xF5));
-    }
 
     #[test]
     fn rejects_malformed_role_colors_radius_and_font_names() {
@@ -2215,21 +1562,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "legacy-egui")]
-    fn theme_pack_overrides_the_egui_palette_for_both_schemes() {
-        let context = egui::Context::default();
-        let preferences = UiPreferences {
-            theme_pack: ThemePack::HighContrast,
-            theme: ThemeMode::Dark,
-            ..UiPreferences::default()
-        };
-        apply(&context, &preferences);
-        let dark = context.style_of(egui::Theme::Dark).visuals.clone();
-        assert_eq!(dark.panel_fill, egui::Color32::BLACK);
-        assert_eq!(dark.override_text_color, Some(egui::Color32::WHITE));
-        let light = context.style_of(egui::Theme::Light).visuals.clone();
-        assert_eq!(light.panel_fill, egui::Color32::WHITE);
-    }
 
     #[test]
     fn default_theme_uses_the_harness_dark_and_light_tokens() {
@@ -2247,27 +1579,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "legacy-egui")]
-    fn applies_theme_preference_and_density_to_both_color_schemes() {
-        let context = egui::Context::default();
-        let preferences = UiPreferences {
-            theme: ThemeMode::Dark,
-            density: UiDensity::Compact,
-            ..UiPreferences::default()
-        };
-
-        apply(&context, &preferences);
-
-        assert_eq!(
-            context.options(|options| options.theme_preference),
-            egui::ThemePreference::Dark
-        );
-        for theme in [egui::Theme::Dark, egui::Theme::Light] {
-            let spacing = context.style_of(theme).spacing.clone();
-            assert_eq!(spacing.item_spacing, egui::vec2(5.0, 4.0));
-            assert_eq!(spacing.button_padding, egui::vec2(6.0, 2.0));
-        }
-    }
 
     #[test]
     fn parses_named_function_and_command_keys() {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Exercise profile-default selection through the native picker and packaged Host.
+# Exercise profile-default selection through the packaged Host.
 #
 # Run under isolated-run.sh; the fake account grant, /models endpoint, Host,
 # profile and Session all belong to DSH_ISOLATION_DIR.
@@ -8,7 +8,6 @@ set -euo pipefail
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
 tree="$repo/apps/desktop/.desktop-build/targets/${DSH_DESKTOP_TARGET:-linux-x64}"
 runtime_node="$tree/runtime/bin/node"
-test_bin=${DSH_NATIVE_UI_MODEL_TEST_BIN:-}
 work=${DSH_ISOLATION_DIR:?set DSH_ISOLATION_DIR}
 home="$work/home/.dsh"
 profile="$home/desktop-project"
@@ -88,26 +87,6 @@ cat > "$profile/cordis.patch.yml" <<PATCH
   config:
     baseURL: $origin/anthropic
 PATCH
-
-if [ -z "$test_bin" ]; then
-  test_bin=$(find "$repo/apps/desktop-tauri/native-app/target/debug/deps" -maxdepth 1 \
-    -type f -name 'dsh_desktop_native_app-*' -executable -printf '%T@ %p\n' \
-    | sort -nr | sed -n '1s/^[^ ]* //p')
-fi
-[ -x "$test_bin" ] || { echo "model-default-probe: no native test binary" >&2; exit 1; }
-
-DSH_HOME="$home" \
-DSH_DESKTOP_HOST_BIN="$tree/bin/desktop-host" \
-DSH_DESKTOP_RUNTIME_DIR="$tree/dsh" \
-DSH_DESKTOP_PROJECT_DIR="$profile" \
-DSH_DESKTOP_PRIMARY_RUNTIME="$tree/runtime/primary-runtime" \
-DSH_DESKTOP_PNPM_ENTRY="$tree/runtime/primary-runtime/dependencies/pnpm/bin/pnpm.mjs" \
-DSH_DESKTOP_NODE_BIN="$tree/runtime/bin" \
-DSH_DESKTOP_VERSION=1.0.0 \
-DSH_CLIENT_VERSION=1.0.0 \
-DEEPSEEK_BASE_URL="$origin/anthropic" \
-"$test_bin" --ignored --exact \
-  ui_harness::packaged_profile_default_model_round_trips_through_the_native_picker --nocapture
 
 if [ ! -s "$hit_file" ]; then
   echo "RESULT model-default=FAIL reason=Host-did-not-read-loopback-models"

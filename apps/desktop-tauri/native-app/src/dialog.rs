@@ -11,7 +11,7 @@ use std::sync::mpsc::{self, Receiver};
 ///
 /// @returns A receiver that yields the chosen path, or `None` when cancelled.
 pub fn open_file_async() -> Receiver<Option<PathBuf>> {
-    spawn(true)
+    spawn()
 }
 
 /// Starts a directory picker on a worker thread.
@@ -27,22 +27,10 @@ pub fn open_folder_async() -> Receiver<Option<PathBuf>> {
     receiver
 }
 
-/// Starts a file-save picker on a worker thread.
-///
-/// @returns A receiver that yields the chosen path, or `None` when cancelled.
-pub fn save_file_async() -> Receiver<Option<PathBuf>> {
-    spawn(false)
-}
-
-fn spawn(open: bool) -> Receiver<Option<PathBuf>> {
+fn spawn() -> Receiver<Option<PathBuf>> {
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let dialog = rfd::FileDialog::new();
-        let path = if open {
-            dialog.pick_file()
-        } else {
-            dialog.save_file()
-        };
+        let path = rfd::FileDialog::new().pick_file();
         let _ = sender.send(path);
     });
     receiver

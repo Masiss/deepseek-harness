@@ -7,17 +7,6 @@
 use dsh_client_core::user_questions::{
     AskUserQuestionAnswer, AskUserQuestionAnswerItem, PendingQuestion, UserQuestion,
 };
-#[cfg(feature = "legacy-egui")]
-use eframe::egui;
-
-/// What the user did with a card.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuestionAction {
-    /// Submit the current selections and typed answers.
-    Answer,
-    /// Submit every question as skipped.
-    Skip,
-}
 
 /// One live question request and the user's draft answers.
 pub struct QuestionCard {
@@ -133,59 +122,6 @@ impl QuestionCard {
         }
     }
 
-    /// Renders the card and reports a submitted action.
-    #[cfg(feature = "legacy-egui")]
-    pub fn render(&mut self, ui: &mut egui::Ui) -> Option<QuestionAction> {
-        let mut action = None;
-        ui.separator();
-        for (index, question) in self.questions.iter().enumerate() {
-            if let Some(header) = &question.header {
-                ui.heading(header);
-            }
-            ui.add(egui::Label::new(egui::RichText::new(&question.question).strong()).wrap());
-            if let Some(detail) = &question.detail {
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(detail).color(ui.visuals().weak_text_color()),
-                    )
-                    .wrap(),
-                );
-            }
-            if !question.options.is_empty() {
-                ui.horizontal_wrapped(|ui| {
-                    for option in &question.options {
-                        let chosen = self.selected[index].contains(&option.label);
-                        if question.multi_select {
-                            let mut checked = chosen;
-                            if ui.checkbox(&mut checked, &option.label).changed() {
-                                toggle(&mut self.selected[index], &option.label);
-                            }
-                        } else if ui
-                            .selectable_label(chosen, &option.label)
-                            .on_hover_text(option.description.as_deref().unwrap_or_default())
-                            .clicked()
-                        {
-                            self.selected[index] = vec![option.label.clone()];
-                        }
-                    }
-                });
-            }
-            ui.add(
-                egui::TextEdit::singleline(&mut self.custom[index])
-                    .hint_text("Or type an answer")
-                    .desired_width(f32::INFINITY),
-            );
-        }
-        ui.horizontal(|ui| {
-            if ui.button("Answer").clicked() {
-                action = Some(QuestionAction::Answer);
-            }
-            if ui.button("Skip").clicked() {
-                action = Some(QuestionAction::Skip);
-            }
-        });
-        action
-    }
 }
 
 fn toggle(selected: &mut Vec<String>, label: &str) {
@@ -241,58 +177,5 @@ mod tests {
         toggle(&mut selected, "B");
         toggle(&mut selected, "A");
         assert_eq!(selected, ["B"]);
-    }
-
-    #[test]
-    #[cfg(feature = "legacy-egui")]
-    fn renders_the_question_options_and_controls() {
-        let ctx = egui::Context::default();
-        ctx.begin_pass(egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(640.0, 480.0),
-            )),
-            ..Default::default()
-        });
-        let mut ui = egui::Ui::new(
-            ctx.clone(),
-            egui::Id::new("question-card"),
-            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(640.0, 480.0),
-            )),
-        );
-        let mut card = QuestionCard::for_test(vec![question("one", &["Yes", "No"], true)]);
-        assert!(card.render(&mut ui).is_none());
-        let mut output = ctx.end_pass();
-        output.textures_delta.clear();
-        let mut texts = Vec::new();
-        for clipped in output.shapes {
-            collect_text(&clipped.shape, &mut texts);
-        }
-        for expected in [
-            "Header",
-            "Question one?",
-            "detail text",
-            "Yes",
-            "No",
-            "Answer",
-            "Skip",
-        ] {
-            assert!(texts.iter().any(|text| text == expected), "{texts:?}");
-        }
-    }
-
-    #[cfg(feature = "legacy-egui")]
-    fn collect_text(shape: &egui::Shape, texts: &mut Vec<String>) {
-        match shape {
-            egui::Shape::Text(text) => texts.push(text.galley.job.text.clone()),
-            egui::Shape::Vec(shapes) => {
-                for shape in shapes {
-                    collect_text(shape, texts);
-                }
-            }
-            _ => {}
-        }
     }
 }

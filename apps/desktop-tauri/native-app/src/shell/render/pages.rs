@@ -988,21 +988,21 @@ fn skills(
                 .child(section(theme, "When it applies"))
                 .child(line(theme, when));
         }
-        let mut provenance = Vec::new();
+        let mut source_facts = Vec::new();
         if let Some(source) = skill.source.clone() {
-            provenance.push(format!("scope {source}"));
+            source_facts.push(format!("scope {source}"));
         }
         if let Some(provider) = skill.provider.clone() {
-            provenance.push(format!("provider {provider}"));
+            source_facts.push(format!("provider {provider}"));
         }
-        provenance.push(if skill.model_invocable {
+        source_facts.push(if skill.model_invocable {
             "model + /command".to_owned()
         } else {
             "/command only".to_owned()
         });
         detail = detail
             .child(section(theme, "Source"))
-            .child(line(theme, provenance.join(" · ")));
+            .child(line(theme, source_facts.join(" · ")));
         if let Some(path) = skill.path.clone() {
             detail = detail.child(line(theme, path));
         }

@@ -1,7 +1,7 @@
 //! Native gpui desktop shell: one GPU-rendered window over the Host API.
 //!
-//! The shared protocol, session projection, and preference modules are the
-//! same ones the retired egui shell used; only the presentation layer moved.
+//! The shared protocol, session projection, and preference modules stay
+//! renderer-neutral; this binary owns the gpui presentation layer.
 
 #[path = "command_registry.rs"]
 mod command_registry;

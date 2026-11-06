@@ -4,11 +4,9 @@
 //! The Host sends raw PTY bytes. This module keeps a small screen model so the
 //! sequences a full-screen program emits — absolute and relative cursor moves,
 //! erases, saved cursors — land where the program intended instead of appending
-//! text. Attributes resolve into egui paint formats, and the result is rendered as
-//! one scrollable monospace layout.
+//! text. Attributes resolve into renderer-neutral styles, and the result is
+//! painted as one scrollable monospace layout.
 
-#[cfg(feature = "legacy-egui")]
-use eframe::egui::{self, Color32, FontId};
 
 /// One 8-bit sRGB terminal color, independent of the renderer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,12 +21,6 @@ impl AnsiColor {
     /// Builds an opaque color.
     pub(crate) const fn rgb(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b, a: 255 }
-    }
-
-    /// Converts to the egui paint color used by the retired shell.
-    #[cfg(feature = "legacy-egui")]
-    pub(crate) fn to_color32(self) -> Color32 {
-        Color32::from_rgba_unmultiplied(self.r, self.g, self.b, self.a)
     }
 }
 
@@ -66,8 +58,6 @@ pub struct AnsiLine {
 const TAB_WIDTH: usize = 8;
 /// Rows retained before the oldest scrolls out of the view.
 const MAX_ROWS: usize = 5_000;
-const DEFAULT_FOREGROUND: AnsiColor = AnsiColor::rgb(0xd8, 0xde, 0xe9);
-const DEFAULT_BACKGROUND: AnsiColor = AnsiColor::rgb(0x1a, 0x1b, 0x26);
 
 /// Palette entry for the 16 basic SGR colors and their bright variants.
 fn basic_color(index: u8) -> AnsiColor {
@@ -858,51 +848,7 @@ fn apply_sgr(style: &mut AnsiStyle, parameters: &str) {
 }
 
 /// Resolves SGR attributes into concrete paint colors.
-#[cfg(feature = "legacy-egui")]
-fn format_for(style: AnsiStyle) -> egui::TextFormat {
-    let (mut foreground, mut background) = (
-        style.fg.unwrap_or(DEFAULT_FOREGROUND).to_color32(),
-        style.bg.unwrap_or(DEFAULT_BACKGROUND).to_color32(),
-    );
-    if style.inverse {
-        std::mem::swap(&mut foreground, &mut background);
-    }
-    if style.dim {
-        foreground = foreground.gamma_multiply(0.6);
-    }
-    egui::TextFormat {
-        font_id: FontId::monospace(12.0),
-        color: foreground,
-        background,
-        italics: style.italic,
-        underline: if style.underline {
-            egui::Stroke::new(1.0, foreground)
-        } else {
-            egui::Stroke::NONE
-        },
-        ..Default::default()
-    }
-}
 
-#[cfg(feature = "legacy-egui")]
-pub fn layout(lines: &[AnsiLine], wrap_width: f32) -> egui::text::LayoutJob {
-    let mut job = egui::text::LayoutJob::default();
-    job.wrap.max_width = wrap_width;
-    job.wrap.break_anywhere = true;
-    for (line_index, line) in lines.iter().enumerate() {
-        if line.spans.is_empty() {
-            job.append(" ", 0.0, format_for(AnsiStyle::default()));
-        } else {
-            for span in &line.spans {
-                job.append(&span.text, 0.0, format_for(span.style));
-            }
-        }
-        if line_index + 1 < lines.len() {
-            job.append("\n", 0.0, format_for(AnsiStyle::default()));
-        }
-    }
-    job
-}
 
 #[cfg(test)]
 mod tests {
@@ -1083,14 +1029,6 @@ mod tests {
         assert_eq!(inverse.fg, Some(color_256(196)));
     }
 
-    #[cfg(feature = "legacy-egui")]
-    #[test]
-    fn formatted_spans_swap_foreground_and_background_when_inverse() {
-        let lines = parse("\u{1b}[38;5;196mX\u{1b}[7;44mY");
-        let format = format_for(lines[0].spans[1].style);
-        assert_eq!(format.color, basic_color(4).to_color32());
-        assert_eq!(format.background, color_256(196).to_color32());
-    }
 
     #[test]
     fn operating_system_titles_and_unknown_sequences_are_dropped() {
@@ -1118,10 +1056,4 @@ mod tests {
         assert_eq!(text(&lines), "XY");
     }
 
-    #[cfg(feature = "legacy-egui")]
-    #[test]
-    fn layout_renders_each_line_with_a_trailing_newline_between_rows() {
-        let job = layout(&parse("a\u{1b}[31mb\nc"), 200.0);
-        assert_eq!(job.text, "ab\nc");
-    }
 }

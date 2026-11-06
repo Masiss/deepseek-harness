@@ -60,7 +60,7 @@ pub(crate) enum TerminalUpdate {
 }
 
 
-/// Owns workers until they settle; cancellation never joins a network worker on the egui frame.
+/// Owns workers until they settle; cancellation never joins a network worker on the render frame.
 #[derive(Default)]
 pub(crate) struct TerminalPanel {
     pub(crate) session: Option<String>,

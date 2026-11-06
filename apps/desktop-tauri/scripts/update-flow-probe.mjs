@@ -6,7 +6,7 @@
  * stdio, answers the `update-prompt` frames the native dialog would answer, and
  * checks that the artifact replaced `$APPIMAGE` and that `restart` arrived.
  *
- *   usage: node update-flow-probe.mjs [linux-x64|linux-arm64] [--gui]
+ *   usage: node update-flow-probe.mjs [linux-x64|linux-arm64]
  */
 
 import { createHash, generateKeyPairSync, sign } from 'node:crypto'
@@ -16,8 +16,7 @@ import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 
 const repo = new URL('../../..', import.meta.url).pathname
-const gui = process.argv.includes('--gui')
-const target = process.argv.slice(2).find((argument) => argument !== '--gui') ?? 'linux-x64'
+const target = process.argv.slice(2)[0] ?? 'linux-x64'
 const tree = join(repo, 'apps/desktop/.desktop-build/targets', target)
 // Under isolated-run.sh the tree is read-only, so the probe keeps its writable
 // state (seed profile, fake image, DSH home) in the bound work directory.
@@ -25,12 +24,8 @@ const work = process.env.DSH_ISOLATION_DIR === undefined
   ? join(tree, 'appimage', 'flow-probe')
   : join(process.env.DSH_ISOLATION_DIR, 'flow')
 
-const restartMarker = join(work, 'gui-restart.marker')
-const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`
 const OLD_IMAGE = Buffer.from('#!/bin/sh\nexit 87\n')
-const NEW_IMAGE = gui
-  ? Buffer.from(`#!/bin/sh\nprintf '%s' restarted > ${shellQuote(restartMarker)}\n`)
-  : Buffer.from(`the published version ${Date.now()}\n`.repeat(64))
+const NEW_IMAGE = Buffer.from(`the published version ${Date.now()}\n`.repeat(64))
 const digest = createHash('sha256').update(NEW_IMAGE).digest('hex')
 const keys = generateKeyPairSync('ed25519')
 const feedKey = keys.publicKey.export({ type: 'spki', format: 'pem' }).toString()
@@ -73,68 +68,6 @@ await writeFile(image, OLD_IMAGE, { mode: 0o755 })
 await new Promise((resolve) => { feed.listen(0, '127.0.0.1', resolve) })
 feedPort = feed.address().port
 
-if (gui) {
-  const expected = join(work, 'expected.AppImage')
-  await writeFile(expected, NEW_IMAGE, { mode: 0o755 })
-  const nativeUiTest = process.env.DSH_NATIVE_UI_TEST_BIN
-  if (nativeUiTest === undefined || nativeUiTest === '') {
-    throw new Error('update-flow-probe: --gui requires DSH_NATIVE_UI_TEST_BIN')
-  }
-  const args = [
-    '--ignored', '--exact',
-    'ui_harness::signed_appimage_swap_is_confirmed_through_the_native_update_modal',
-    '--nocapture',
-  ]
-  const child = spawn(nativeUiTest, args, {
-    cwd: repo,
-    env: {
-      ...process.env,
-      DSH_HOME: join(work, 'home'),
-      DSH_DESKTOP_HOST_BIN: join(tree, 'bin/desktop-host'),
-      DSH_DESKTOP_RUNTIME_DIR: join(tree, 'dsh'),
-      DSH_DESKTOP_PROJECT_DIR: join(work, 'project'),
-      DSH_DESKTOP_PRIMARY_RUNTIME: join(tree, 'runtime/primary-runtime'),
-      DSH_DESKTOP_PNPM_ENTRY: join(tree, 'runtime/primary-runtime/dependencies/pnpm/bin/pnpm.mjs'),
-      DSH_DESKTOP_NODE_BIN: join(tree, 'runtime/bin'),
-      DSH_DESKTOP_VERSION: '1.0.0',
-      DSH_CLIENT_VERSION: '1.0.0',
-      DSH_DESKTOP_UPDATE_FEED: `http://127.0.0.1:${feedPort}/manifest.json`,
-      DSH_DESKTOP_UPDATE_PUBLIC_KEY: feedKey,
-      DSH_NATIVE_UI_UPDATE_EXPECTED: expected,
-      APPIMAGE: image,
-      TMPDIR: join(work, 'tmp'),
-      XDG_CACHE_HOME: join(work, 'cache'),
-      XDG_CONFIG_HOME: join(work, 'config'),
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  child.stdout.pipe(process.stdout)
-  child.stderr.pipe(process.stderr)
-  const exitCode = await new Promise((resolve, reject) => {
-    child.once('error', reject)
-    child.once('close', (code) => resolve(code ?? 1))
-  })
-
-  let restarted = false
-  for (let attempt = 0; attempt < 150; attempt += 1) {
-    try {
-      restarted = (await readFile(restartMarker)).toString() === 'restarted'
-      if (restarted) break
-    } catch {
-      // The scheduled replacement runs after the test process exits.
-    }
-    await new Promise((resolve) => { setTimeout(resolve, 100) })
-  }
-  const installed = await readFile(image)
-  const mode = (await stat(image)).mode & 0o777
-  const replaced = installed.equals(NEW_IMAGE)
-  console.log(`image_replaced=${replaced} mode=${mode.toString(8)} restart_launch=${restarted}`)
-  await new Promise((resolve) => feed.close(resolve))
-  await rm(work, { recursive: true, force: true })
-  const ok = exitCode === 0 && replaced && restarted && (mode & 0o111) !== 0
-  console.log(`RESULT update-gui=${ok ? 'OK' : 'FAIL'}`)
-  if (!ok) process.exitCode = 1
-} else {
 
 const root = join(tree, 'runtime/primary-runtime')
 const host = spawn(join(tree, 'bin/desktop-host'), [
@@ -230,4 +163,3 @@ const ok = opened.status === 204
   && replaced
 console.log(`RESULT update-flow=${ok ? 'OK' : 'FAIL'}`)
 if (!ok) process.exitCode = 1
-}
