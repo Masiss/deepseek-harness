@@ -6,7 +6,7 @@
 
 use dsh_client_core::follow::SessionWireEvent;
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 /// Most rows kept in memory; older rows are dropped first.
 pub const MAX_ROWS: usize = 2_000;
@@ -61,6 +61,8 @@ pub struct Transcript {
     state_seq: i64,
     /// Highest event sequence projected; `-1` when nothing was projected.
     last_seq: i64,
+    /// `tool/call` arrival times by call id, for result durations.
+    call_times: HashMap<String, (i64, i64)>,
 }
 
 impl Default for Transcript {
@@ -74,6 +76,7 @@ impl Default for Transcript {
             last_turn_end: None,
             state_seq: 0,
             last_seq: -1,
+            call_times: HashMap::new(),
         }
     }
 }
@@ -89,6 +92,7 @@ impl Transcript {
         self.last_turn_end = None;
         self.state_seq = 0;
         self.last_seq = -1;
+        self.call_times.clear();
     }
 
     /// Merges durable events in sequence order, ignoring any already projected.
@@ -114,6 +118,23 @@ impl Transcript {
                 continue;
             }
             self.last_seq = self.last_seq.max(event.seq);
+            // Pair each result with its call for the rendered duration.
+            if event.event_type == "tool/call" {
+                if let Some(call_id) = call_id_of(event) {
+                    if self.call_times.len() >= 2048 {
+                        // Drop the oldest in-flight call to stay bounded.
+                        if let Some(oldest) = self
+                            .call_times
+                            .iter()
+                            .min_by_key(|(_, (seq, _))| *seq)
+                            .map(|(id, _)| id.clone())
+                        {
+                            self.call_times.remove(&oldest);
+                        }
+                    }
+                    self.call_times.insert(call_id, (event.seq, event.time));
+                }
+            }
             let at = self.rows.partition_point(|row| row.seq < event.seq);
             // Turn outcome comes from `turn/end.reason.kind`, which the runtime
             // records for every closed turn. A failed tool call is a row above,
@@ -139,7 +160,11 @@ impl Transcript {
                     _ => {}
                 }
             }
-            for (offset, row) in project(event).into_iter().enumerate() {
+            let duration_ms = match event.event_type.as_str() {
+                "tool/result" => call_duration_of(&mut self.call_times, event),
+                _ => None,
+            };
+            for (offset, row) in project(event, duration_ms).into_iter().enumerate() {
                 self.bytes += row.text.len();
                 self.has_cjk |= crate::fonts::contains_cjk(&row.text);
                 self.rows.insert(at + offset, row);
@@ -216,7 +241,83 @@ impl Transcript {
     }
 }
 
-fn project(event: &SessionWireEvent) -> Vec<TranscriptRow> {
+/// Resolves the pairing call id carried by a call or result event.
+fn call_id_of(event: &SessionWireEvent) -> Option<String> {
+    event
+        .data
+        .get("message")
+        .and_then(|message| message.get("source"))
+        .and_then(|source| source.get("callId"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| {
+            event
+                .data
+                .get("message")
+                .and_then(|message| message.get("toolCallId"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .or_else(|| event.data.get("callId").and_then(Value::as_str).map(str::to_owned))
+}
+
+/// Pops the paired call time for one result and reports the elapsed time.
+fn call_duration_of(
+    call_times: &mut HashMap<String, (i64, i64)>,
+    event: &SessionWireEvent,
+) -> Option<i64> {
+    let (_, call_time) = call_times.remove(&call_id_of(event)?)?;
+    let duration = event.time - call_time;
+    (duration >= 0).then_some(duration)
+}
+
+/// Extracts the exit code the shell renderers stamp as a marker line.
+fn marker_exit_code(text: &str) -> Option<i64> {
+    for line in text.lines() {
+        if let Some(code) = line.strip_prefix("[exit code: ") {
+            return code.strip_suffix(']')?.parse().ok();
+        }
+    }
+    None
+}
+
+/// Summarizes one rendered tool output as stdout/stderr sizes plus exit and
+/// duration facts, without reinterpreting the output itself.
+fn tool_run_summary(text: &str, duration_ms: Option<i64>) -> Option<String> {
+    let (_, stderr) = match text.split_once("[stderr]\n") {
+        Some((_, stderr)) => ("", stderr),
+        None => ("", ""),
+    };
+    let stderr = stderr
+        .lines()
+        .filter(|line| {
+            !line.starts_with("[exit code: ")
+                && !line.starts_with("[timed out after ")
+                && !line.starts_with("[killed by signal: ")
+                && !line.starts_with("[stopped: ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut parts = Vec::new();
+    if let Some(duration) = duration_ms {
+        parts.push(format!("{duration}ms"));
+    }
+    if !stderr.is_empty() {
+        parts.push(format!("stderr {}B", stderr.len()));
+    }
+    if let Some(exit_code) = marker_exit_code(text) {
+        if exit_code != 0 {
+            parts.push(format!("exit code {exit_code}"));
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" · "))
+    }
+}
+
+fn project(event: &SessionWireEvent, duration_ms: Option<i64>) -> Vec<TranscriptRow> {
     let rows = match event.event_type.as_str() {
         "todo/write" => vec![todo_row(event)],
         "deliverables/presented" => vec![deliverables_row(event)],
@@ -344,6 +445,13 @@ fn project(event: &SessionWireEvent) -> Vec<TranscriptRow> {
                         text.push_str(&detail);
                     }
                 }
+            }
+            if let Some(summary) = tool_run_summary(&text, duration_ms) {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str("— ");
+                text.push_str(&summary);
             }
             vec![TranscriptRow {
                 seq: event.seq,
@@ -710,6 +818,62 @@ mod tests {
         let before = transcript.rows().len();
         transcript.merge([&events[0]]);
         assert_eq!(transcript.rows().len(), before);
+    }
+
+    #[test]
+    fn tool_results_carry_duration_exit_and_stderr_facts() {
+        let mut transcript = Transcript::default();
+        transcript.apply(&event(1, "tool/call", serde_json::json!({
+            "turn": 1, "step": 1, "callId": "call-1", "name": "bash", "arguments": "{}"
+        })));
+        transcript.apply(&event(2, "tool/result", serde_json::json!({
+            "turn": 1, "step": 1,
+            "message": {
+                "source": {"kind": "tool", "callId": "call-1"},
+                "content": [{"type": "text", "text": "out\n[stderr]\nboom\n[exit code: 2]"}],
+                "isError": false
+            }
+        })));
+        let row = transcript.rows().last().unwrap();
+        assert!(row.text.contains("out"), "{row:?}");
+        assert!(row.text.contains("boom"), "{row:?}");
+        // Both fixture times are 0, so the duration reads 0ms; exit/stderr shown.
+        assert!(row.text.contains("0ms"), "{row:?}");
+        assert!(row.text.contains("exit code 2"), "{row:?}");
+        assert!(row.text.contains("stderr 4B"), "{row:?}");
+    }
+
+    #[test]
+    fn tool_results_pair_with_calls_for_wall_time_durations() {
+        let mut transcript = Transcript::default();
+        let call = SessionWireEvent {
+            event_type: "tool/call".into(),
+            seq: 1,
+            time: 100,
+            data: serde_json::json!({"turn": 1, "step": 1, "callId": "call-1", "name": "bash", "arguments": "{}"}),
+            ignorable: None,
+            source_event_seqs: None,
+            surface_op: None,
+        };
+        let result = SessionWireEvent {
+            event_type: "tool/result".into(),
+            seq: 2,
+            time: 250,
+            data: serde_json::json!({
+                "turn": 1, "step": 1,
+                "message": {
+                    "toolCallId": "call-1",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "isError": false
+                }
+            }),
+            ignorable: None,
+            source_event_seqs: None,
+            surface_op: None,
+        };
+        transcript.merge([&call, &result]);
+        let row = transcript.rows().last().unwrap();
+        assert!(row.text.contains("150ms"), "{row:?}");
     }
 
     #[test]
