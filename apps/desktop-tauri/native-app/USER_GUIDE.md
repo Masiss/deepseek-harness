@@ -4,7 +4,7 @@
 
 Ứng dụng cho phép bạn quản lý Sessions, trò chuyện với agent, xem tệp trong workspace và theo dõi các công việc gắn với từng Session thông qua Desktop Host.
 
-Tài liệu này mô tả ứng dụng Rust/egui trong [`src/`](src/); giao diện HTML trong [`prototype/`](prototype/) chỉ là bản mô phỏng, không phải ứng dụng đang chạy.
+Tài liệu này mô tả ứng dụng Rust/gpui trong [`src/`](src/) (`src/gpui_main.rs` và `src/shell/`); shell egui trong `src/main.rs` đã nghỉ, chỉ build với feature `legacy-egui`. Giao diện HTML trong [`prototype/`](prototype/) chỉ là bản mô phỏng, không phải ứng dụng đang chạy.
 
 Tên menu và nút được giữ bằng tiếng Anh như trong ứng dụng để bạn dễ đối chiếu.
 
@@ -45,11 +45,13 @@ Xem [USER_FLOWS.md](USER_FLOWS.md) để theo dõi các nhánh từ lúc mở �
 
 ## Bố cục và điều hướng
 
-Thanh điều hướng bên trái mở các màn hình **Sessions**, **Explorer**, **Files**, **Plugins**, **Skills**, **Market**, **Goals** và **Settings**.
+Thanh trên cùng cao 30 px gồm nút menu **☰**, chip workspace (tên thư mục của Session đang mở), tiêu đề Session, **Search ⌕** và **Changes**. Không có thanh điều hướng dọc: menu **☰** chia ba nhóm — **Workspace** (New session, Toggle Explorer, Toggle Changes, Open file…, Goals), **Customize** (**Preferences…**, **Extensions**, **Skills**, **Marketplace**) và **Help** (**About DSH**, Quit).
 
-Khi đang ở Sessions, danh sách Session nằm ở cột bên trái; transcript và composer nằm ở vùng chính. Trên cửa sổ rộng từ 1240 px, Workspace Explorer có thể hiện thành panel bên phải. Ở cửa sổ hẹp hơn, chọn **Open Explorer** để mở Explorer toàn vùng; ở chiều rộng không quá 900 px, Explorer hiển thị lần lượt cây thư mục hoặc phần xem tệp.
+Bố cục gồm ba cột: **Explorer** bên trái, cột **Agent** ở giữa với tab Agent, transcript và composer, và **Changes** bên phải với hai tab Diff/Files. Thanh dưới cùng cao 26 px: bên trái hiển thị branch và số file thay đổi do Host báo, hoặc `⎇ No repository` khi workspace không phải Git; bên phải là Jobs, Schedules, Deliverables, Terminal và chấm kết nối Host.
 
-Bạn có thể kéo vạch phân cách để đổi kích thước panel đang mở. Các giá trị trong Settings đặt chiều rộng mặc định và việc mở Explorer lần sau, không thay đổi dữ liệu của Session.
+Explorer tự ẩn khi cửa sổ hẹp hơn 1240 px và Changes cần tối thiểu 1180 px, để cột Agent giữ được chiều rộng đọc. Trong Explorer, ở chiều rộng không quá 900 px, panel hiển thị lần lượt cây thư mục hoặc phần xem tệp.
+
+Kéo vách phân cách giữa Explorer hoặc Changes với cột Agent để đổi chiều rộng; chiều rộng được lưu vào preferences khi thả tay. Panel Changes hiện chỉ hiển thị trạng thái trống vì Host chưa cung cấp diff.
 
 -----
 
@@ -57,12 +59,14 @@ Bạn có thể kéo vạch phân cách để đổi kích thước panel đang 
 
 Session chứa transcript và workspace riêng, đồng thời là phạm vi cho Goals, terminal, jobs, schedules, skills và model đã chọn.
 
-- Chọn một hàng trong danh sách để mở Session. Dấu chấm bên hàng báo Session đang chạy; dòng phụ hiển thị thời điểm cập nhật và trạng thái trống nếu không có nội dung.
+- Mở bộ chuyển Session bằng chip workspace ở góc trái thanh trên, nút **Search ⌕**, hoặc nút tên Session ở đáy Explorer. Popover có ô tìm kiếm và nút làm mới; chọn ra ngoài popover để đóng.
+- Chọn một hàng trong danh sách để mở Session. Dấu chấm bên hàng và nhãn **● Running** cạnh tiêu đề Agent báo Session đang chạy; dòng phụ hiển thị thời điểm cập nhật và trạng thái trống nếu không có nội dung.
+- Nội dung chưa gửi trong composer được giữ riêng cho từng Session. Chuyển sang Session khác rồi quay lại sẽ thấy lại bản nháp; gửi prompt sẽ xoá bản nháp của Session đó. Bản nháp được lưu cục bộ sau khoảng 0,75 giây ngừng nhập.
+- Khi **Restore last Session** bật (mặc định), lần mở ứng dụng tiếp theo sẽ mở lại Session cuối. Nếu Session đó không còn, ứng dụng mở Session cập nhật gần nhất và ghi rõ lý do; nếu chưa có Session nào, danh sách để trống.
 - Nhập truy vấn ở **Search sessions**, rồi nhấn Enter hoặc nút tìm kiếm. Để trở lại danh sách đầy đủ, xóa truy vấn và làm mới danh sách.
-- Chọn **New session** để tạo Session mới. Ứng dụng mở Session vừa tạo và tải lại danh sách.
+- Chọn **＋** ở đáy Explorer hoặc **New session** trong popover để tạo Session mới. Ứng dụng mở Session vừa tạo và tải lại danh sách.
 - Mở **Session actions** khi đã chọn Session để đổi tiêu đề hoặc chọn **Fork selected** để tạo một Session nhánh từ Session hiện tại.
 - Chọn nút làm mới cạnh tiêu đề Sessions để tải lại danh sách.
-- Dùng phím mũi tên lên/xuống để di chuyển trong danh sách khi ô nhập văn bản không giữ focus.
 
 Nếu thao tác tạo, đổi tên hoặc fork mất kết nối, ứng dụng báo rằng kết quả có thể chưa rõ. Làm mới hoặc tìm kiếm danh sách trước khi gửi lại thao tác để tránh tạo bản trùng.
 
@@ -70,7 +74,7 @@ Nếu thao tác tạo, đổi tên hoặc fork mất kết nối, ứng dụng b
 
 ## Trò chuyện, model và tệp đính kèm
 
-Mở một Session rồi nhập nội dung ở composer phía dưới transcript. Chọn **Send** hoặc nhấn **Ctrl+Enter** để gửi; nhấn Enter để xuống dòng. Khi agent đang chạy, nút **Cancel turn** gửi yêu cầu hủy lượt hiện tại.
+Mở một Session rồi nhập nội dung ở composer phía dưới transcript. Chọn **Send** hoặc nhấn **Ctrl+Enter** để gửi; nhấn Enter để xuống dòng. Khi agent đang chạy, nút **Cancel turn** gửi yêu cầu hủy lượt hiện tại. Dòng bắt đầu bằng `/` được gửi tới command registry của Host thay vì model; nếu Host không nhận ra lệnh, dòng đó quay lại composer để bạn sửa hoặc gửi như prompt thường.
 
 Danh sách **Model** lấy từ Host. Mở danh sách để chọn provider và model cho Session. Nếu model có các mức reasoning effort, chọn mức cần thiết từ danh sách bên cạnh model. **Use profile default** chuyển Session về model mặc định của profile; **Initialize profile default** yêu cầu Host khởi tạo giá trị mặc định khi chưa có cấu hình.
 
@@ -104,7 +108,9 @@ Chọn **Answer** để gửi các lựa chọn và nội dung đã nhập. Ch�
 
 Workspace Explorer đọc cây tệp thuộc Session đang chọn. Panel hiển thị rõ **Read only**; bạn có thể mở rộng thư mục, làm mới cây và chọn tệp văn bản UTF-8 để xem nội dung. Tệp không được sửa trong Explorer.
 
-Explorer tải thư mục khi bạn mở rộng nó. Trang xem văn bản đầu tiên tối đa 300 dòng; chọn **Load next lines** để đọc tiếp. Nếu tệp thay đổi giữa hai lần đọc, chọn lại tệp để tải phiên bản mới. Tệp nhị phân, liên kết tượng trưng, mục không hỗ trợ hoặc giới hạn từ Host sẽ được báo thay vì hiển thị như văn bản bình thường.
+Explorer tải thư mục khi bạn mở rộng nó. Trang xem văn bản đầu tiên tối đa 300 dòng; chọn **Load next lines** để đọc tiếp. Tệp nhị phân, liên kết tượng trưng, mục không hỗ trợ hoặc giới hạn từ Host sẽ được báo thay vì hiển thị như văn bản bình thường.
+
+Explorer theo dõi thay đổi trên đĩa cho những thư mục đang mở và tệp đang xem. Thư mục đổi thì cây tự tải lại và bỏ các mục đã biến mất; tệp đang xem đổi thì hiện dòng nhắc **changed on disk** kèm nút tải lại trong tiêu đề preview; tệp bị xóa thì giữ trang cuối và báo **no longer exists on disk**. Nếu Host không hỗ trợ theo dõi, Explorer hiện thông báo và chỉ thử lại khi bạn bấm làm mới.
 
 Màn hình **Files** mở phần xem tài liệu theo đường dẫn Host:
 
@@ -165,9 +171,11 @@ Các công cụ này nằm ở thanh tiện ích dưới cùng và gắn với S
 
 Chọn **Refresh terminals** để tải danh sách terminal; chọn **Create terminal** để mở shell mới trong Session. Chọn terminal rồi **Attach** để theo dõi snapshot và output trực tiếp.
 
-Nhập chính xác văn bản cần gửi vào ô **Terminal command**. **Send exact text** gửi nguyên văn; thêm newline nếu chương trình cần newline để thực thi. **Send as paste** chỉ xuất hiện khi chương trình terminal bật bracketed paste. Có thể đổi số Columns/Rows rồi chọn **Resize**.
+Mặc định ô nhập gửi cả dòng khi bạn nhấn Enter. Bật **Raw keys** rồi bấm vào ô nhập của pane để gửi từng phím: ký tự, Enter, Backspace, Delete, ↑/↓/←/→, Home/End, PageUp/PageDown, Insert, F1–F12, **Esc**, và Ctrl+C khi không bôi đen chữ nào. Phím Esc cũng đóng lớp phủ đang mở như trước. Tab và các tổ hợp Ctrl/Alt khác do giao diện xử lý nên không đi tới terminal. Tắt Raw keys để quay lại chế độ gửi theo dòng.
 
-**Detach** ngắt kết nối giao diện nhưng shell tiếp tục chạy. **Close terminal (kills shell)** đóng terminal và kết thúc shell; chỉ dùng khi bạn muốn dừng tiến trình đó. Nếu terminal báo read-only, chờ trạng thái writable hoặc chọn Attach lại sau khi khôi phục kết nối.
+**Add pane** mở thêm pane trong cùng Session, tối đa 4 pane; **Remove pane** chỉ hiện khi pane đang focus không phải pane đầu. Kéo vạch 4 px giữa hai pane để đổi độ rộng. Mỗi pane có Attach, Detach, Close và Rename riêng; bấm vào tiêu đề pane hoặc ô nhập của pane để chuyển focus.
+
+Chọn output bằng cách bấm một dòng, giữ **Shift** và bấm dòng cuối để chọn cả khoảng; dòng đã chọn được tô nền. **Copy** sao chép đúng khoảng đã chọn vào clipboard; nếu chưa chọn dòng nào, pane báo cần chọn trước. **Detach** ngắt kết nối giao diện nhưng shell tiếp tục chạy và màn hình cuối được giữ lại; **Close** kết thúc shell của terminal đó. Nhãn lifecycle cho biết `idle`, `starting`, `attached`, `detached` hoặc `error`. Nếu terminal báo read-only, chờ trạng thái writable hoặc chọn Attach lại sau khi khôi phục kết nối.
 
 ### Jobs
 
@@ -191,9 +199,9 @@ Settings có hai nhóm riêng: tùy chọn giao diện cục bộ của client v
 
 Trong **Appearance**, chọn theme System/Light/Dark, UI scale từ 0.8 đến 1.5, mật độ Comfortable/Compact, góc bo, preset màu Harness/High contrast/Solarized/Custom và font giao diện hoặc font code đã cài. Custom palette chỉnh màu của theme sáng hoặc tối đang hoạt động; font không khả dụng sẽ được thay bằng font dự phòng.
 
-Trong **Layout**, chỉnh chiều rộng mặc định của panel Sessions, bật/tắt Explorer cạnh hội thoại và chỉnh chiều rộng mặc định của Explorer. Panel Explorer chỉ dock cạnh hội thoại khi cửa sổ rộng từ 1240 px. Kéo divider để đổi kích thước ngay; lưu Settings để thay đổi các giá trị mặc định.
+Trong **Layout**, chỉnh chiều rộng mặc định của popover Sessions, bật/tắt Explorer và Changes cạnh hội thoại, chỉnh chiều rộng mặc định của Explorer và Changes, và bật/tắt **Restore last Session**. Explorer chỉ dock khi cửa sổ rộng từ 1240 px, Changes từ 1180 px; hẹp hơn thì cột hội thoại được ưu tiên. Lưu Settings để áp dụng các giá trị mặc định.
 
-Trong **Shortcuts**, chỉnh tổ hợp phím để mở Settings, Marketplace, Goals hoặc tạo Session. Dùng dạng `Ctrl+Shift+S`; nhập `none` để tắt. Mỗi chức năng phải có tổ hợp phím khác nhau.
+Trong **Shortcuts**, chỉnh tổ hợp phím để mở Settings, Marketplace, Goals hoặc tạo Session. Dùng dạng `Ctrl+Shift+S`; nhập `none` để tắt. Mỗi chức năng phải có tổ hợp phím khác nhau: khi lưu, client kiểm tra cả bốn phím tùy chỉnh lẫn các phím cố định của menu và command palette, và báo lỗi nếu hai chức năng trùng tổ hợp.
 
 Trong **Advanced**, bạn có thể sửa JSON đầy đủ của tùy chọn giao diện. Chọn **Apply JSON draft** hoặc **Preview changes** để áp dụng tạm trong phiên; chọn **Save preferences** để lưu. JSON sai hoặc giá trị ngoài giới hạn không được áp dụng. **Reload file** đọc lại tệp đã lưu; **Reset to defaults** đặt và lưu giá trị mặc định.
 
@@ -216,9 +224,12 @@ Mở mục **Desktop updates** trong Settings và chọn **Check for updates** k
 ## Bàn phím, khay hệ thống và thoát ứng dụng
 
 - **Ctrl+Enter** gửi prompt khi composer đang focus; Enter thêm dòng mới.
-- **Ctrl+N** tạo Session mới; phím tắt này không chạy khi con trỏ đang ở ô nhập văn bản.
-- **Ctrl+,** mở/đóng Settings, **Ctrl+Shift+M** mở/đóng Marketplace và **Ctrl+Shift+G** mở/đóng Goals theo mặc định. Có thể đổi hoặc tắt các tổ hợp này trong Settings.
-- Phím mũi tên lên/xuống điều hướng danh sách Sessions khi không nhập văn bản.
+- **Ctrl+P** mở **Quick open** (command palette). Gõ để lọc theo tên hoặc nhóm lệnh; **↑/↓** đổi mục đang chọn, **Enter** chạy mục đó, bấm chuột cũng chạy được. Palette còn liệt kê các lệnh `/` do Host đăng ký cho Session hiện tại.
+- **Ctrl+N** tạo Session mới; **Ctrl+O** mở file; **Ctrl+Shift+E** ẩn/hiện Explorer; **Ctrl+Shift+C** ẩn/hiện Changes; **Ctrl+Shift+T** ẩn/hiện Terminal.
+- **Ctrl+,** mở/đóng Settings, **Ctrl+Shift+M** mở/đóng Marketplace, **Ctrl+Shift+G** mở/đóng Goals, **Ctrl+Shift+X** mở Extensions và **Ctrl+Shift+K** mở Skills. Chỉ bốn phím đầu nhóm này (Settings, Marketplace, Goals, New session) đổi được trong Settings; các phím còn lại cố định.
+- **Esc** đóng lớp phủ trên cùng: hộp xác nhận, thông báo cập nhật, popover Sessions, menu **☰**, Quick open, rồi hộp About — mỗi lần một lớp, không đóng hết cùng lúc.
+- Menu **☰** hiển thị tổ hợp phím hiện hành của từng lệnh, nên sau khi đổi phím trong Settings, menu và Quick open luôn khớp với bộ điều phối bàn phím.
+- Phím mũi tên lên/xuống điều hướng danh sách Sessions trong popover khi không nhập văn bản.
 
 Nếu bản cài đặt có khay hệ thống, đóng cửa sổ sẽ ẩn ứng dụng xuống khay thay vì thoát. Chọn **Show/Hide** để hiện/ẩn cửa sổ; chọn **Quit** để thoát hoàn toàn. Nếu khay hệ thống không khả dụng, nút đóng cửa sổ dùng hành vi đóng cửa sổ thông thường.
 

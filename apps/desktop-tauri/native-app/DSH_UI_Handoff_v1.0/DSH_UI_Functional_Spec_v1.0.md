@@ -1,11 +1,13 @@
 # DSH — Đặc tả chức năng UI v1.0
 
 **Trạng thái:** Baseline chức năng để triển khai / cần đối chiếu adapter DSH hiện có trước khi nối runtime
-**Ngày:** 30/10/2026
-**Nguồn thiết kế:** `dsh-ui-prototype-v2.html`, `dsh-ui-feature-spec-v0.1.md` (HTML V2 đã được duyệt)
+**Ngày:** 30/10/2026 — cập nhật 02/11/2026: bỏ tham chiếu tài liệu không còn trong repo, ghi rõ đích port gpui, bổ sung ghi chú kiểu dữ liệu ở §8.1.
+**Nguồn thiết kế:** `dsh-ui-prototype-v2.html` (HTML V2 đã được duyệt) làm chuẩn thị giác; `runtime-capability-map.md` làm chuẩn hiện trạng runtime.
 **Mục đích:** Biến prototype đã chốt thành hợp đồng hành vi có thể giao coding agent thực hiện, review, kiểm thử. **Không** thiết kế lại UI, không viết lại runtime DSH, không tự thay đổi mô hình session/agent/plugin đang hoạt động của DSH.
 
 > **Phân biệt rõ:** nội dung chat, file tree, diff, model, terminal, Git, Marketplace trong HTML V2 là **dữ liệu mô phỏng**. Tài liệu dưới đây quy định hành vi mong muốn cho ứng dụng thật; các tên adapter/event minh họa **không phải** tuyên bố rằng API đó đã tồn tại trong DSH.
+>
+> **Đích port:** shell ship thật là Rust + gpui (`apps/desktop-tauri/native-app/src/gpui_main.rs`, `src/shell/`). Shell egui trong `src/main.rs` đã nghỉ, chỉ build với feature `legacy-egui`; không lấy nó làm chuẩn hành vi. Đối chiếu capability từng yêu cầu trong `runtime-capability-map.md`.
 
 ## 0. Design contract và quyết định đã khóa
 
@@ -451,6 +453,8 @@ type UIState = {
 
 **Không nên phụ thuộc trực tiếp vào names/type ví dụ** nếu API thực tế khác. Có thể dùng adapter layer chuẩn hóa và xác nhận stream error/reconnect. Tránh copy runtime state sang DOM/localStorage như nguồn chân lý.
 
+Các type trên là sketch để mô tả trường dữ liệu, không phải kiểu Rust cuối cùng: id phải là kiểu có thương hiệu (branded) chứ không phải `string` trần, và payload phải được decode thành enum theo `type` đã biết thay vì mang `unknown` xuyên suốt client. Tên method thật xem `runtime-capability-map.md` §0.2.
+
 ### 8.2. UI↔runtime operations (capability adapter)
 
 | UI action | Capability/operation cần có | Response lỗi/cảnh báo |
@@ -492,7 +496,7 @@ type UIState = {
 
 | Khu vực HTML V2 | Hiện tại | Khi đưa vào app thật |
 |---|---|---|
-| Layout / top-bottom / panel split | CSS/DOM hoạt động | Giữ gần như nguyên, port sang UI framework hiện có |
+| Layout / top-bottom / panel split | CSS/DOM hoạt động | Giữ gần như nguyên, port sang gpui (`src/shell/render/`) |
 | Explorer file tree | Sample object literal | Runtime FS, lazy load, errors, watcher |
 | Workspace selector | Demo recent list | Workspace registry/permission |
 | Session | Browser-local ID/chat HTML | Canonical session store, streamed events, drafts |
@@ -529,7 +533,7 @@ type UIState = {
 
 ## 11. Các quyết định phải kiểm tra với codebase DSH trước khi implement
 
-Đây là **điểm tích hợp**, không phải yêu cầu người dùng trả lời trước khi viết code:
+Đây là **điểm tích hợp**, không phải yêu cầu người dùng trả lời trước khi viết code. Trạng thái hiện tại của từng điểm đã được audit trong `runtime-capability-map.md`; khi code đổi, cập nhật bản đồ thay vì trả lời lại ở đây.
 
 1. Session store/API hiện tại lưu message history, run IDs, checkpoint/handoff ở đâu? Có cursor event stream chưa?
 2. Host DSH đang có PTY multiplex/detach thật chưa, hay terminal chỉ hoạt động khi cửa sổ còn mở?

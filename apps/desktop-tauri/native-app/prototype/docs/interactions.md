@@ -1,6 +1,6 @@
 # Prototype interaction reference
 
-This page records what the standalone HTML prototype lets a reviewer exercise and which state changes are only local demonstrations. It does not describe the shipped egui app’s API contract.
+This page records what the standalone HTML prototype lets a reviewer exercise and which state changes are only local demonstrations. It does not describe the shipped gpui app’s API contract.
 
 ## Screen inventory
 

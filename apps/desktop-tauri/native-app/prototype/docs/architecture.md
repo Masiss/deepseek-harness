@@ -4,7 +4,7 @@
 
 This project is a standalone browser-based prototype for the native desktop client. It demonstrates a target layout, screen set, and selected user-visible state transitions; it is not the shipped app, an API client, or a product contract.
 
-The shipped app is the Rust + egui implementation in [`../../src/`](../../src/). The prototype’s `index.html` is deliberately self-contained and is not compiled, packaged, or loaded by that application.
+The shipped app is the Rust + gpui implementation in [`../../src/`](../../src/) (`gpui_main.rs`, `shell/`); the egui shell in `src/main.rs` is retired behind the `legacy-egui` feature. The prototype’s `index.html` is deliberately self-contained and is not compiled, packaged, or loaded by that application.
 
 ## System context
 
@@ -15,7 +15,7 @@ flowchart LR
   Browser --> JS[Inline JavaScript and local fixtures]
   JS --> Storage[Browser localStorage]
   JS -. no network or Host calls .-> Host[Desktop Host]
-  Native[Shipped Rust + egui app] --> Host
+  Native[Shipped Rust + gpui app] --> Host
 ```
 
 The prototype runs entirely in one browser document. It stores only interface preferences in `localStorage`; session, transcript, model, workspace, plugin, marketplace, goal, job, schedule, terminal, and Host-setting data are local fixtures or temporary page state.
