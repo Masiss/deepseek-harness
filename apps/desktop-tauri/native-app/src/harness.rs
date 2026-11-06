@@ -29,6 +29,34 @@ impl Harness {
     /// @param height - Viewport height in logical pixels.
     /// @returns The harness whose shell is already laid out once.
     pub fn open(width: f32, height: f32) -> Self {
+        let mut harness = Self::build(width, height, false);
+        harness.resize(width, height);
+        harness
+    }
+
+    /// Opens the shell after running `setup` against its state, then draws once.
+    ///
+    /// The fresh window gives `debug_bounds` a clean map, so a selector that is
+    /// absent here really did not render in this state.
+    ///
+    /// @param width - Viewport width in logical pixels.
+    /// @param height - Viewport height in logical pixels.
+    /// @param setup - State change applied before the first frame.
+    /// @returns The harness laid out in that state.
+    pub fn open_with(
+        width: f32,
+        height: f32,
+        setup: impl FnOnce(&mut DesktopApp),
+    ) -> Self {
+        let mut harness = Self::build(width, height, false);
+        harness.with(|app, _| setup(app));
+        harness.resize(width, height);
+        harness
+    }
+
+    /// Builds the harness with or without the Host launch.
+    fn build(width: f32, height: f32, spawn_host: bool) -> Self {
+        let _ = (width, height);
         let preferences = std::env::temp_dir().join(format!(
             "dsh-gpui-harness-{}-{:?}.json",
             std::process::id(),
@@ -41,19 +69,65 @@ impl Harness {
             hidden: Arc::new(AtomicBool::new(false)),
             tray_available: false,
             ui_preferences_path: preferences.clone(),
-            spawn_host: false,
+            spawn_host,
             commands: Arc::new(Mutex::new(Vec::<CommandId>::new())),
         };
         let mut cx = TestAppContext::single();
         let (app, visual) =
             cx.add_window_view(|window, cx| DesktopApp::new(services, window, cx));
-        let mut harness = Self {
+        Self {
             app,
             visual: visual.clone(),
             preferences,
-        };
+        }
+    }
+
+    /// Opens the shell with the Desktop Host launch enabled.
+    ///
+    /// The Host command comes from the `DSH_DESKTOP_HOST_BIN` family of launch
+    /// variables, exactly as the shipped binary reads them, so a packaged tree
+    /// can drive this path.
+    ///
+    /// @param width - Viewport width in logical pixels.
+    /// @param height - Viewport height in logical pixels.
+    /// @returns The harness with no Host connection yet.
+    pub fn open_with_host(width: f32, height: f32) -> Self {
+        let mut harness = Self::build(width, height, true);
         harness.resize(width, height);
         harness
+    }
+
+    /// Drives the shell's poll loop until `condition` holds or the timeout expires.
+    ///
+    /// Real worker threads (Host launch, HTTP, streams) need wall-clock time, so
+    /// this pumps frames and sleeps instead of only advancing the test clock.
+    ///
+    /// @param label - Short description used in the failure message.
+    /// @param timeout - Longest wait before giving up.
+    /// @param condition - Predicate evaluated against the shell state.
+    /// @returns Whether the condition held.
+    pub fn pump_until(
+        &mut self,
+        label: &str,
+        timeout: std::time::Duration,
+        condition: impl Fn(&DesktopApp) -> bool,
+    ) -> bool {
+        let started = std::time::Instant::now();
+        loop {
+            if self.with(|app, _| condition(app)) {
+                return true;
+            }
+            if started.elapsed() > timeout {
+                eprintln!("harness: timed out waiting for {label}");
+                return false;
+            }
+            self.visual.update(|window, cx| {
+                self.app
+                    .update(cx, |app, cx| app.tick(window, cx))
+            });
+            self.visual.run_until_parked();
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
     }
 
     /// Resizes the test window and lays the shell out again.
@@ -235,5 +309,99 @@ mod tests {
         assert!(harness.bounds("agent-column").is_some());
         harness.resize(1400., 900.);
         assert!(harness.bounds("explorer-panel").is_some());
+    }
+}
+
+/// Packaged-Host journey: the shell connects to a real Desktop Host and creates
+/// a Session through its own RPC path.
+///
+/// Ignored because it needs the packaged tree; `native-journey-probe.sh shell`
+/// supplies the launch variables.
+#[test]
+#[ignore = "needs the packaged Host; run scripts/native-journey-probe.sh shell"]
+fn packaged_shell_connects_and_creates_a_session() {
+    use std::time::Duration;
+
+    assert!(
+        std::env::var("DSH_DESKTOP_HOST_BIN").is_ok(),
+        "DSH_DESKTOP_HOST_BIN is unset; run scripts/native-journey-probe.sh shell"
+    );
+    let mut harness = Harness::open_with_host(1440., 900.);
+    assert!(
+        harness.pump_until("Host connection", Duration::from_secs(180), |app| {
+            app.transport.is_some()
+        }),
+        "the shell never connected to the packaged Host"
+    );
+    // Let the first Session list settle: a create request is dropped while a
+    // list request is already in flight.
+    assert!(
+        harness.pump_until("Session list idle", Duration::from_secs(120), |app| {
+            !app.sessions_request_pending()
+        }),
+        "the shell never finished its first Session list"
+    );
+    harness.with(|app, _| app.new_session());
+    let created = harness.pump_until("Session creation", Duration::from_secs(120), |app| {
+        app.selected_session.is_some()
+    });
+    if !created {
+        let (status, error, page_error) = harness.with(|app, _| {
+            (
+                app.sessions_status.clone(),
+                app.sessions_error.clone(),
+                app.page_error.clone(),
+            )
+        });
+        panic!("the shell never selected the created Session: {status} / {error:?} / {page_error:?}");
+    }
+    let session = harness
+        .with(|app, _| app.selected_session.clone())
+        .expect("selected Session");
+    assert!(
+        harness.pump_until("Session list", Duration::from_secs(60), |app| {
+            app.sessions
+                .iter()
+                .any(|summary| summary.session_id == session)
+        }),
+        "the created Session never appeared in the shell's list"
+    );
+    assert!(
+        harness.bounds("agent-column").is_some(),
+        "the agent column did not render for the packaged Session"
+    );
+    println!("RESULT packaged-shell=OK session={session}");
+}
+
+#[cfg(test)]
+mod surface_tests {
+    use super::*;
+    use crate::command_registry::CommandId;
+
+    #[test]
+    fn settings_page_replaces_the_conversation_and_both_docks() {
+        let mut harness = Harness::open_with(1440., 900., |app| {
+            app.run_command(CommandId::ToggleSettings)
+        });
+        assert!(harness.bounds("shell-root").is_some());
+        assert!(harness.bounds("top-bar").is_some());
+        // A page owns the body: both docks come from the agent layout only.
+        assert!(harness.bounds("explorer-panel").is_none());
+        assert!(harness.bounds("changes-panel").is_none());
+        let body = harness.bounds("agent-column").expect("body renders");
+        assert_eq!(f32::from(body.size.width), 1440.);
+    }
+
+    #[test]
+    fn command_palette_keeps_the_shell_laid_out_and_closes_on_dismiss() {
+        let mut harness = Harness::open_with(1440., 900., |app| {
+            app.run_command(CommandId::ShowPalette)
+        });
+        assert!(harness.with(|app, _| app.palette_open));
+        let root = harness.bounds("shell-root").expect("root stays laid out");
+        assert_eq!(f32::from(root.size.height), 900.);
+        assert!(harness.bounds("agent-column").is_some());
+        assert!(harness.with(|app, _| app.dismiss_overlay()));
+        assert!(!harness.with(|app, _| app.palette_open));
     }
 }

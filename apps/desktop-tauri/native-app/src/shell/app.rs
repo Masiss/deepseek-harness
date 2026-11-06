@@ -3345,6 +3345,11 @@ impl DesktopApp {
         self.sessions_receiver.is_some()
     }
 
+    /// Whether a Session request is in flight, without naming its private type.
+    pub(crate) fn sessions_request_pending(&self) -> bool {
+        self.sessions_receiver.is_some()
+    }
+
     /// Archives the selected Session; `stop_activity` also stops its running
     /// work instead of being refused as `workspace/session-active`.
     pub(crate) fn archive_selected_session(&mut self, stop_activity: bool) {

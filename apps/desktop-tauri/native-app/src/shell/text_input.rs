@@ -364,6 +364,11 @@ impl TextInput {
 
     fn line_for_offset(&self, offset: usize) -> (usize, usize) {
         let starts = self.line_starts();
+        // Before the first paint there is no layout to index: a key action can
+        // arrive while the field is focused but unpainted.
+        if starts.is_empty() {
+            return (0, 0);
+        }
         let index = starts
             .iter()
             .enumerate()

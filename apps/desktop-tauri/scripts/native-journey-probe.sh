@@ -8,19 +8,21 @@
 #                   write one command, and read the output back
 #   model-default   exercise the profile default through a loopback-only /models
 #                   response and a fake account grant
+#   shell           connect the headless gpui shell to the packaged Host, create a
+#                   Session through its own RPC path, and assert it is listed
 #   timed-question  answer a timed `ask_user_question` through the question-card
 #                   code path, after observing the foreground wait stream
 #
 # Every mode uses a private DSH_HOME and never opens or types into the operator's
 # desktop or profile.
 #
-# Usage: native-journey-probe.sh [terminal|timed-question|model-default]
+# Usage: native-journey-probe.sh [terminal|timed-question|model-default|shell]
 set -euo pipefail
 
 mode=${1:-terminal}
 case "$mode" in
-  terminal|timed-question|model-default) ;;
-  *) echo "usage: $0 [terminal|timed-question|model-default]" >&2; exit 2 ;;
+  terminal|timed-question|model-default|shell) ;;
+  *) echo "usage: $0 [terminal|timed-question|model-default|shell]" >&2; exit 2 ;;
 esac
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
@@ -49,6 +51,27 @@ chmod 700 "$work/run"
 project="$work/home/.dsh/desktop-project"
 cp -a "$tree/project" "$project"
 chmod -R u+w "$project"
+
+if [ "$mode" = shell ]; then
+  cargo test --locked --offline --manifest-path "$root/apps/desktop-tauri/native-app/Cargo.toml" --no-run
+  test_bin=$(find "$root/apps/desktop-tauri/native-app/target/debug/deps" -maxdepth 1 \
+    -type f -name 'dsh_desktop_native_app-*' -executable -printf '%T@ %p\n' \
+    | sort -nr | sed -n '1s/^[^ ]* //p')
+  [ -x "$test_bin" ] || { echo "native-journey-probe: no native test binary" >&2; exit 1; }
+  DSH_HOME="$work/home/.dsh" \
+  DSH_DESKTOP_HOST_BIN="$tree/bin/desktop-host" \
+  DSH_DESKTOP_RUNTIME_DIR="$tree/dsh" \
+  DSH_DESKTOP_PROJECT_DIR="$project" \
+  DSH_DESKTOP_PRIMARY_RUNTIME="$tree/runtime/primary-runtime" \
+  DSH_DESKTOP_PNPM_ENTRY="$tree/runtime/primary-runtime/dependencies/pnpm/bin/pnpm.mjs" \
+  DSH_DESKTOP_NODE_BIN="$tree/runtime/bin" \
+  DSH_DESKTOP_VERSION="$version" \
+  DSH_CLIENT_VERSION="$version" \
+  TMPDIR="$work/tmp" XDG_CACHE_HOME="$work/cache" XDG_CONFIG_HOME="$work/config" \
+    "$test_bin" --ignored --exact \
+      harness::packaged_shell_connects_and_creates_a_session --nocapture
+  exit $?
+fi
 
 if [ "$mode" = model-default ]; then
   mkdir -p "$work/model-default"
