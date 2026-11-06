@@ -403,6 +403,16 @@ pub(crate) fn panel(
                     cx.notify();
                 })),
         );
+        workspace_row = workspace_row.child(
+            widgets::Button::new(theme, "Open folder…")
+                .enabled(connected)
+                .build()
+                .id("workspace-open-folder")
+                .on_click(cx.listener(|app, _, _, cx| {
+                    app.open_folder_dialog();
+                    cx.notify();
+                })),
+        );
         for workspace in app.workspaces.clone() {
             let workspace_id = workspace.workspace_id.clone();
             let title = session_list::truncate(

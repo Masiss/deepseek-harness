@@ -18,6 +18,14 @@ pub struct WorkspacePinValue {
     pub pinned_session_ids: Vec<String>,
 }
 
+/// Result of creating or re-registering one workspace.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceCreateValue {
+    pub workspace: crate::streams::WorkspaceView,
+    pub created: bool,
+}
+
 /// Native client for Workspace session grouping mutations.
 pub struct WorkspaceClient<'a> {
     transport: &'a HttpTransport,
@@ -26,6 +34,14 @@ pub struct WorkspaceClient<'a> {
 impl<'a> WorkspaceClient<'a> {
     pub fn new(transport: &'a HttpTransport) -> Self {
         Self { transport }
+    }
+
+    /// Creates or re-registers the workspace rooted at `path`.
+    pub fn create_workspace(&self, path: &str) -> Result<WorkspaceCreateValue, Error> {
+        self.call(
+            "workspace/create",
+            serde_json::json!({"path": path}),
+        )
     }
 
     /// Archives one Session; with `stop_activity`, running work is stopped
@@ -86,6 +102,24 @@ mod tests {
     fn session_grouping_calls_use_the_gateway_methods_and_arguments() {
         use httptest::{matchers::*, responders::json_encoded, Expectation, Server};
         let server = Server::run();
+        let rpc = "native-1".to_owned();
+        let created = serde_json::json!({"workspace": {"workspaceId": "w1", "path": "/ws/a", "title": "a", "sessionIds": [], "createdAt": "t0", "updatedAt": "t1"}, "created": true});
+        server.expect(
+            Expectation::matching(all_of![
+                request::method_path("POST", "/api/workspace/create"),
+                request::body(json_decoded(eq(serde_json::json!({
+                    "type": "client-request",
+                    "rpcId": rpc,
+                    "method": "workspace/create",
+                    "payload": {"args": {"path": "/ws/a"}}
+                }))))
+            ])
+            .respond_with(json_encoded(serde_json::json!({
+                "type": "server-response",
+                "rpcId": rpc,
+                "result": {"ok": true, "value": created}
+            }))),
+        );
         let archive = serde_json::json!({"archivedSessionIds": ["s1"]});
         let pin = serde_json::json!({"pinnedSessionIds": ["s1"]});
         let cases = [
@@ -111,7 +145,7 @@ mod tests {
             ),
         ];
         for (index, (method, args, value)) in cases.into_iter().enumerate() {
-            let rpc = format!("native-{}", index + 1);
+            let rpc = format!("native-{}", index + 2);
             server.expect(
                 Expectation::matching(all_of![
                     request::method_path("POST", format!("/api/{method}")),
@@ -131,6 +165,9 @@ mod tests {
         }
         let transport = HttpTransport::new(&server.url_str("/")).unwrap();
         let client = WorkspaceClient::new(&transport);
+        let opened = client.create_workspace("/ws/a").unwrap();
+        assert!(opened.created);
+        assert_eq!(opened.workspace.workspace_id, "w1");
         assert_eq!(
             client.archive_session("s1", false).unwrap().archived_session_ids,
             ["s1"]

@@ -14,6 +14,19 @@ pub fn open_file_async() -> Receiver<Option<PathBuf>> {
     spawn(true)
 }
 
+/// Starts a directory picker on a worker thread.
+///
+/// @returns A receiver that yields the chosen directory, or `None` when cancelled.
+pub fn open_folder_async() -> Receiver<Option<PathBuf>> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let dialog = rfd::FileDialog::new();
+        let path = dialog.pick_folder();
+        let _ = sender.send(path);
+    });
+    receiver
+}
+
 /// Starts a file-save picker on a worker thread.
 ///
 /// @returns A receiver that yields the chosen path, or `None` when cancelled.

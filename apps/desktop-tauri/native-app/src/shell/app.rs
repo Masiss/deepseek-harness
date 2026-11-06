@@ -417,6 +417,7 @@ enum DialogPurpose {
     Attach,
     Open,
     Save,
+    Folder,
 }
 
 /// Snapshot, bundles, and managed plugins returned by the inventory workers.
@@ -476,6 +477,7 @@ pub(crate) struct DesktopApp {
     pub(crate) selected_workspace: Option<String>,
     pub(crate) workspace_receiver: Option<mpsc::Receiver<Result<WorkspaceFollowFrame, String>>>,
     pub(crate) workspace_error: Option<String>,
+    pub(crate) workspace_create_receiver: Option<mpsc::Receiver<Result<dsh_client_core::workspace::WorkspaceCreateValue, Error>>>,
     pub(crate) session_query: String,
     pub(crate) session_search: Option<SessionSearchResponse>,
     pub(crate) session_title: String,
@@ -869,6 +871,7 @@ impl DesktopApp {
             selected_workspace: None,
             workspace_receiver: None,
             workspace_error: None,
+            workspace_create_receiver: None,
             session_query: String::new(),
             session_search: None,
             session_title: String::new(),
@@ -2752,6 +2755,7 @@ impl DesktopApp {
                     (DialogPurpose::Attach, Some(path)) => self.attach_path(path),
                     (DialogPurpose::Open, Some(path)) => self.open_preview_path(&path),
                     (DialogPurpose::Save, Some(path)) => self.save_preview_path(path),
+                    (DialogPurpose::Folder, Some(path)) => self.open_folder_path(path),
                     (_, None) => self.status = "File picker cancelled".to_owned(),
                 }
             }
@@ -4002,6 +4006,30 @@ impl DesktopApp {
         self.dialog = Some((DialogPurpose::Save, dialog::save_file_async()));
     }
 
+    /// Opens the native folder picker for the workspace flow.
+    pub(crate) fn open_folder_dialog(&mut self) {
+        self.dialog = Some((DialogPurpose::Folder, dialog::open_folder_async()));
+    }
+
+    /// Registers the picked folder on the Host and starts a session in it.
+    fn open_folder_path(&mut self, path: PathBuf) {
+        let Some(transport) = self.transport.clone() else {
+            self.sessions_error = Some("Connect before opening a folder".to_owned());
+            return;
+        };
+        if self.workspace_create_receiver.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = WorkspaceClient::new(&transport)
+                .create_workspace(&path.display().to_string());
+            let _ = sender.send(result);
+        });
+        self.workspace_create_receiver = Some(receiver);
+        self.workspace_status = Some("Opening folder…".to_owned());
+    }
+
     /// Whether the Host path is an Office document this client renders.
     pub(crate) fn is_office_path_now(path: &str) -> bool {
         Self::is_office_path(path)
@@ -4712,6 +4740,33 @@ impl DesktopApp {
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.workspace_error = Some("Workspace sync stopped unexpectedly".into());
                     self.workspace_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.repaint_soon = true;
+                }
+            }
+        }
+        if let Some(receiver) = &self.workspace_create_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(created)) => {
+                    self.workspace_create_receiver = None;
+                    self.selected_workspace = Some(created.workspace.workspace_id.clone());
+                    self.workspace_status = Some(format!(
+                        "Workspace {} open; creating a session…",
+                        created.workspace.path
+                    ));
+                    self.request_sessions(SessionOperation::Create(Some(
+                        created.workspace.workspace_id,
+                    )));
+                    self.focus_composer = true;
+                }
+                Ok(Err(error)) => {
+                    self.sessions_error = Some(format!("Open folder failed: {error}"));
+                    self.workspace_create_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.sessions_error = Some("Open folder worker stopped unexpectedly".into());
+                    self.workspace_create_receiver = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     self.repaint_soon = true;
