@@ -214,6 +214,17 @@ impl<'a> GitClient<'a> {
         )
     }
 
+    /// Merges one local branch into the current branch.
+    pub fn merge(&self, session_id: impl Into<String>, branch: impl Into<String>) -> Result<GitOperationResult, Error> {
+        self.call(
+            "git/merge",
+            serde_json::json!({
+                "gitWorkspaceScopeId": session_id.into(),
+                "request": { "branch": branch.into() },
+            }),
+        )
+    }
+
     /// Cherry-picks one commit onto the current branch.
     pub fn cherry_pick(&self, session_id: impl Into<String>, commit: impl Into<String>) -> Result<GitOperationResult, Error> {
         self.call(
@@ -225,12 +236,23 @@ impl<'a> GitClient<'a> {
         )
     }
 
-    /// Continues the in-progress rebase or cherry-pick.
+    /// Reverts one commit on the current branch.
+    pub fn revert(&self, session_id: impl Into<String>, commit: impl Into<String>) -> Result<GitOperationResult, Error> {
+        self.call(
+            "git/revert",
+            serde_json::json!({
+                "gitWorkspaceScopeId": session_id.into(),
+                "request": { "commit": commit.into() },
+            }),
+        )
+    }
+
+    /// Continues the in-progress merge, rebase, cherry-pick, or revert.
     pub fn continue_operation(&self, session_id: impl Into<String>) -> Result<GitOperationResult, Error> {
         self.call("git/continueOperation", serde_json::json!({ "gitWorkspaceScopeId": session_id.into() }))
     }
 
-    /// Aborts the in-progress rebase or cherry-pick.
+    /// Aborts the in-progress merge, rebase, cherry-pick, or revert.
     pub fn abort_operation(&self, session_id: impl Into<String>) -> Result<GitOperationResult, Error> {
         self.call("git/abortOperation", serde_json::json!({ "gitWorkspaceScopeId": session_id.into() }))
     }

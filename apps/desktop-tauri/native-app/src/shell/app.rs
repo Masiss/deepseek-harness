@@ -1948,17 +1948,27 @@ impl DesktopApp {
         self.run_git_operation(move |client, session_id| client.rebase(session_id, branch));
     }
 
+    /// Merges one local branch into the current branch.
+    pub(crate) fn merge_git_branch(&mut self, branch: String) {
+        self.run_git_operation(move |client, session_id| client.merge(session_id, branch));
+    }
+
     /// Cherry-picks one commit onto the current branch.
     pub(crate) fn cherry_pick_git_commit(&mut self, commit: String) {
         self.run_git_operation(move |client, session_id| client.cherry_pick(session_id, commit));
     }
 
-    /// Continues the in-progress rebase or cherry-pick.
+    /// Reverts one commit on the current branch.
+    pub(crate) fn revert_git_commit(&mut self, commit: String) {
+        self.run_git_operation(move |client, session_id| client.revert(session_id, commit));
+    }
+
+    /// Continues the in-progress merge, rebase, cherry-pick, or revert.
     pub(crate) fn continue_git_operation(&mut self) {
         self.run_git_operation(|client, session_id| client.continue_operation(session_id));
     }
 
-    /// Aborts the in-progress rebase or cherry-pick.
+    /// Aborts the in-progress merge, rebase, cherry-pick, or revert.
     pub(crate) fn abort_git_operation(&mut self) {
         self.run_git_operation(|client, session_id| client.abort_operation(session_id));
     }

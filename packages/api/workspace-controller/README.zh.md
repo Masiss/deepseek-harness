@@ -8,7 +8,7 @@ kind: "package-reference"
 
 ## 概述
 
-`@deepseek-ai/dsh-api-workspace-controller` 拥有 Host 的 `ctx.workspaceController` 服务和生成的 Client `ctx.remote.workspace` namespace。它的 Remote 方法负责创建、重命名、移除和重排 Workspace，在 Workspace 内重排 Session，归档与取消归档 Session，以及跟随完整的 Workspace 投影。当 Client 必须修改或跟随 Workspace 导航时，请通过 API 网关使用它。本包同时拥有 `ctx.directoryPickerController` 与生成的 `ctx.remote.directoryPicker` namespace，因为它承载的选目录 seam 是抽象的，自身从不作为 Loader entry；它还拥有 `ctx.gitController` 与生成的 `ctx.remote.git` namespace，提供 Git 状态、diff、索引变更、提交、分支切换、远端同步和 rebase/cherry-pick 控制。
+`@deepseek-ai/dsh-api-workspace-controller` 拥有 Host 的 `ctx.workspaceController` 服务和生成的 Client `ctx.remote.workspace` namespace。它的 Remote 方法负责创建、重命名、移除和重排 Workspace，在 Workspace 内重排 Session，归档与取消归档 Session，以及跟随完整的 Workspace 投影。当 Client 必须修改或跟随 Workspace 导航时，请通过 API 网关使用它。本包同时拥有 `ctx.directoryPickerController` 与生成的 `ctx.remote.directoryPicker` namespace，因为它承载的选目录 seam 是抽象的，自身从不作为 Loader entry；它还拥有 `ctx.gitController` 与生成的 `ctx.remote.git` namespace，提供 Git 状态、diff、索引变更、提交、分支切换、远端同步和 merge/rebase/cherry-pick/revert 控制。
 
 ## 目录
 
@@ -59,9 +59,9 @@ Documents 查询占用注册表变更队列，因此其他 Workspace 变更（�
 
 `git/fetch` 执行 `git fetch --all --prune`，`git/pull` 执行 `git pull --ff-only`，`git/push` 执行不带 force 的 `git push`。它们使用 Host 自身的 git credential helper 和 SSH agent；子进程不启用终端提示，因此 Host 无法提供的凭据会以 `git/remote-auth` 失败，而不是挂起。历史被拒绝或分叉返回 `git/remote-diverged`，分支没有 upstream 返回 `git/remote-no-upstream`，其他失败返回 `git/remote-failed`；摘要为 git 自身文本，受 `gitMaxOutputBytes` 限制。
 
-`git/state` 返回进行中的 merge、rebase、cherry-pick 或 revert 及未合并路径。`git/rebase` 把当前分支重放到已存在的本地分支上；`git/cherryPick` 应用一个 commit id。两者都返回结果状态，因此冲突保持可见而不是变成错误。`git/continueOperation` 与 `git/abortOperation` 推进或回退进行中的 rebase 或 cherry-pick；编辑冲突文件并暂存仍由调用方完成。
+`git/state` 返回进行中的 merge、rebase、cherry-pick 或 revert 及未合并路径。`git/merge` 把一个已存在的本地分支并入当前分支，`git/rebase` 把当前分支重放到该分支上，`git/cherryPick` 应用一个 commit id，`git/revert` 撤销一个 commit。它们都返回结果状态，因此冲突保持可见而不是变成错误。`git/continueOperation` 与 `git/abortOperation` 推进或回退进行中的 merge、rebase、cherry-pick 或 revert；编辑冲突文件并暂存仍由调用方完成。
 
-每个动词都在调用方 signal 以及 `gitTimeoutMs` 或 `gitNetworkTimeoutMs` 约束下以无 shell 方式运行 `git`。不在仓库内的目录返回 `git/not-repository`；缺少可执行文件返回 `git/unavailable`；路径在仓库外或不适用于该动词返回 `git/path-refused`；其他非零退出返回 `git/command-failed`，消息中带有 git 的 stderr；被拒绝的提交返回 `git/commit-refused`；被拒绝的 rebase、cherry-pick、continue 或 abort 返回 `git/operation-refused`。
+每个动词都在调用方 signal 以及 `gitTimeoutMs` 或 `gitNetworkTimeoutMs` 约束下以无 shell 方式运行 `git`。不在仓库内的目录返回 `git/not-repository`；缺少可执行文件返回 `git/unavailable`；路径在仓库外或不适用于该动词返回 `git/path-refused`；其他非零退出返回 `git/command-failed`，消息中带有 git 的 stderr；被拒绝的提交返回 `git/commit-refused`；被拒绝的 merge、rebase、cherry-pick、revert、continue 或 abort 返回 `git/operation-refused`。
 
 -----
 
@@ -79,7 +79,7 @@ Documents 查询占用注册表变更队列，因此其他 Workspace 变更（�
 <a id="known-limitations-and-deferred-work"></a>
 
 - Git 动词执行 Host 的 `git` 可执行文件；没有它的 Host 返回 `git/unavailable`。远端动词依赖 Host 账户的 git credential helper 和 SSH agent；本包不保存凭据，也绝不强制 push。
-- 交互式 rebase、merge/revert continue 和自动冲突解决不在范围内：调用方编辑冲突文件、暂存后继续。
+- 交互式 rebase 和自动冲突解决不在范围内：调用方编辑冲突文件、暂存后继续。
 - `git/discard` 永不删除未跟踪文件，也不解决冲突；这类请求返回 `git/path-refused`。
 - `follow()` 在重连后替换完整投影，不提供持久 cursor 或增量追赶协议。
 - 进程内删除标记只会在 Client 模型生命周期内阻止延迟数据复活已移除的 Workspace。

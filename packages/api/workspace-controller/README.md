@@ -8,7 +8,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`@deepseek-ai/dsh-api-workspace-controller` owns the Host `ctx.workspaceController` service and the generated Client `ctx.remote.workspace` namespace. Its Remote methods create, rename, remove, and reorder Workspaces, reorder Sessions within a Workspace, archive and unarchive Sessions from Workspace navigation, and follow the complete Workspace projection. Use it through API Gateway when a Client must change or follow Workspace navigation. The package also owns `ctx.directoryPickerController` and the generated `ctx.remote.directoryPicker` namespace, because the directory-picking seam it carries is abstract and never a Loader entry of its own, and `ctx.gitController` with the generated `ctx.remote.git` namespace for Git state, diffs, index changes, commits, branch checkout, remote synchronization, and rebase/cherry-pick control.
+`@deepseek-ai/dsh-api-workspace-controller` owns the Host `ctx.workspaceController` service and the generated Client `ctx.remote.workspace` namespace. Its Remote methods create, rename, remove, and reorder Workspaces, reorder Sessions within a Workspace, archive and unarchive Sessions from Workspace navigation, and follow the complete Workspace projection. Use it through API Gateway when a Client must change or follow Workspace navigation. The package also owns `ctx.directoryPickerController` and the generated `ctx.remote.directoryPicker` namespace, because the directory-picking seam it carries is abstract and never a Loader entry of its own, and `ctx.gitController` with the generated `ctx.remote.git` namespace for Git state, diffs, index changes, commits, branch checkout, remote synchronization, and merge/rebase/cherry-pick/revert control.
 
 ## Table of Contents
 
@@ -59,9 +59,9 @@ Every verb reads the repository that contains a Session's workspace root. The Se
 
 `git/fetch` runs `git fetch --all --prune`, `git/pull` runs `git pull --ff-only`, and `git/push` runs `git push` with no force. They use the Host's own git credential helper and SSH agent; children run without terminal prompts, so a credential the Host cannot supply fails as `git/remote-auth` instead of hanging. Rejected or diverged history answers `git/remote-diverged`, a branch without upstream answers `git/remote-no-upstream`, and other failures answer `git/remote-failed`; the summary is git's own text capped by `gitMaxOutputBytes`.
 
-`git/state` reports the in-progress merge, rebase, cherry-pick, or revert and the unmerged paths. `git/rebase` replays the current branch onto an existing local branch; `git/cherryPick` applies one commit id. Both return the resulting state, so conflicts stay visible instead of collapsing into an error. `git/continueOperation` and `git/abortOperation` advance or unwind the in-progress rebase or cherry-pick; editing conflicted files and staging them remains the caller's job.
+`git/state` reports the in-progress merge, rebase, cherry-pick, or revert and the unmerged paths. `git/merge` joins an existing local branch into the current one, `git/rebase` replays the current branch onto one, `git/cherryPick` applies one commit id, and `git/revert` undoes one commit. All return the resulting state, so conflicts stay visible instead of collapsing into an error. `git/continueOperation` and `git/abortOperation` advance or unwind the in-progress merge, rebase, cherry-pick, or revert; editing conflicted files and staging them remains the caller's job.
 
-Every verb runs `git` without a shell under the caller's signal plus `gitTimeoutMs` or `gitNetworkTimeoutMs`. A directory outside a repository answers `git/not-repository`; a missing executable answers `git/unavailable`; a path outside the repository or ineligible for the verb answers `git/path-refused`; any other nonzero exit answers `git/command-failed` with git's stderr in the message; a refused commit answers `git/commit-refused`; a refused rebase, cherry-pick, continue, or abort answers `git/operation-refused`.
+Every verb runs `git` without a shell under the caller's signal plus `gitTimeoutMs` or `gitNetworkTimeoutMs`. A directory outside a repository answers `git/not-repository`; a missing executable answers `git/unavailable`; a path outside the repository or ineligible for the verb answers `git/path-refused`; any other nonzero exit answers `git/command-failed` with git's stderr in the message; a refused commit answers `git/commit-refused`; a refused merge, rebase, cherry-pick, revert, continue, or abort answers `git/operation-refused`.
 
 -----
 
@@ -79,7 +79,7 @@ No direct effect; Workspace mutations do not alter model requests.
 <a id="known-limitations-and-deferred-work"></a>
 
 - Git verbs execute the Host's `git` executable; a host without one answers `git/unavailable`. Remote verbs rely on the Host account's git credential helper and SSH agent; this package stores no credentials and never forces a push.
-- Interactive rebase, merge/revert continue, and automated conflict resolution are out of scope: the caller edits conflicted files, stages them, and continues.
+- Interactive rebase and automated conflict resolution are out of scope: the caller edits conflicted files, stages them, and continues.
 - `git/discard` never deletes an untracked file and never resolves a conflict; those requests answer `git/path-refused`.
 - `follow()` replaces the whole projection after reconnect and has no durable cursor or incremental catch-up protocol.
 - Process-local deletion markers prevent delayed data from reviving a removed Workspace only for the lifetime of the Client model.

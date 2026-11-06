@@ -30,6 +30,7 @@ import type {
   GitCommitValue,
   GitDiffRequest,
   GitDiffValue,
+  GitMergeRequest,
   GitOperationKind,
   GitOperationState,
   GitOperationValue,
@@ -38,6 +39,7 @@ import type {
   GitRebaseRequest,
   GitRemoteOperation,
   GitRemoteValue,
+  GitRevertRequest,
   GitStatusValue,
   GitWorkspaceScope,
 } from './types.ts'
@@ -573,7 +575,40 @@ export class GitCommands {
   }
 
   /**
-   * Continue the in-progress rebase or cherry-pick after conflicts are staged.
+   * Merge one existing local branch into the current branch.
+   * @param root - Session workspace root inside the repository.
+   * @param request - branch to merge.
+   * @param signal - caller cancellation.
+   * @returns the resulting operation state; conflicts keep the merge in progress.
+   */
+  async merge(root: string, request: GitMergeRequest, signal: AbortSignal): Promise<GitOperationValue> {
+    const branch = request.branch
+    if (branch.length === 0 || branch.startsWith('-') || /\s/.test(branch)) {
+      throw new RemoteError('git/operation-refused', `refusing to merge "${branch}"`, {})
+    }
+    const listed = await this.branches(root, signal)
+    if (!listed.branches.some(candidate => candidate.name === branch)) {
+      throw new RemoteError('git/operation-refused', `no local branch named "${branch}"`, {})
+    }
+    return await this.step(root, ['merge', '--no-edit', branch], signal)
+  }
+
+  /**
+   * Revert one commit on the current branch.
+   * @param root - Session workspace root inside the repository.
+   * @param request - abbreviated or full object id.
+   * @param signal - caller cancellation.
+   * @returns the resulting operation state; conflicts keep the revert in progress.
+   */
+  async revert(root: string, request: GitRevertRequest, signal: AbortSignal): Promise<GitOperationValue> {
+    if (!/^[0-9a-f]{4,64}$/i.test(request.commit)) {
+      throw new RemoteError('git/operation-refused', `"${request.commit}" is not a commit id`, {})
+    }
+    return await this.step(root, ['revert', '--no-edit', request.commit], signal)
+  }
+
+  /**
+   * Continue the in-progress merge, rebase, cherry-pick, or revert after conflicts are staged.
    * @param root - Session workspace root inside the repository.
    * @param signal - caller cancellation.
    * @returns the resulting operation state.
@@ -581,17 +616,21 @@ export class GitCommands {
   async continueOperation(root: string, signal: AbortSignal): Promise<GitOperationValue> {
     const state = await this.state(root, signal)
     switch (state.operation) {
+      case 'merge':
+        return await this.step(root, ['merge', '--continue'], signal)
       case 'rebase':
         return await this.step(root, ['rebase', '--continue'], signal)
       case 'cherry-pick':
         return await this.step(root, ['cherry-pick', '--continue'], signal)
+      case 'revert':
+        return await this.step(root, ['revert', '--continue'], signal)
       default:
-        throw new RemoteError('git/operation-refused', 'no rebase or cherry-pick is in progress', {})
+        throw new RemoteError('git/operation-refused', 'no merge, rebase, cherry-pick, or revert is in progress', {})
     }
   }
 
   /**
-   * Abort the in-progress rebase or cherry-pick and restore the previous HEAD.
+   * Abort the in-progress merge, rebase, cherry-pick, or revert and restore the previous HEAD.
    * @param root - Session workspace root inside the repository.
    * @param signal - caller cancellation.
    * @returns the restored operation state.
@@ -599,12 +638,16 @@ export class GitCommands {
   async abortOperation(root: string, signal: AbortSignal): Promise<GitOperationValue> {
     const state = await this.state(root, signal)
     switch (state.operation) {
+      case 'merge':
+        return await this.step(root, ['merge', '--abort'], signal)
       case 'rebase':
         return await this.step(root, ['rebase', '--abort'], signal)
       case 'cherry-pick':
         return await this.step(root, ['cherry-pick', '--abort'], signal)
+      case 'revert':
+        return await this.step(root, ['revert', '--abort'], signal)
       default:
-        throw new RemoteError('git/operation-refused', 'no rebase or cherry-pick is in progress', {})
+        throw new RemoteError('git/operation-refused', 'no merge, rebase, cherry-pick, or revert is in progress', {})
     }
   }
 
@@ -882,6 +925,22 @@ export class GitController extends TypertRemoteService {
   }
 
   /**
+   * Merge one local branch into the current branch.
+   * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+   * @param request - branch to merge.
+   * @param signal - caller cancellation.
+   * @returns the resulting operation state.
+   */
+  @Remote('merge')
+  merge(
+    gitWorkspaceScope: GitWorkspaceScope,
+    request: GitMergeRequest,
+    signal: AbortSignal,
+  ): Promise<GitOperationValue> {
+    return this.commands.merge(gitWorkspaceScope.workspaceRoot, request, signal)
+  }
+
+  /**
    * Cherry-pick one commit onto the current branch.
    * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
    * @param request - commit id.
@@ -898,7 +957,23 @@ export class GitController extends TypertRemoteService {
   }
 
   /**
-   * Continue the in-progress rebase or cherry-pick.
+   * Revert one commit on the current branch.
+   * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+   * @param request - commit id.
+   * @param signal - caller cancellation.
+   * @returns the resulting operation state.
+   */
+  @Remote('revert')
+  revert(
+    gitWorkspaceScope: GitWorkspaceScope,
+    request: GitRevertRequest,
+    signal: AbortSignal,
+  ): Promise<GitOperationValue> {
+    return this.commands.revert(gitWorkspaceScope.workspaceRoot, request, signal)
+  }
+
+  /**
+   * Continue the in-progress merge, rebase, cherry-pick, or revert.
    * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
    * @param signal - caller cancellation.
    * @returns the resulting operation state.
@@ -909,7 +984,7 @@ export class GitController extends TypertRemoteService {
   }
 
   /**
-   * Abort the in-progress rebase or cherry-pick.
+   * Abort the in-progress merge, rebase, cherry-pick, or revert.
    * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
    * @param signal - caller cancellation.
    * @returns the restored operation state.

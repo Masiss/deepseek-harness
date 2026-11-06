@@ -117,9 +117,9 @@ Sandbox/permission: `packages/fs/fs-sandbox/src/containment.ts`, `packages/fs/fs
 | GIT-03..04 | `git/status`, `git/state`, `workspaceFiles/changes` | Git icon mở Changes; status + state lấy chung trong một worker (`GitUpdate::StatusAndState`); tự refresh khi Explorer watcher báo thay đổi (`workspace_changed_since`) và sau checkout/mutation/commit, kèm nút Refresh | Đạt; watcher dedupe theo version nên thay đổi ngoài cây đã tải không kích hoạt refresh |
 | GIT-05 | `git/diff`, `git/stage`, `git/unstage`, `git/discard`, `git/commit` | Diff staged/unstaged, tab Files có badge, Stage/Unstage/Discard, message + Commit; commit chỉ khi có file staged | Discard từ chối untracked/added/renamed/copied/conflicted; không có auto-resolve conflict |
 | GIT-06 | `git/fetch`, `git/pull` (`--ff-only`), `git/push` (không force) | Tab Branches có Fetch / Pull / Push; Push cần xác nhận hai bước; lỗi auth/diverged/no-upstream hiện nguyên văn | Dùng credential helper/SSH agent của Host; không có cấu hình credential riêng trong DSH |
-| GIT-07 | `git/state`, `git/rebase`, `git/cherryPick`, `git/continueOperation`, `git/abortOperation` | Banner operation + conflict list, Continue/Abort; mỗi branch có Rebase và Pick | Không có interactive rebase, merge/revert continue hay auto-resolve; người dùng sửa file, stage rồi Continue |
+| GIT-07 | `git/state`, `git/merge`, `git/revert`, `git/rebase`, `git/cherryPick`, `git/continueOperation`, `git/abortOperation` | Banner operation + conflict list, Continue/Abort; mỗi branch có Rebase, Pick, Merge; branch hiện tại có Revert tip | Không có interactive rebase hay auto-resolve; người dùng sửa file, stage rồi Continue |
 
-Kết luận: Git đã có đủ read path, diff, stage/unstage, discard, commit, remote sync và rebase/cherry-pick cơ bản cho client native. Các phần còn thiếu là interactive rebase và công cụ resolve conflict tự động.
+Kết luận: Git đã có đủ read path, diff, stage/unstage, discard, commit, remote sync, merge/rebase/cherry-pick/revert và continue/abort cho client native. Các phần còn thiếu là interactive rebase và công cụ resolve conflict tự động.
 
 ## 6. Terminal & PTY
 
@@ -158,7 +158,7 @@ Ranh giới: shell tool của agent (`packages/shell`, `packages/subprocess`) t�
 Chặn một UI trung thực theo spec:
 
 1. Search nội dung đã có (`workspaceFiles/search` + UI, WS-09); quick-open theo tên có trong palette trên cây Explorer đã tải, chưa index toàn workspace → WS-05; `workspaceFiles/write` đã nối UI (document editor + Save to Host, version guard) ở cả gpui lẫn egui.
-2. Git P0 đã có `git/status`, `git/diff`, `git/stage`, `git/unstage`, `git/discard`, `git/commit`, `git/branches`, `git/checkout`; GIT-06/07 có fetch/pull/push và state/rebase/cherry-pick/continue/abort. Còn: interactive rebase, merge/revert continue, auto-resolve conflict.
+2. Git P0 đã có `git/status`, `git/diff`, `git/stage`, `git/unstage`, `git/discard`, `git/commit`, `git/branches`, `git/checkout`; GIT-06/07 có fetch/pull/push và state/merge/rebase/cherry-pick/revert/continue/abort. Còn: interactive rebase, auto-resolve conflict.
 3. Session archive/unarchive + pin đã có (SES-06); hard delete chưa có RPC và cố tình chưa giả lập.
 4. Không có mode agent Ask/Plan/Build → AG-06; `run.status` là suy ra từ `turn/end` (Queue/Steer + queue khi busy đã có) → AG-09, AG-12.
 5. Skill đọc danh sách kèm scope/provider, enable/disable bền vững qua `skills/setDisabled` và settings namespace → SKL-01/02/03.

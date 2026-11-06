@@ -1660,6 +1660,8 @@ fn git_branches_body(
             let checkout = name.clone();
             let rebase = name.clone();
             let pick = name.clone();
+            let merge = name.clone();
+            let revert = branch.commit.clone();
             let mut actions = div().flex().flex_row().items_center().gap(theme.sp(4.));
             if !selected {
                 actions = actions
@@ -1683,7 +1685,22 @@ fn git_branches_body(
                                 app.cherry_pick_git_commit(pick.clone());
                                 cx.notify();
                             })),
+                    )
+                    .child(
+                        git_text_action(theme, "Merge", format!("git-merge-{name}"))
+                            .on_click(cx.listener(move |app, _, _, cx| {
+                                app.merge_git_branch(merge.clone());
+                                cx.notify();
+                            })),
                     );
+            } else {
+                actions = actions.child(
+                    git_text_action(theme, "Revert tip", format!("git-revert-{name}"))
+                        .on_click(cx.listener(move |app, _, _, cx| {
+                            app.revert_git_commit(revert.clone());
+                            cx.notify();
+                        })),
+                );
             }
             list = list.child(
                 div()
@@ -1731,7 +1748,7 @@ fn git_branches_body(
     let hint = if app.git_loading {
         "Running a Git action…"
     } else if app.git_branches.is_some() {
-        "Checkout switches branches; Rebase replays the current branch onto one; Pick cherry-picks its tip."
+        "Checkout switches branches; Rebase replays the current branch onto one; Pick cherry-picks its tip; Merge joins one into the current branch; Revert tip undoes the current branch's newest commit."
     } else {
         "Branch list not loaded."
     };

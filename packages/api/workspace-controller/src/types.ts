@@ -351,13 +351,25 @@ export interface GitRebaseRequest {
   readonly branch: string
 }
 
+/** Branch to merge into the current branch. */
+export interface GitMergeRequest {
+  /** Existing local branch name. */
+  readonly branch: string
+}
+
 /** Commit to cherry-pick onto the current branch. */
 export interface GitCherryPickRequest {
   /** Abbreviated or full object id. */
   readonly commit: string
 }
 
-/** Result of one rebase, cherry-pick, continue, or abort step. */
+/** Commit to revert on the current branch. */
+export interface GitRevertRequest {
+  /** Abbreviated or full object id; merge commits are refused by git itself. */
+  readonly commit: string
+}
+
+/** Result of one merge, rebase, cherry-pick, revert, continue, or abort step. */
 export interface GitOperationValue {
   /** Operation state after the step. */
   readonly state: GitOperationState
