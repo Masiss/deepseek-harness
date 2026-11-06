@@ -60,7 +60,7 @@ Ghi chú transport quan trọng cho §3.3 và §7.3 của spec:
 | WS-05 | `workspaceFiles/search` (RPC mới 06/11, có giới hạn) | Ô Search content trong Sessions panel; click kết quả mở document và đặt caret đúng dòng (viewport cuộn theo caret) | Quick-open theo tên gộp cây Explorer đã tải với `workspaceFiles/searchPaths` (bounded, không đọc nội dung) nên phủ cả workspace chưa mở |
 | WS-06 | Không có RPC; `ui_preferences.rs` lưu `workspace_panel_width`, `show_workspace_explorer` | Resize/toggle có, lưu file JSON client-local có `schemaVersion` | `ui_preferences` schema v5 có `workspace_overrides`: giá trị của workspace đang chọn thắng global cho panel width/density |
 | WS-07 | `workspaceFiles/changes` → frame `Ready` hoặc `Change {absolutePath, version, absent}`; watch theo **một target** mỗi stream | `explorer.rs`: mỗi thư mục đang mở và file đang preview có một watch; version lặp bị bỏ, thư mục đổi thì list lại và prune entry đã mất, file đổi thì banner stale, file mất thì banner absent (giữ trang cuối) | Frame chỉ nói target đó đổi, không nói entry con nào và không có rename; watch bị Host từ chối thì báo một lần và chỉ thử lại khi bấm refresh |
-| WS-08 | `workspaceFiles/write` (stale-version guard + create-if-absent) | Ghi nội dung qua document editor + Save to Host (cả gpui lẫn egui) | Rename/delete file chưa có RPC |
+| WS-08 | `workspaceFiles/write` (stale-version guard + create-if-absent) | Ghi nội dung qua document editor + Save to Host; Rename/Delete trong document page (version guard, delete cần confirm) | Đạt; chưa có tạo thư mục hay xoá đệ quy |
 | WS-09 | `workspaceFiles/search` (RPC mới 06/11, có giới hạn) | Như WS-05 | Bỏ qua symlink, NUL binary và file >1MiB; line không jump |
 | WS-10 | — | — | Ngoài baseline |
 

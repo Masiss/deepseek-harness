@@ -158,6 +158,26 @@ export interface WorkspaceSearchValue {
   readonly truncated: boolean
 }
 
+/** Result of one workspace file rename. */
+export interface WorkspaceFileRenameResult {
+  /** Source path as the caller supplied it. */
+  readonly previousPath: string
+  /** Destination path as the caller supplied it. */
+  readonly path: string
+  /** Canonical destination path in the execution world. */
+  readonly absolutePath: string
+  /** Freshness token the renamed file now carries. */
+  readonly version: string
+}
+
+/** Result of one workspace file delete. */
+export interface WorkspaceFileDeleteResult {
+  /** Path as the caller supplied it. */
+  readonly path: string
+  /** Canonical path of the deleted file. */
+  readonly absolutePath: string
+}
+
 /** Bounds for one workspace path search. */
 export interface WorkspacePathSearchOptions {
   /** Maximum number of paths returned. Defaults to 50. */
@@ -228,5 +248,8 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'workspace-file/stale-version': { readonly path: string }
     /** The file did not exist when a create was requested, but now does. */
     'workspace-file/not-observed': { readonly path: string }
+
+    /** `rename` refused because the destination already exists. */
+    'workspace-file/already-exists': { readonly path: string }
   }
 }

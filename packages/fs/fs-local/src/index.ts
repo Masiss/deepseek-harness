@@ -7,6 +7,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import { constants as bufferConstants } from 'node:buffer'
 import { once } from 'node:events'
+import { rename, unlink } from 'node:fs/promises'
 import { watch } from 'chokidar'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -18,6 +19,7 @@ import type {
   FsEditRequest,
   FsInfo,
   FsPathInfo,
+  FsRenameOutcome,
   FsTarget,
   FsWriteIntent,
   FsWriteOutcome,
@@ -251,6 +253,55 @@ export class LocalFileSystem extends FileSystem {
         // is a storage detail the applied-hunk diff ignores.
         after: normalizeLineEndings(content),
       }
+    })
+  }
+
+  override async rename(
+    target: FsTarget,
+    destination: FsTarget,
+    expected?: { version: FsVersion },
+    signal?: AbortSignal,
+  ): Promise<FsRenameOutcome> {
+    return this.withLock(target.targetKey, async () => {
+      if (signal?.aborted === true) throw new FsError('rename aborted', 'FS_ABORTED')
+      const existing = await probe(target.targetKey)
+      if (!existing) {
+        throw new FsError(`cannot rename "${target.displayPath}": no such file`, 'FS_NOT_FOUND')
+      }
+      if (expected !== undefined && existing.version !== expected.version) {
+        throw new FsError(`cannot rename "${target.displayPath}": changed since it was read`, 'FS_STALE_VERSION')
+      }
+      if (await probe(destination.targetKey)) {
+        throw new FsError(`cannot rename to "${destination.displayPath}": it already exists`, 'FS_ALREADY_EXISTS')
+      }
+      await rename(target.targetKey, destination.targetKey)
+      const moved = await probe(destination.targetKey)
+      /* v8 ignore next -- a just-renamed entry is present unless another process removed it. */
+      if (!moved) {
+        throw new FsError(`cannot rename to "${destination.displayPath}": it disappeared`, 'FS_IO_ERROR')
+      }
+      return { version: moved.version }
+    })
+  }
+
+  override async remove(
+    target: FsTarget,
+    expected?: { version: FsVersion },
+    signal?: AbortSignal,
+  ): Promise<void> {
+    return this.withLock(target.targetKey, async () => {
+      if (signal?.aborted === true) throw new FsError('delete aborted', 'FS_ABORTED')
+      const existing = await probe(target.targetKey)
+      if (!existing) {
+        throw new FsError(`cannot delete "${target.displayPath}": no such file`, 'FS_NOT_FOUND')
+      }
+      if (existing.type !== 'file') {
+        throw new FsError(`cannot delete "${target.displayPath}": not a regular file`, 'FS_NOT_REGULAR_FILE')
+      }
+      if (expected !== undefined && existing.version !== expected.version) {
+        throw new FsError(`cannot delete "${target.displayPath}": changed since it was read`, 'FS_STALE_VERSION')
+      }
+      await unlink(target.targetKey)
     })
   }
 

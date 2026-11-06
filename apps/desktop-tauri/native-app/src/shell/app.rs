@@ -585,6 +585,13 @@ pub(crate) struct DesktopApp {
     pub(crate) pending_preview_text: Option<String>,
     pub(crate) preview_save_receiver: Option<mpsc::Receiver<Result<WorkspaceFileWriteResult, Error>>>,
     pub(crate) preview_save_status: Option<String>,
+    /// Draft destination for a rename of the loaded document.
+    pub(crate) document_new_path: String,
+    /// Whether the Delete button already asked for a second click.
+    pub(crate) document_delete_confirm: bool,
+    pub(crate) document_op_status: Option<String>,
+    pub(crate) document_op_receiver:
+        Option<mpsc::Receiver<Result<DocumentMutation, Error>>>,
     pub(crate) show_document: bool,
     pub(crate) show_plugins: bool,
     pub(crate) show_skills: bool,
@@ -982,6 +989,10 @@ impl DesktopApp {
             pending_preview_text: None,
             preview_save_receiver: None,
             preview_save_status: None,
+            document_new_path: String::new(),
+            document_delete_confirm: false,
+            document_op_status: None,
+            document_op_receiver: None,
             show_document: false,
             show_plugins: false,
             show_skills: false,
@@ -1699,6 +1710,82 @@ impl DesktopApp {
         });
         self.preview_save_receiver = Some(receiver);
         self.preview_save_status = Some("Saving to Host…".to_owned());
+    }
+
+    /// Renames the loaded document to the drafted path, guarded by its version.
+    pub(crate) fn rename_preview_document(&mut self) {
+        if self.document_op_receiver.is_some() {
+            return;
+        }
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.document_op_status = Some("Select a connected session first.".into());
+            return;
+        };
+        let Some(document) = self.preview_document.clone() else {
+            self.document_op_status = Some("No text document is loaded to rename.".into());
+            return;
+        };
+        let destination = self.document_new_path.trim().to_owned();
+        if destination.is_empty() {
+            self.document_op_status = Some("Enter a destination path.".into());
+            return;
+        }
+        let source = document.host_path.clone();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let client = WorkspaceFilesClient::new(&transport);
+            let result = client
+                .rename(
+                    WorkspaceFileScope { session_id },
+                    source,
+                    destination,
+                    document.version,
+                )
+                .map(DocumentMutation::Renamed);
+            let _ = sender.send(result);
+        });
+        self.document_op_receiver = Some(receiver);
+        self.document_op_status = Some("Renaming on the Host…".to_owned());
+    }
+
+    /// Deletes the loaded document after a second click confirms the choice.
+    pub(crate) fn delete_preview_document(&mut self) {
+        if self.document_op_receiver.is_some() {
+            return;
+        }
+        if !self.document_delete_confirm {
+            self.document_delete_confirm = true;
+            self.document_op_status =
+                Some("Click Delete again to remove the file from the Host.".to_owned());
+            return;
+        }
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.document_op_status = Some("Select a connected session first.".into());
+            return;
+        };
+        let Some(document) = self.preview_document.clone() else {
+            self.document_op_status = Some("No text document is loaded to delete.".into());
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let client = WorkspaceFilesClient::new(&transport);
+            let result = client
+                .delete(
+                    WorkspaceFileScope { session_id },
+                    document.host_path,
+                    document.version,
+                )
+                .map(|_| DocumentMutation::Deleted);
+            let _ = sender.send(result);
+        });
+        self.document_op_receiver = Some(receiver);
+        self.document_delete_confirm = false;
+        self.document_op_status = Some("Deleting on the Host…".to_owned());
     }
 
     pub(crate) fn read_office_document(&mut self) {
@@ -3968,8 +4055,10 @@ impl DesktopApp {
                 "skills-query" => app.skills_query = text,
                 "document-path" => {
                     app.preview_path = text;
+                    app.document_delete_confirm = false;
                     app.read_document();
                 }
+                "document-new-path" => app.document_new_path = text,
                 "goal-objective" => app.goal_objective = text,
                 "goal-rounds" => app.goal_max_rounds = text,
                 "settings-draft" => app.host_settings_view.draft = Some(text),
@@ -5374,6 +5463,42 @@ impl DesktopApp {
                 }
             }
         }
+        if let Some(receiver) = &self.document_op_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(DocumentMutation::Renamed(result))) => {
+                    self.document_op_receiver = None;
+                    self.preview_path = result.path.clone();
+                    self.document_new_path.clear();
+                    self.document_op_status = Some(format!("Renamed to {}", result.path));
+                    if let Some(transport) = self.transport.as_ref() {
+                        self.explorer.refresh_root(transport);
+                    }
+                    self.read_document();
+                }
+                Ok(Ok(DocumentMutation::Deleted)) => {
+                    self.document_op_receiver = None;
+                    self.preview_document = None;
+                    self.preview_image = None;
+                    self.pending_preview_text = None;
+                    self.preview_draft.clear();
+                    self.document_op_status = Some("Deleted from the Host.".to_owned());
+                    if let Some(transport) = self.transport.as_ref() {
+                        self.explorer.refresh_root(transport);
+                    }
+                }
+                Ok(Err(error)) => {
+                    self.document_op_receiver = None;
+                    self.document_op_status = Some(format!("File change failed: {error}"));
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.document_op_receiver = None;
+                    self.document_op_status = Some("File worker stopped unexpectedly".into());
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.repaint_soon = true;
+                }
+            }
+        }
         if let Some(receiver) = &self.preview_receiver {
             match receiver.try_recv() {
                 Ok(Ok(document)) => {
@@ -5950,6 +6075,12 @@ fn append_stream_text(draft: &mut String, chunk: &serde_json::Value) {
 /// Path matches one palette query asks the Host for; the palette shows eight.
 const PALETTE_PATH_RESULTS: u64 = 20;
 
+/** Result of the document page's rename or delete action. */
+pub(crate) enum DocumentMutation {
+    Renamed(dsh_client_core::workspace_files::WorkspaceFileRenameResult),
+    Deleted,
+}
+
 const PREVIEW_IMAGE_LIMIT: usize = 16 * 1024 * 1024;
 /// Largest decoded image side accepted by the preview.
 const PREVIEW_IMAGE_MAX_DIMENSION: u32 = 8192;
@@ -6125,6 +6256,7 @@ fn has_pending_workers(app: &DesktopApp) -> bool {
         || app.schedule_delete_receiver.is_some()
         || app.handoff_receiver.is_some()
         || app.file_search_receiver.is_some()
+        || app.document_op_receiver.is_some()
         || app.palette_paths_receiver.is_some()
         || app.workspace_create_receiver.is_some()
         || app.terminal.inventory.is_some()

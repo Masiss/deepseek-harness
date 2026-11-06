@@ -241,3 +241,48 @@ describe('FsError identity', () => {
     expect((error as FsError).code).toBe('FS_SANDBOX_DENIED')
   })
 })
+
+describe('rename and remove under workspace-write', () => {
+  beforeEach(() => boot('workspace-write'))
+
+  it('renames and deletes inside the workspace', async () => {
+    await writeFile(join(workspace, 'a.txt'), 'one')
+    const source = await target(join(workspace, 'a.txt'))
+    await fs.rename(source, await target(join(workspace, 'b.txt')))
+    expect(await readFile(join(workspace, 'b.txt'), 'utf8')).toBe('one')
+    await fs.remove(await target(join(workspace, 'b.txt')))
+    expect(existsSync(join(workspace, 'b.txt'))).toBe(false)
+  })
+
+  it('denies a rename whose source or destination escapes the workspace', async () => {
+    await writeFile(join(workspace, 'a.txt'), 'one')
+    await writeFile(join(outside, 'o.txt'), 'two')
+    await expect(fs.rename(await target(join(workspace, 'a.txt')), await target(join(outside, 'moved.txt'))))
+      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    await expect(fs.rename(await target(join(outside, 'o.txt')), await target(join(workspace, 'in.txt'))))
+      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(existsSync(join(outside, 'moved.txt'))).toBe(false)
+    expect(existsSync(join(workspace, 'in.txt'))).toBe(false)
+  })
+
+  it('denies deleting a file outside the workspace', async () => {
+    await writeFile(join(outside, 'o.txt'), 'two')
+    await expect(fs.remove(await target(join(outside, 'o.txt'))))
+      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(existsSync(join(outside, 'o.txt'))).toBe(true)
+  })
+})
+
+describe('rename and remove under read-only', () => {
+  beforeEach(() => boot('read-only'))
+
+  it('denies both mutations', async () => {
+    await writeFile(join(workspace, 'a.txt'), 'one')
+    const source = await target(join(workspace, 'a.txt'))
+    await expect(fs.rename(source, await target(join(workspace, 'b.txt'))))
+      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    await expect(fs.remove(source))
+      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(existsSync(join(workspace, 'a.txt'))).toBe(true)
+  })
+})

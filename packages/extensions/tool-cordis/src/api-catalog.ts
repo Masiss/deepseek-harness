@@ -1203,6 +1203,17 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'target', description: 'the resolved target to edit.' }, { name: 'edit', description: 'the literal search/replace request.' }, { name: 'expected', description: 'the version guard; omit for an unconditional edit.' }, { name: 'signal', description: 'aborts before atomic publication takes effect.' }, { name: 'sandboxPolicy', description: 'the per-call mode and workspace root this edit runs under; a sandboxing backend fences the edit by it, the bare backend ignores it. Omit to leave the backend its own default.' }],
         returns: 'the outcome, including the version the edit produced.',
       },
+      {
+        signature: 'async rename( target: FsTarget, destination: FsTarget, expected?: { version: FsVersion }, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy, ): Promise<FsRenameOutcome>',
+        description: 'Move or rename one existing entry without crossing the provider\'s execution world. A backend that cannot do this refuses instead of emulating it with read-and-write, which would lose permissions and links.',
+        parameters: [{ name: 'target', description: 'the resolved source entry.' }, { name: 'destination', description: 'the resolved destination entry, which must be absent.' }, { name: 'expected', description: 'the source version guard; omit for an unconditional rename.' }, { name: 'signal', description: 'aborts before the move takes effect.' }, { name: 'sandboxPolicy', description: 'the per-call mode and workspace root this rename runs under; a sandboxing backend fences both source and destination.' }],
+        returns: 'the destination version after the rename.',
+      },
+      {
+        signature: 'async remove( target: FsTarget, expected?: { version: FsVersion }, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy, ): Promise<void>',
+        description: 'Delete one regular file. Directory removal stays out: a recursive delete is a different permission decision from deleting a file.',
+        parameters: [{ name: 'target', description: 'the resolved regular file to delete.' }, { name: 'expected', description: 'the version guard; omit for an unconditional delete.' }, { name: 'signal', description: 'aborts before the delete takes effect.' }, { name: 'sandboxPolicy', description: 'the per-call mode and workspace root this delete runs under; a sandboxing backend fences it.' }],
+      },
     ],
   },
   {
@@ -4033,6 +4044,18 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the file\'s identity, version, operation, and before/after content.',
       },
       {
+        signature: '@Remote async rename( workspaceFileScope: WorkspaceFileScope, path: string, destination: string, expectedVersion: string | undefined, signal: AbortSignal, ): Promise<WorkspaceFileRenameResult>',
+        description: 'Move one existing file, optionally guarded by the version the caller read.',
+        parameters: [{ name: 'workspaceFileScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'path', description: 'source path, absolute or relative to the workspace root.' }, { name: 'destination', description: 'destination path, absolute or relative to the workspace root; it must be absent.' }, { name: 'expectedVersion', description: 'freshness token from the preceding read/stat; omit for an unconditional rename.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'both paths, the canonical destination, and its new version.',
+      },
+      {
+        signature: '@Remote async delete( workspaceFileScope: WorkspaceFileScope, path: string, expectedVersion: string | undefined, signal: AbortSignal, ): Promise<WorkspaceFileDeleteResult>',
+        description: 'Delete one regular file, optionally guarded by the version the caller read.',
+        parameters: [{ name: 'workspaceFileScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'path', description: 'file path, absolute or relative to the workspace root.' }, { name: 'expectedVersion', description: 'freshness token from the preceding read/stat; omit for an unconditional delete.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the caller\'s path and the canonical path that was deleted.',
+      },
+      {
         signature: '@Remote async list(workspaceFileScope: WorkspaceFileScope, path: string, signal: AbortSignal): Promise<WorkspaceDirectoryListing>',
         description: 'List the direct children of one directory inside the Session\'s workspace.',
         parameters: [{ name: 'workspaceFileScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'path', description: 'workspace path, absolute or relative to the workspace root.' }, { name: 'signal', description: 'caller cancellation.' }],
@@ -4043,6 +4066,12 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         description: 'Search workspace text files for a literal query, bounded by caller caps. Symlinks are not followed, binary files (carrying a NUL byte in the first megabyte) and files above that cap are skipped, and at most one `maxFiles` files are scanned in depth-first order.',
         parameters: [{ name: 'workspaceFileScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'query', description: 'non-empty literal substring to find.' }, { name: 'options', description: 'caller bounds for scanned files and returned matches.' }, { name: 'signal', description: 'caller cancellation.' }],
         returns: 'matching lines plus a truncation flag when any cap dropped content.',
+      },
+      {
+        signature: '@Remote async searchPaths( workspaceFileScope: WorkspaceFileScope, query: string, options: WorkspacePathSearchOptions | undefined, signal: AbortSignal, ): Promise<WorkspacePathSearchValue>',
+        description: 'Search workspace paths for a literal substring, bounded by caller caps. Symlinks are not followed and no file content is read, so this stays cheap enough to run while a palette filters on every keystroke.',
+        parameters: [{ name: 'workspaceFileScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'query', description: 'non-empty literal substring of the relative path.' }, { name: 'options', description: 'caller bounds for examined files and returned paths.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'matching relative paths plus a truncation flag when any cap dropped content.',
       },
       {
         signature: '@Remote({ mode: \'stream\' }) changes(workspaceFileScope: WorkspaceFileScope, path: string, signal: AbortSignal): AsyncIterable<WorkspaceFileWatchFrame>',
@@ -5690,6 +5719,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'FsPathInfo',
     declaration: 'export interface FsPathInfo {\n    version: FsVersion;\n    type: \'file\' | \'directory\' | \'symlink\' | \'other\';\n    size?: number;\n}',
+  },
+  {
+    name: 'FsRenameOutcome',
+    declaration: 'export interface FsRenameOutcome {\n    readonly version: FsVersion;\n}',
   },
   {
     name: 'FsTarget',
@@ -9048,12 +9081,20 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type WorkspaceFileChange = {\n    readonly absolutePath: string;\n    readonly version: string;\n} | {\n    readonly absolutePath: string;\n    readonly absent: true;\n};',
   },
   {
+    name: 'WorkspaceFileDeleteResult',
+    declaration: 'export interface WorkspaceFileDeleteResult {\n    readonly path: string;\n    readonly absolutePath: string;\n}',
+  },
+  {
     name: 'WorkspaceFileDiff',
     declaration: 'export type WorkspaceFileDiff = {\n    kind: \'text\';\n    path: string;\n    display: string;\n    before: boolean;\n    after: boolean;\n    hunks: WorkspaceDiffHunk[];\n    coarse: boolean;\n} | {\n    kind: \'binary\';\n    path: string;\n    display: string;\n} | {\n    kind: \'oversized\';\n    path: string;\n    display: string;\n};',
   },
   {
     name: 'WorkspaceFileRange',
     declaration: 'export interface WorkspaceFileRange {\n    readonly offset?: number;\n    readonly limit?: number;\n}',
+  },
+  {
+    name: 'WorkspaceFileRenameResult',
+    declaration: 'export interface WorkspaceFileRenameResult {\n    readonly previousPath: string;\n    readonly path: string;\n    readonly absolutePath: string;\n    readonly version: string;\n}',
   },
   {
     name: 'WorkspaceFileScope',
@@ -9094,6 +9135,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'WorkspaceOrderValue',
     declaration: 'export interface WorkspaceOrderValue {\n    readonly workspaceIds: readonly WorkspaceId[];\n}',
+  },
+  {
+    name: 'WorkspacePathSearchOptions',
+    declaration: 'export interface WorkspacePathSearchOptions {\n    readonly maxResults?: number;\n    readonly maxFiles?: number;\n}',
+  },
+  {
+    name: 'WorkspacePathSearchValue',
+    declaration: 'export interface WorkspacePathSearchValue {\n    readonly paths: readonly string[];\n    readonly truncated: boolean;\n}',
   },
   {
     name: 'WorkspacePinSessionRequest',

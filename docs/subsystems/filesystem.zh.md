@@ -150,6 +150,8 @@ interface FsWriteOutcome {
 
 `editText` 是提供方级别的变更操作，而非在别处组合的 `read` 加 `write`。带守卫时，它在字面匹配之前先验证预期版本（因此对陈旧内容的编辑报 `FS_STALE_VERSION`，而非对更新内容的匹配失败）；不带守卫时，它编辑当前内容。无论哪种路径，它都应用替换并原子写入——将匹配、行尾处理、陈旧检查和原子替换保持在一个变更临界区内——目标缺失时两条路径都报 `FS_STALE_VERSION`。
 
+`rename` 与 `remove` 也是提供方级别的变更操作，但它们是虚方法而非抽象方法：无法移动或删除的后端返回诚实的 `FS_IO_ERROR` 拒绝，而不是用「读取再写入」模拟移动，因为后者会丢失权限和链接。`rename` 要求目标不存在（`FS_ALREADY_EXISTS`），守卫源版本并返回目标版本；`remove` 只删除单个常规文件并拒绝目录，因为递归删除属于另一类权限决策。沙箱后端会同时约束 rename 的两端以及删除目标。
+
 ```ts type-equiv
 /** A literal-replacement edit request. */
 interface FsEditRequest {
@@ -264,6 +266,7 @@ type FsErrorCode =
   | 'FS_NOT_OBSERVED'
   | 'FS_AMBIGUOUS_EDIT'
   | 'FS_EDIT_NOT_FOUND'
+  | 'FS_ALREADY_EXISTS'
   | 'FS_ABORTED'
 ```
 
@@ -275,7 +278,7 @@ type FsErrorCode =
 
 ## 服务与插件
 
-`FileSystem`（`ctx.fs`，abstract）拥有提供方原语：`resolve`、`processPath`、`processPathFromHostPath`、`fileUrl`、`contains`、`stat`、`lstat`、`readText`、`streamText`、`readBytes`、`listDir`、`writeText` 与 `editText`。`dsh-fs-observation-policy` **不注册服务**。它通过 `fs/*` 事件门禁添加策略，根据未见、缺失或存在状态对写入与编辑意图 waterfall 作出决策，并记录 `FsObservation` 值。执行器是 `dsh-tool-fs`：它通过 `ctx.fs` 读取、写入或编辑，分发 waterfall，并 emit 记录事件。下方生成的 [`ctx.fs` 小节](#ctxfs--filesystem-abstract-seam) 展示确切的 `ctx.fs` 签名。
+`FileSystem`（`ctx.fs`，abstract）拥有提供方原语：`resolve`、`processPath`、`processPathFromHostPath`、`fileUrl`、`contains`、`stat`、`lstat`、`readText`、`streamText`、`readBytes`、`listDir`、`writeText`、`editText`、`rename` 与 `remove`。`dsh-fs-observation-policy` **不注册服务**。它通过 `fs/*` 事件门禁添加策略，根据未见、缺失或存在状态对写入与编辑意图 waterfall 作出决策，并记录 `FsObservation` 值。执行器是 `dsh-tool-fs`：它通过 `ctx.fs` 读取、写入或编辑，分发 waterfall，并 emit 记录事件。下方生成的 [`ctx.fs` 小节](#ctxfs--filesystem-abstract-seam) 展示确切的 `ctx.fs` 签名。
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -458,6 +461,31 @@ abstract writeText( target: FsTarget, content: string, expected?: FsWriteIntent,
  * @returns the outcome, including the version the edit produced.
  */
 abstract editText( target: FsTarget, edit: FsEditRequest, expected?: { version: FsVersion }, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy, ): Promise<FsEditOutcome>
+
+/**
+ * Move or rename one existing entry without crossing the provider's
+ * execution world. A backend that cannot do this refuses instead of
+ * emulating it with read-and-write, which would lose permissions and links.
+ * @param target - the resolved source entry.
+ * @param destination - the resolved destination entry, which must be absent.
+ * @param expected - the source version guard; omit for an unconditional rename.
+ * @param signal - aborts before the move takes effect.
+ * @param sandboxPolicy - the per-call mode and workspace root this rename runs
+ *   under; a sandboxing backend fences both source and destination.
+ * @returns the destination version after the rename.
+ */
+async rename( target: FsTarget, destination: FsTarget, expected?: { version: FsVersion }, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy, ): Promise<FsRenameOutcome>
+
+/**
+ * Delete one regular file. Directory removal stays out: a recursive delete is
+ * a different permission decision from deleting a file.
+ * @param target - the resolved regular file to delete.
+ * @param expected - the version guard; omit for an unconditional delete.
+ * @param signal - aborts before the delete takes effect.
+ * @param sandboxPolicy - the per-call mode and workspace root this delete runs
+ *   under; a sandboxing backend fences it.
+ */
+async remove( target: FsTarget, expected?: { version: FsVersion }, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy, ): Promise<void>
 ```
 
 Types: [SandboxExecutionPolicy](sandbox.zh.md)

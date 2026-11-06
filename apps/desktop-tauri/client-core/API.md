@@ -111,6 +111,8 @@ Every plain request is a POST unless noted otherwise. `request` and `response` u
 | `workspaceFiles/stat` | `{workspaceFileScope, path}` | `WorkspaceFileStat` | Desktop |
 | `workspaceFiles/list` | `{workspaceFileScope, path}` | `WorkspaceDirectoryListing` | Desktop |
 | `workspaceFiles/searchPaths` | `{workspaceFileScopeId: SessionId, query, options?}` | `{paths, truncated}` | Desktop |
+| `workspaceFiles/rename` | `{workspaceFileScopeId: SessionId, path, destination, expectedVersion?}` | `{previousPath, path, absolutePath, version}` | Desktop |
+| `workspaceFiles/delete` | `{workspaceFileScopeId: SessionId, path, expectedVersion?}` | `{path, absolutePath}` | Desktop |
 | `/api/file` (`GET`/`HEAD`) | query `path=<absolute path>` | authenticated bounded file `Response` | Desktop exact Fetch route |
 
 ## Streams

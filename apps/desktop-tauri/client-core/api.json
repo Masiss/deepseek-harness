@@ -695,6 +695,22 @@
       "mount": "desktop (web-app bundle)"
     },
     {
+      "path": "workspaceFiles/rename",
+      "method": "POST",
+      "request": "{workspaceFileScopeId: SessionId, path: string, destination: string, expectedVersion?: string}",
+      "response": "{previousPath, path, absolutePath, version}",
+      "kind": "plain",
+      "mount": "desktop (web-app bundle)"
+    },
+    {
+      "path": "workspaceFiles/delete",
+      "method": "POST",
+      "request": "{workspaceFileScopeId: SessionId, path: string, expectedVersion?: string}",
+      "response": "{path, absolutePath}",
+      "kind": "plain",
+      "mount": "desktop (web-app bundle)"
+    },
+    {
       "path": "session/file",
       "method": "GET/HEAD",
       "request": "query ?path=<absolute path>",
@@ -790,8 +806,8 @@
     }
   ],
   "counts": {
-    "requests": 83,
+    "requests": 85,
     "streams": 12,
-    "plainRequests": 83
+    "plainRequests": 85
   }
 }

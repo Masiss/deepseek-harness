@@ -39,6 +39,8 @@ import type {
   WorkspaceFileBytes,
   WorkspaceFileRange,
   WorkspaceFileStat,
+  WorkspaceFileDeleteResult,
+  WorkspaceFileRenameResult,
   WorkspaceFileText,
   WorkspaceFileWatchFrame,
   WorkspaceFileWriteResult,
@@ -358,6 +360,109 @@ export class WorkspaceFiles extends TypertRemoteService {
       operation: outcome.operation,
       before: outcome.before,
       after: outcome.after,
+    }
+  }
+
+  /**
+   * Move one existing file, optionally guarded by the version the caller read.
+   * @param workspaceFileScope - header-derived workspace root for the Session identity on the wire.
+   * @param path - source path, absolute or relative to the workspace root.
+   * @param destination - destination path, absolute or relative to the workspace root; it must be absent.
+   * @param expectedVersion - freshness token from the preceding read/stat; omit for an unconditional rename.
+   * @param signal - caller cancellation.
+   * @returns both paths, the canonical destination, and its new version.
+   */
+  @Remote
+  async rename(
+    workspaceFileScope: WorkspaceFileScope,
+    path: string,
+    destination: string,
+    expectedVersion: string | undefined,
+    signal: AbortSignal,
+  ): Promise<WorkspaceFileRenameResult> {
+    if (path.length === 0 || destination.length === 0) {
+      throw new RemoteError('gateway/bad-request', 'path and destination are required', {})
+    }
+    if (path === destination) {
+      throw new RemoteError('gateway/bad-request', 'destination must differ from path', {})
+    }
+    const { workspaceRoot } = workspaceFileScope
+    const source = await this.ctx.fs.resolve(path, { cwd: workspaceRoot, signal })
+    const target = await this.ctx.fs.resolve(destination, { cwd: workspaceRoot, signal })
+    const outcome = await this.mutation(
+      path,
+      () => this.ctx.fs.rename(
+        source,
+        target,
+        expectedVersion === undefined ? undefined : { version: expectedVersion as FsVersion },
+        signal,
+      ),
+    )
+    return {
+      previousPath: path,
+      path: destination,
+      absolutePath: this.ctx.fs.processPath(target),
+      version: outcome.version,
+    }
+  }
+
+  /**
+   * Delete one regular file, optionally guarded by the version the caller read.
+   * @param workspaceFileScope - header-derived workspace root for the Session identity on the wire.
+   * @param path - file path, absolute or relative to the workspace root.
+   * @param expectedVersion - freshness token from the preceding read/stat; omit for an unconditional delete.
+   * @param signal - caller cancellation.
+   * @returns the caller's path and the canonical path that was deleted.
+   */
+  @Remote
+  async delete(
+    workspaceFileScope: WorkspaceFileScope,
+    path: string,
+    expectedVersion: string | undefined,
+    signal: AbortSignal,
+  ): Promise<WorkspaceFileDeleteResult> {
+    if (path.length === 0) {
+      throw new RemoteError('gateway/bad-request', 'path is required', {})
+    }
+    const { workspaceRoot } = workspaceFileScope
+    const target = await this.ctx.fs.resolve(path, { cwd: workspaceRoot, signal })
+    const absolutePath = this.ctx.fs.processPath(target)
+    await this.mutation(
+      path,
+      () => this.ctx.fs.remove(
+        target,
+        expectedVersion === undefined ? undefined : { version: expectedVersion as FsVersion },
+        signal,
+      ),
+    )
+    return { path, absolutePath }
+  }
+
+  /**
+   * Translate the backend's mutation codes into this namespace's vocabulary.
+   * @param path - caller-supplied path named in the error detail.
+   * @param run - the backend mutation to await.
+   * @returns the backend result.
+   */
+  private async mutation<T>(path: string, run: () => Promise<T>): Promise<T> {
+    try {
+      return await run()
+    } catch (error: unknown) {
+      if (typeof error === 'object' && error !== null && 'code' in error) {
+        switch (error.code) {
+          case 'FS_STALE_VERSION':
+            throw new RemoteError('workspace-file/stale-version', `"${path}" changed since it was read`, { path })
+          case 'FS_ALREADY_EXISTS':
+            throw new RemoteError('workspace-file/already-exists', `"${path}" already exists`, { path })
+          case 'FS_NOT_FOUND':
+            throw new RemoteError('workspace-file/not-found', `"${path}" does not exist`, { path })
+          case 'FS_NOT_REGULAR_FILE':
+            throw new RemoteError('workspace-file/not-regular-file', `"${path}" is not a file`, { path, kind: 'directory' })
+          default:
+            break
+        }
+      }
+      throw error
     }
   }
 

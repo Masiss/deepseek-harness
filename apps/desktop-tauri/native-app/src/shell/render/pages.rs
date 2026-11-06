@@ -1685,6 +1685,7 @@ fn document(
     let path = app.preview_path.clone();
     let office = DesktopApp::is_office_path_now(&path);
     let input = app.text_field("document-path", "Host file path", false, cx);
+    let rename_input = app.text_field("document-new-path", "New path", false, cx);
 
     let mut content = body(theme)
         .child(
@@ -1777,6 +1778,59 @@ fn document(
                             })),
                     )
                     .when_some(app.preview_save_status.clone(), |element, status| {
+                        element.child(line(theme, status))
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(theme.sp(6.))
+                    .child(
+                        div()
+                            .w(theme.sp(220.))
+                            .h(theme.control_height())
+                            .px(theme.sp(6.))
+                            .rounded(theme.corner())
+                            .border_1()
+                            .border_color(theme.border)
+                            .bg(theme.code_background)
+                            .overflow_hidden()
+                            .child(crate::shell::text_input::text_input_element(
+                                &rename_input,
+                                theme,
+                                theme.control_height() - px(2.),
+                            )),
+                    )
+                    .child(
+                        widgets::Button::new(theme, "Rename")
+                            .enabled(app.transport.is_some() && app.document_op_receiver.is_none())
+                            .build()
+                            .id("document-rename")
+                            .on_click(cx.listener(|app, _, _, cx| {
+                                app.rename_preview_document();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        widgets::Button::new(
+                            theme,
+                            if app.document_delete_confirm {
+                                "Confirm delete"
+                            } else {
+                                "Delete"
+                            },
+                        )
+                        .enabled(app.transport.is_some() && app.document_op_receiver.is_none())
+                        .build()
+                        .id("document-delete")
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.delete_preview_document();
+                            cx.notify();
+                        })),
+                    )
+                    .when_some(app.document_op_status.clone(), |element, status| {
                         element.child(line(theme, status))
                     }),
             )

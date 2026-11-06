@@ -18,6 +18,7 @@ import type {
   FsInfo,
   FsPathInfo,
   FsObservation,
+  FsRenameOutcome,
   FsTarget,
   FsVersion,
   FsWriteIntent,
@@ -37,6 +38,7 @@ export type {
   FsInfo,
   FsObservation,
   FsPathInfo,
+  FsRenameOutcome,
   FsTarget,
   FsWriteIntent,
   FsWriteOutcome,
@@ -291,6 +293,55 @@ export abstract class FileSystem extends Service {
     signal?: AbortSignal,
     sandboxPolicy?: SandboxExecutionPolicy,
   ): Promise<FsEditOutcome>
+
+  /**
+   * Move or rename one existing entry without crossing the provider's
+   * execution world. A backend that cannot do this refuses instead of
+   * emulating it with read-and-write, which would lose permissions and links.
+   * @param target - the resolved source entry.
+   * @param destination - the resolved destination entry, which must be absent.
+   * @param expected - the source version guard; omit for an unconditional rename.
+   * @param signal - aborts before the move takes effect.
+   * @param sandboxPolicy - the per-call mode and workspace root this rename runs
+   *   under; a sandboxing backend fences both source and destination.
+   * @returns the destination version after the rename.
+   */
+  async rename(
+    target: FsTarget,
+    destination: FsTarget,
+    expected?: { version: FsVersion },
+    signal?: AbortSignal,
+    sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<FsRenameOutcome> {
+    void target
+    void destination
+    void expected
+    void sandboxPolicy
+    if (signal?.aborted === true) throw new FsError('rename aborted', 'FS_ABORTED')
+    throw new FsError('Renaming is not supported by this filesystem provider.', 'FS_IO_ERROR')
+  }
+
+  /**
+   * Delete one regular file. Directory removal stays out: a recursive delete is
+   * a different permission decision from deleting a file.
+   * @param target - the resolved regular file to delete.
+   * @param expected - the version guard; omit for an unconditional delete.
+   * @param signal - aborts before the delete takes effect.
+   * @param sandboxPolicy - the per-call mode and workspace root this delete runs
+   *   under; a sandboxing backend fences it.
+   */
+  async remove(
+    target: FsTarget,
+    expected?: { version: FsVersion },
+    signal?: AbortSignal,
+    sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<void> {
+    void target
+    void expected
+    void sandboxPolicy
+    if (signal?.aborted === true) throw new FsError('delete aborted', 'FS_ABORTED')
+    throw new FsError('Deleting is not supported by this filesystem provider.', 'FS_IO_ERROR')
+  }
 }
 
 export default FileSystem

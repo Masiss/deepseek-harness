@@ -614,6 +614,27 @@ Host Remote file reads and workspace directory observations over the composed fi
 @Remote async write( workspaceFileScope: WorkspaceFileScope, path: string, content: string, expectedVersion: string | undefined, signal: AbortSignal, ): Promise<WorkspaceFileWriteResult>
 
 /**
+ * Move one existing file, optionally guarded by the version the caller read.
+ * @param workspaceFileScope - header-derived workspace root for the Session identity on the wire.
+ * @param path - source path, absolute or relative to the workspace root.
+ * @param destination - destination path, absolute or relative to the workspace root; it must be absent.
+ * @param expectedVersion - freshness token from the preceding read/stat; omit for an unconditional rename.
+ * @param signal - caller cancellation.
+ * @returns both paths, the canonical destination, and its new version.
+ */
+@Remote async rename( workspaceFileScope: WorkspaceFileScope, path: string, destination: string, expectedVersion: string | undefined, signal: AbortSignal, ): Promise<WorkspaceFileRenameResult>
+
+/**
+ * Delete one regular file, optionally guarded by the version the caller read.
+ * @param workspaceFileScope - header-derived workspace root for the Session identity on the wire.
+ * @param path - file path, absolute or relative to the workspace root.
+ * @param expectedVersion - freshness token from the preceding read/stat; omit for an unconditional delete.
+ * @param signal - caller cancellation.
+ * @returns the caller's path and the canonical path that was deleted.
+ */
+@Remote async delete( workspaceFileScope: WorkspaceFileScope, path: string, expectedVersion: string | undefined, signal: AbortSignal, ): Promise<WorkspaceFileDeleteResult>
+
+/**
  * List the direct children of one directory inside the Session's workspace.
  * @param workspaceFileScope - header-derived workspace root for the Session identity on the wire.
  * @param path - workspace path, absolute or relative to the workspace root.
@@ -634,6 +655,18 @@ Host Remote file reads and workspace directory observations over the composed fi
  * @returns matching lines plus a truncation flag when any cap dropped content.
  */
 @Remote async search( workspaceFileScope: WorkspaceFileScope, query: string, options: WorkspaceSearchOptions | undefined, signal: AbortSignal, ): Promise<WorkspaceSearchValue>
+
+/**
+ * Search workspace paths for a literal substring, bounded by caller caps.
+ * Symlinks are not followed and no file content is read, so this stays cheap
+ * enough to run while a palette filters on every keystroke.
+ * @param workspaceFileScope - header-derived workspace root for the Session identity on the wire.
+ * @param query - non-empty literal substring of the relative path.
+ * @param options - caller bounds for examined files and returned paths.
+ * @param signal - caller cancellation.
+ * @returns matching relative paths plus a truncation flag when any cap dropped content.
+ */
+@Remote async searchPaths( workspaceFileScope: WorkspaceFileScope, query: string, options: WorkspacePathSearchOptions | undefined, signal: AbortSignal, ): Promise<WorkspacePathSearchValue>
 
 /**
  * Watch one file or a directory's direct entries in the Session's filesystem.

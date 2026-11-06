@@ -30,7 +30,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { LocalFileSystem } from '@deepseek-ai/dsh-fs-local'
 import type { Config as LocalConfig } from '@deepseek-ai/dsh-fs-local'
 import { FsError } from '@deepseek-ai/dsh-fs'
-import type { FsEditOutcome, FsEditRequest, FsTarget, FsVersion, FsWriteIntent, FsWriteOutcome } from '@deepseek-ai/dsh-fs'
+import type { FsEditOutcome, FsEditRequest, FsRenameOutcome, FsTarget, FsVersion, FsWriteIntent, FsWriteOutcome } from '@deepseek-ai/dsh-fs'
 import { writableRoots } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
@@ -85,6 +85,46 @@ export class SandboxedFileSystem extends LocalFileSystem {
     sandboxPolicy?: SandboxExecutionPolicy,
   ): Promise<FsWriteOutcome> {
     return super.writeText(await this.checkedTarget(target, sandboxPolicy), content, expected, signal)
+  }
+
+  /**
+   * Fence both ends of a rename by the per-call policy, then delegate.
+   * @param target - the resolved source entry.
+   * @param destination - the resolved destination entry.
+   * @param expected - the source version guard; omit for an unconditional rename.
+   * @param signal - aborts before the move takes effect.
+   * @param sandboxPolicy - the per-call mode and workspace root.
+   * @returns the destination version from the inherited backend.
+   */
+  override async rename(
+    target: FsTarget,
+    destination: FsTarget,
+    expected?: { version: FsVersion },
+    signal?: AbortSignal,
+    sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<FsRenameOutcome> {
+    return super.rename(
+      await this.checkedTarget(target, sandboxPolicy),
+      await this.checkedTarget(destination, sandboxPolicy),
+      expected,
+      signal,
+    )
+  }
+
+  /**
+   * Fence a delete by the per-call policy, then delegate.
+   * @param target - the resolved regular file to delete.
+   * @param expected - the version guard; omit for an unconditional delete.
+   * @param signal - aborts before the delete takes effect.
+   * @param sandboxPolicy - the per-call mode and workspace root.
+   */
+  override async remove(
+    target: FsTarget,
+    expected?: { version: FsVersion },
+    signal?: AbortSignal,
+    sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<void> {
+    return super.remove(await this.checkedTarget(target, sandboxPolicy), expected, signal)
   }
 
   /**

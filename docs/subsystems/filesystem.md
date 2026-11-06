@@ -150,6 +150,8 @@ interface FsWriteOutcome {
 
 `editText` is a provider-level mutation, not a `read` plus `write` composed elsewhere. When guarded it verifies the expected version BEFORE literal matching (so a stale edit reports `FS_STALE_VERSION`, not a match failure against newer content); unguarded it edits the current content. Either way it applies the replacement and writes atomically — keeping matching, line-ending handling, the stale check, and atomic replacement inside one mutation critical section — and a missing target reports `FS_STALE_VERSION` on both paths.
 
+`rename` and `remove` are provider mutations too, but they are virtual rather than abstract: a backend that cannot move or delete returns the honest `FS_IO_ERROR` refusal instead of emulating a move with read-and-write, which would lose permissions and links. `rename` needs an absent destination (`FS_ALREADY_EXISTS`), guards the source version, and returns the destination version; `remove` deletes one regular file and refuses directories, because recursive deletion is a different permission decision. The sandboxing backend fences both ends of a rename and the delete target.
+
 ```ts type-equiv
 /** A literal-replacement edit request. */
 interface FsEditRequest {
@@ -264,6 +266,7 @@ type FsErrorCode =
   | 'FS_NOT_OBSERVED'
   | 'FS_AMBIGUOUS_EDIT'
   | 'FS_EDIT_NOT_FOUND'
+  | 'FS_ALREADY_EXISTS'
   | 'FS_ABORTED'
 ```
 
@@ -275,7 +278,7 @@ type FsErrorCode =
 
 ## The service and the plugin
 
-`FileSystem` (`ctx.fs`, abstract) owns the provider primitives: `resolve`, `processPath`, `processPathFromHostPath`, `fileUrl`, `contains`, `stat`, `lstat`, `readText`, `streamText`, `readBytes`, `listDir`, `writeText`, and `editText`. `dsh-fs-observation-policy` registers **no service** — it is a plugin that adds policy through the `fs/*` event gate: it decides the write/edit intent waterfalls from unseen/absent/present state and records `FsObservation` values. The executor is `dsh-tool-fs`: it reads/writes/edits through `ctx.fs`, dispatches the waterfalls, and emits the recording event. The generated [`ctx.fs` section](#ctxfs--filesystem-abstract-seam) below shows the exact signatures.
+`FileSystem` (`ctx.fs`, abstract) owns the provider primitives: `resolve`, `processPath`, `processPathFromHostPath`, `fileUrl`, `contains`, `stat`, `lstat`, `readText`, `streamText`, `readBytes`, `listDir`, `writeText`, `editText`, `rename`, and `remove`. `dsh-fs-observation-policy` registers **no service** — it is a plugin that adds policy through the `fs/*` event gate: it decides the write/edit intent waterfalls from unseen/absent/present state and records `FsObservation` values. The executor is `dsh-tool-fs`: it reads/writes/edits through `ctx.fs`, dispatches the waterfalls, and emits the recording event. The generated [`ctx.fs` section](#ctxfs--filesystem-abstract-seam) below shows the exact signatures.
 
 <!-- BEGIN GENERATED cordis-surface (gen-cordis-catalog.ts) — do not edit between markers -->
 
@@ -458,6 +461,31 @@ abstract writeText( target: FsTarget, content: string, expected?: FsWriteIntent,
  * @returns the outcome, including the version the edit produced.
  */
 abstract editText( target: FsTarget, edit: FsEditRequest, expected?: { version: FsVersion }, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy, ): Promise<FsEditOutcome>
+
+/**
+ * Move or rename one existing entry without crossing the provider's
+ * execution world. A backend that cannot do this refuses instead of
+ * emulating it with read-and-write, which would lose permissions and links.
+ * @param target - the resolved source entry.
+ * @param destination - the resolved destination entry, which must be absent.
+ * @param expected - the source version guard; omit for an unconditional rename.
+ * @param signal - aborts before the move takes effect.
+ * @param sandboxPolicy - the per-call mode and workspace root this rename runs
+ *   under; a sandboxing backend fences both source and destination.
+ * @returns the destination version after the rename.
+ */
+async rename( target: FsTarget, destination: FsTarget, expected?: { version: FsVersion }, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy, ): Promise<FsRenameOutcome>
+
+/**
+ * Delete one regular file. Directory removal stays out: a recursive delete is
+ * a different permission decision from deleting a file.
+ * @param target - the resolved regular file to delete.
+ * @param expected - the version guard; omit for an unconditional delete.
+ * @param signal - aborts before the delete takes effect.
+ * @param sandboxPolicy - the per-call mode and workspace root this delete runs
+ *   under; a sandboxing backend fences it.
+ */
+async remove( target: FsTarget, expected?: { version: FsVersion }, signal?: AbortSignal, sandboxPolicy?: SandboxExecutionPolicy, ): Promise<void>
 ```
 
 Types: [SandboxExecutionPolicy](sandbox.md)

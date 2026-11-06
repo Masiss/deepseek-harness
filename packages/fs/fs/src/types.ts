@@ -185,7 +185,14 @@ export type FsErrorCode =
   | 'FS_NOT_OBSERVED'
   | 'FS_AMBIGUOUS_EDIT'
   | 'FS_EDIT_NOT_FOUND'
+  | 'FS_ALREADY_EXISTS'
   | 'FS_ABORTED'
+
+/** Result of one atomic rename; the destination version guards the next mutation. */
+export interface FsRenameOutcome {
+  /** Version the destination carries after the rename. */
+  readonly version: FsVersion
+}
 
 /**
  * Typed filesystem error. Extends {@link HarnessError} so it carries a stable

@@ -153,6 +153,24 @@ pub struct WorkspaceSearchValue {
     pub truncated: bool,
 }
 
+/// Result of one workspace file rename.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceFileRenameResult {
+    pub previous_path: String,
+    pub path: String,
+    pub absolute_path: String,
+    pub version: String,
+}
+
+/// Result of one workspace file delete.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceFileDeleteResult {
+    pub path: String,
+    pub absolute_path: String,
+}
+
 /// Result of one bounded workspace path search.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -250,6 +268,42 @@ impl<'a> WorkspaceFilesClient<'a> {
                 "workspaceFileScopeId": scope.session_id,
                 "query": query.into(),
                 "options": {}
+            }),
+        )
+    }
+
+    /// Moves one file, guarded by the version the caller read.
+    pub fn rename(
+        &self,
+        scope: WorkspaceFileScope,
+        path: impl Into<String>,
+        destination: impl Into<String>,
+        expected_version: Option<String>,
+    ) -> Result<WorkspaceFileRenameResult, Error> {
+        self.call(
+            "workspaceFiles/rename",
+            serde_json::json!({
+                "workspaceFileScopeId": scope.session_id,
+                "path": path.into(),
+                "destination": destination.into(),
+                "expectedVersion": expected_version,
+            }),
+        )
+    }
+
+    /// Deletes one file, guarded by the version the caller read.
+    pub fn delete(
+        &self,
+        scope: WorkspaceFileScope,
+        path: impl Into<String>,
+        expected_version: Option<String>,
+    ) -> Result<WorkspaceFileDeleteResult, Error> {
+        self.call(
+            "workspaceFiles/delete",
+            serde_json::json!({
+                "workspaceFileScopeId": scope.session_id,
+                "path": path.into(),
+                "expectedVersion": expected_version,
             }),
         )
     }

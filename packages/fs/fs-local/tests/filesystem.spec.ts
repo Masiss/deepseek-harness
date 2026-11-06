@@ -835,3 +835,53 @@ describe('HMR / disposal', () => {
     expect(local.fs).toBeUndefined()
   })
 })
+
+describe('rename and remove', () => {
+  it('renames a file and reports the destination version', async () => {
+    await writeFile(join(dir, 'a.txt'), 'one\n')
+    const source = await fs.resolve('a.txt')
+    const destination = await fs.resolve('b.txt')
+    const outcome = await fs.rename(source, destination, { version: await versionOf(source) })
+    await expect(readFile(join(dir, 'b.txt'), 'utf8')).resolves.toBe('one\n')
+    await expect(readFile(join(dir, 'a.txt'), 'utf8')).rejects.toThrow()
+    expect(outcome.version).toBe(await versionOf(destination))
+  })
+
+  it('refuses a stale source, a missing source, and an occupied destination', async () => {
+    await writeFile(join(dir, 'a.txt'), 'one\n')
+    await writeFile(join(dir, 'b.txt'), 'two\n')
+    const source = await fs.resolve('a.txt')
+    const destination = await fs.resolve('b.txt')
+    await expect(fs.rename(source, destination, { version: FsVersion('stale') }))
+      .rejects.toMatchObject({ code: 'FS_STALE_VERSION' })
+    await expect(fs.rename(await fs.resolve('missing.txt'), await fs.resolve('c.txt')))
+      .rejects.toMatchObject({ code: 'FS_NOT_FOUND' })
+    await expect(fs.rename(source, destination))
+      .rejects.toMatchObject({ code: 'FS_ALREADY_EXISTS' })
+  })
+
+  it('deletes a guarded file and refuses stale, missing, and directory targets', async () => {
+    await writeFile(join(dir, 'a.txt'), 'one\n')
+    const target = await fs.resolve('a.txt')
+    await expect(fs.remove(target, { version: FsVersion('stale') }))
+      .rejects.toMatchObject({ code: 'FS_STALE_VERSION' })
+    await expect(fs.remove(await fs.resolve('missing.txt')))
+      .rejects.toMatchObject({ code: 'FS_NOT_FOUND' })
+    await expect(fs.remove(await fs.resolve('.')))
+      .rejects.toMatchObject({ code: 'FS_NOT_REGULAR_FILE' })
+    await fs.remove(target, { version: await versionOf(target) })
+    await expect(stat(join(dir, 'a.txt'))).rejects.toThrow()
+  })
+
+  it('honors a pre-aborted signal before touching the filesystem', async () => {
+    await writeFile(join(dir, 'a.txt'), 'one\n')
+    const controller = new AbortController()
+    controller.abort()
+    const source = await fs.resolve('a.txt')
+    await expect(fs.rename(source, await fs.resolve('b.txt'), undefined, controller.signal))
+      .rejects.toMatchObject({ code: 'FS_ABORTED' })
+    await expect(fs.remove(source, undefined, controller.signal))
+      .rejects.toMatchObject({ code: 'FS_ABORTED' })
+    await expect(readFile(join(dir, 'a.txt'), 'utf8')).resolves.toBe('one\n')
+  })
+})
