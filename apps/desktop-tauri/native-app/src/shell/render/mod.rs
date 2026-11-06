@@ -11,8 +11,8 @@ mod pages;
 mod sessions;
 
 use gpui::{
-    div, prelude::*, px, AnyElement, ClipboardItem, Context, CursorStyle, MouseButton,
-    MouseDownEvent, MouseMoveEvent, StatefulInteractiveElement, Window,
+    div, prelude::*, px, AnyElement, ClipboardItem, Context, CursorStyle, ExternalPaths,
+    MouseButton, MouseDownEvent, MouseMoveEvent, StatefulInteractiveElement, Window,
 };
 
 use super::widgets;
@@ -117,6 +117,11 @@ pub(crate) fn render(
         .child(body)
         .children(utility)
         .child(bottom_bar(app, &theme, cx))
+        .can_drop(|value, _, _| value.is::<ExternalPaths>())
+        .on_drop(cx.listener(|app, paths: &ExternalPaths, _, cx| {
+            app.attach_dropped_paths(paths.paths());
+            cx.notify();
+        }))
         .on_action(move |_: &crate::shell::Dismiss, _, cx| {
             shell.update(cx, |app, cx| {
                 if app.dismiss_overlay() {

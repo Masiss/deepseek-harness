@@ -98,7 +98,7 @@ Sandbox/permission: `packages/fs/fs-sandbox/src/containment.ts`, `packages/fs/fs
 | AG-12 | Không có queue/parallel RPC | Không có | Phải coi là không hỗ trợ |
 | CMP-01 | — | `composer_input.rs` + `shell/text_input.rs` (IME, selection, multiline) | Chưa có test composition tiếng Việt |
 | CMP-02 | — | Nút `＠` mở danh sách file từ Explorer đã tải kèm ô lọc theo tên/đường dẫn (`file-picker-query`); chọn file chèn `@<path>` vào composer | Duyệt + lọc trong cây đã tải; chưa tìm trong workspace |
-| CMP-03 | `upload.rs` (upload + receipt), `officeToPdf` | `pick_attachment` / `attach_path` / `poll_attachment` | Một tệp/lần, chưa có drop |
+| CMP-03 | `upload.rs` (upload + receipt), `officeToPdf` | `pick_attachment` / `attach_path` / `poll_attachment` | Một tệp/lần; kéo-thả file vào cửa sổ dùng `on_drop`, drop nhiều file báo rõ chỉ nhận một |
 | CMP-04 | `session/modelCatalog`, `session/selectModel`, `session/initializeDefaultModel` | Picker + nhãn lý do không chọn được | Ổn |
 | CMP-05 | Không có capability mode | Không có | `NOT_SUPPORTED` cho tới khi Host có |
 | CMP-06 | `PromptRequest.request_id` (client sinh qua `chat.next_request_id()`) | Sinh id mỗi lần gửi, chặn khi `chat_loading` | Host dedupe theo `request_id` (inbox + log, `hasPromptRequest`), có 2 test host |

@@ -2857,6 +2857,26 @@ impl DesktopApp {
         self.status = "Choose a file to attach…".to_owned();
     }
 
+    /// Attaches the first file dropped onto the window.
+    ///
+    /// The composer holds one attachment, so a multi-file drop names its limit
+    /// instead of silently keeping only one of the dropped paths.
+    pub(crate) fn attach_dropped_paths(&mut self, paths: &[PathBuf]) {
+        let Some(path) = paths.first() else {
+            return;
+        };
+        if self.attachment.is_some() || self.attachment_receiver.is_some() {
+            self.attachment_error =
+                Some("Detach the current file before dropping another.".to_owned());
+            return;
+        }
+        if paths.len() > 1 {
+            self.attachment_error =
+                Some(format!("Attached {}; the composer holds one file at a time.", path.display()));
+        }
+        self.attach_path(path.clone());
+    }
+
     /// Uploads the file the picker returned; the picker itself never runs here.
     fn attach_path(&mut self, path: PathBuf) {
         let Some(transport) = self.transport.clone() else {
