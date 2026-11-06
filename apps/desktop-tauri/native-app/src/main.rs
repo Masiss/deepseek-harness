@@ -1342,7 +1342,7 @@ type PageLoad = (i64, SessionPage, Vec<dsh_client_core::follow::EventFrame>);
 enum SessionOperation {
     List,
     Search(String),
-    Create,
+    Create(Option<String>),
     Rename(RenameSessionRequest),
     Fork(ForkSessionRequest),
 }
@@ -1596,6 +1596,10 @@ struct DesktopApp {
     archive_receiver: Option<mpsc::Receiver<Result<WorkspaceArchiveValue, Error>>>,
     pin_receiver: Option<mpsc::Receiver<Result<WorkspacePinValue, Error>>>,
     workspace_status: Option<String>,
+    workspaces: Vec<dsh_client_core::streams::WorkspaceView>,
+    selected_workspace: Option<String>,
+    workspace_receiver: Option<mpsc::Receiver<Result<dsh_client_core::streams::WorkspaceFollowFrame, String>>>,
+    workspace_error: Option<String>,
     sessions_status: String,
     sessions_error: Option<String>,
     sessions_failure_context: &'static str,
@@ -1806,6 +1810,10 @@ impl DesktopApp {
             archive_receiver: None,
             pin_receiver: None,
             workspace_status: None,
+            workspaces: Vec::new(),
+            selected_workspace: None,
+            workspace_receiver: None,
+            workspace_error: None,
             sessions_status: String::new(),
             sessions_error: None,
             sessions_failure_context: "",
@@ -2055,6 +2063,70 @@ impl DesktopApp {
         self.request_sessions(SessionOperation::List);
     }
 
+    fn start_workspace_follow(&mut self) {
+        if self.workspace_receiver.is_some() {
+            return;
+        }
+        let Some(mux) = self.streams.clone() else {
+            self.workspace_error = Some("Remote streams are not connected".to_owned());
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        self.workspace_receiver = Some(receiver);
+        std::thread::spawn(move || {
+            match dsh_client_core::streams::workspace_follow(&mux) {
+                Ok(stream) => {
+                    for frame in stream {
+                        let update = frame.map_err(|error| error.to_string());
+                        let failed = update.is_err();
+                        if sender.send(update).is_err() || failed {
+                            break;
+                        }
+                    }
+                }
+                Err(error) => {
+                    let _ = sender.send(Err(error.to_string()));
+                }
+            }
+        });
+    }
+
+    fn apply_workspace_frame(&mut self, frame: dsh_client_core::streams::WorkspaceFollowFrame) {
+        use dsh_client_core::streams::WorkspaceFollowFrame;
+        match frame {
+            WorkspaceFollowFrame::Baseline { value } | WorkspaceFollowFrame::Replace { value } => {
+                self.workspaces = value.items;
+                self.archived_session_ids = value.archived_session_ids;
+                self.pinned_session_ids = value.pinned_session_ids;
+                self.workspace_error = None;
+            }
+            WorkspaceFollowFrame::Upsert { workspace } => {
+                self.workspaces.retain(|item| item.workspace_id != workspace.workspace_id);
+                self.workspaces.push(workspace);
+            }
+            WorkspaceFollowFrame::Remove { workspace_id } => {
+                self.workspaces.retain(|item| item.workspace_id != workspace_id);
+                if self.selected_workspace.as_deref() == Some(workspace_id.as_str()) {
+                    self.selected_workspace = None;
+                }
+            }
+            WorkspaceFollowFrame::Order { workspace_ids } => {
+                self.workspaces.sort_by_key(|item| {
+                    workspace_ids
+                        .iter()
+                        .position(|id| id == &item.workspace_id)
+                        .unwrap_or(usize::MAX)
+                });
+            }
+            WorkspaceFollowFrame::Archived { archived_session_ids } => {
+                self.archived_session_ids = archived_session_ids;
+            }
+            WorkspaceFollowFrame::Pinned { pinned_session_ids } => {
+                self.pinned_session_ids = pinned_session_ids;
+            }
+        }
+    }
+
     fn write_archive(&mut self, session_id: String, stop_activity: bool, archive: bool) {
         if self.archive_receiver.is_some() {
             return;
@@ -2123,7 +2195,7 @@ impl DesktopApp {
         self.sessions_status = match &operation {
             SessionOperation::List => "Loading sessions…",
             SessionOperation::Search(_) => "Searching sessions…",
-            SessionOperation::Create => "Creating session…",
+            SessionOperation::Create(_) => "Creating session…",
             SessionOperation::Rename(_) => "Renaming session…",
             SessionOperation::Fork(_) => "Forking session…",
         }
@@ -2131,7 +2203,7 @@ impl DesktopApp {
         self.sessions_failure_context = match &operation {
             SessionOperation::List => "List refresh failed; previous inventory and selection retained. Refresh to retry",
             SessionOperation::Search(_) => "Search failed; previous results retained. Search again to retry",
-            SessionOperation::Create => "Create outcome unknown; refresh/search to confirm remote state before retrying",
+            SessionOperation::Create(_) => "Create outcome unknown; refresh/search to confirm remote state before retrying",
             SessionOperation::Rename(_) => "Rename outcome unknown; reload the selected session to confirm its title before retrying",
             SessionOperation::Fork(_) => "Fork outcome unknown; refresh/search to confirm remote state before retrying",
         };
@@ -2144,9 +2216,9 @@ impl DesktopApp {
                     .list(None)
                     .map(SessionUpdate::List),
                 SessionOperation::Search(query) => client.search(query).map(SessionUpdate::Search),
-                SessionOperation::Create => client
+                SessionOperation::Create(workspace_id) => client
                     .create(CreateSessionRequest {
-                        workspace_id: None,
+                        workspace_id,
                         cwd: None,
                         session_id: None,
                         agent_preset: None,
@@ -3751,7 +3823,7 @@ impl DesktopApp {
                 self.active_view = ActiveView::Goals;
             }
             CommandId::NewSession => {
-                self.request_sessions(SessionOperation::Create);
+                self.request_sessions(SessionOperation::Create(self.selected_workspace.clone()));
                 self.focus_composer = true;
             }
             CommandId::ToggleExplorer => {
@@ -4039,6 +4111,7 @@ impl DesktopApp {
                     }
                     self.streams = Some(streams);
                     self.transport = Some(transport);
+                    self.start_workspace_follow();
                     self.connect_receiver = None;
                     self.status = "Connected — loading sessions…".to_owned();
                     self.refresh_sessions();
@@ -4151,6 +4224,22 @@ impl DesktopApp {
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     ctx.request_repaint_after(std::time::Duration::from_millis(30))
+                }
+            }
+        }
+        if let Some(receiver) = &self.workspace_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(frame)) => self.apply_workspace_frame(frame),
+                Ok(Err(error)) => {
+                    self.workspace_error = Some(format!("Workspace sync failed: {error}"));
+                    self.workspace_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.workspace_error = Some("Workspace sync stopped unexpectedly".into());
+                    self.workspace_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30));
                 }
             }
         }
@@ -5108,7 +5197,7 @@ impl DesktopApp {
                             );
                             accessible_button_label(&create, "New Session");
                             if create.clicked() {
-                                self.request_sessions(SessionOperation::Create);
+                                self.request_sessions(SessionOperation::Create(self.selected_workspace.clone()));
                             }
                         });
                         ui.add_space(6.0);
@@ -5134,6 +5223,29 @@ impl DesktopApp {
                                 }
                             }
                         });
+                        if !self.workspaces.is_empty() {
+                            ui.horizontal(|ui| {
+                                ui.label("Workspace");
+                                if ui.button("All").clicked() {
+                                    self.selected_workspace = None;
+                                }
+                                for workspace in self.workspaces.clone() {
+                                    let workspace_id = workspace.workspace_id.clone();
+                                    let title = if workspace.title.is_empty() {
+                                        workspace.path.clone()
+                                    } else {
+                                        workspace.title.clone()
+                                    };
+                                    let selected = self.selected_workspace.as_deref() == Some(workspace_id.as_str());
+                                    if ui.selectable_label(selected, title).clicked() {
+                                        self.selected_workspace = Some(workspace_id);
+                                    }
+                                }
+                            });
+                            if let Some(error) = &self.workspace_error {
+                                ui.colored_label(ui.visuals().error_fg_color, error);
+                            }
+                        }
                         if let Some(session_id) = self.selected_session.clone() {
                             egui::CollapsingHeader::new("Session actions")
                                 .id_salt("session-actions")
@@ -5287,9 +5399,27 @@ impl DesktopApp {
                             });
                         });
                     ui.add_enabled_ui(!busy, |ui| {
+                        let visible_sessions: Vec<SessionSummary> = match &self.selected_workspace {
+                            Some(selected) => {
+                                let workspace = self
+                                    .workspaces
+                                    .iter()
+                                    .find(|item| &item.workspace_id == selected);
+                                match workspace {
+                                    Some(workspace) => self
+                                        .sessions
+                                        .iter()
+                                        .filter(|summary| workspace.session_ids.contains(&summary.session_id))
+                                        .cloned()
+                                        .collect(),
+                                    None => self.sessions.iter().cloned().collect(),
+                                }
+                            }
+                            None => self.sessions.iter().cloned().collect(),
+                        };
                         let mut selected = session_list::render(
                             ui,
-                            &self.sessions,
+                            &visible_sessions,
                             self.session_search.as_ref(),
                             self.selected_session.as_deref(),
                             now_millis(),
@@ -5821,7 +5951,7 @@ impl DesktopApp {
                                     );
                                     accessible_button_label(&create, "Create your first Session");
                                     if create.clicked() {
-                                        self.request_sessions(SessionOperation::Create);
+                                        self.request_sessions(SessionOperation::Create(self.selected_workspace.clone()));
                                     }
                                     if self.model_catalog_empty() && self.transport.is_some() {
                                         let host_settings = ui.button("Host settings");
@@ -5868,7 +5998,7 @@ impl DesktopApp {
                     let create = ui.button("＋ New Session");
                     accessible_button_label(&create, "New Session");
                     if create.clicked() {
-                        self.request_sessions(SessionOperation::Create);
+                        self.request_sessions(SessionOperation::Create(self.selected_workspace.clone()));
                     }
                 });
                 return;

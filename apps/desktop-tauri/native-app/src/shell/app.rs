@@ -43,7 +43,7 @@ use dsh_client_core::{
     },
     settings::{SettingsClient, SettingsDescribeValue, SettingsNamespaceView},
     skills::{SkillListResponse, SkillsClient},
-    streams::{self, JobFollowFrame, JobView},
+    streams::{self, JobFollowFrame, JobView, WorkspaceFollowFrame, WorkspaceView},
     terminal::TerminalFrame,
     transport::HttpTransport,
     upload::{FileUploadClient, FileUploadValue},
@@ -118,7 +118,7 @@ type PageLoad = (i64, SessionPage, Vec<dsh_client_core::follow::EventFrame>);
 enum SessionOperation {
     List,
     Search(String),
-    Create,
+    Create(Option<String>),
     Rename(RenameSessionRequest),
     Fork(ForkSessionRequest),
 }
@@ -471,6 +471,11 @@ pub(crate) struct DesktopApp {
     pub(crate) archive_receiver: Option<mpsc::Receiver<Result<WorkspaceArchiveValue, Error>>>,
     pub(crate) pin_receiver: Option<mpsc::Receiver<Result<WorkspacePinValue, Error>>>,
     pub(crate) workspace_status: Option<String>,
+    /// Workspaces and grouping sets from `workspace/follow`.
+    pub(crate) workspaces: Vec<WorkspaceView>,
+    pub(crate) selected_workspace: Option<String>,
+    pub(crate) workspace_receiver: Option<mpsc::Receiver<Result<WorkspaceFollowFrame, String>>>,
+    pub(crate) workspace_error: Option<String>,
     pub(crate) session_query: String,
     pub(crate) session_search: Option<SessionSearchResponse>,
     pub(crate) session_title: String,
@@ -733,6 +738,47 @@ fn parse_fork_checkpoint(text: &str) -> Result<Option<i64>, String> {
         })
 }
 
+/// Applies one `workspace/follow` frame to the grouping state.
+fn apply_workspace_frame(
+    workspaces: &mut Vec<WorkspaceView>,
+    selected_workspace: &mut Option<String>,
+    archived_session_ids: &mut Vec<String>,
+    pinned_session_ids: &mut Vec<String>,
+    frame: WorkspaceFollowFrame,
+) {
+    match frame {
+        WorkspaceFollowFrame::Baseline { value } | WorkspaceFollowFrame::Replace { value } => {
+            *workspaces = value.items;
+            *archived_session_ids = value.archived_session_ids;
+            *pinned_session_ids = value.pinned_session_ids;
+        }
+        WorkspaceFollowFrame::Upsert { workspace } => {
+            workspaces.retain(|item| item.workspace_id != workspace.workspace_id);
+            workspaces.push(workspace);
+        }
+        WorkspaceFollowFrame::Remove { workspace_id } => {
+            workspaces.retain(|item| item.workspace_id != workspace_id);
+            if selected_workspace.as_deref() == Some(workspace_id.as_str()) {
+                *selected_workspace = None;
+            }
+        }
+        WorkspaceFollowFrame::Order { workspace_ids } => {
+            workspaces.sort_by_key(|item| {
+                workspace_ids
+                    .iter()
+                    .position(|id| id == &item.workspace_id)
+                    .unwrap_or(usize::MAX)
+            });
+        }
+        WorkspaceFollowFrame::Archived { archived_session_ids: archived } => {
+            *archived_session_ids = archived;
+        }
+        WorkspaceFollowFrame::Pinned { pinned_session_ids: pinned } => {
+            *pinned_session_ids = pinned;
+        }
+    }
+}
+
 /// Host settings editor state for the gpui Settings surface.
 pub(crate) struct HostSettingsView {
     pub(crate) namespace: Option<String>,
@@ -816,6 +862,10 @@ impl DesktopApp {
             archive_receiver: None,
             pin_receiver: None,
             workspace_status: None,
+            workspaces: Vec::new(),
+            selected_workspace: None,
+            workspace_receiver: None,
+            workspace_error: None,
             session_query: String::new(),
             session_search: None,
             session_title: String::new(),
@@ -1114,7 +1164,7 @@ impl DesktopApp {
         self.sessions_status = match &operation {
             SessionOperation::List => "Loading sessions…",
             SessionOperation::Search(_) => "Searching sessions…",
-            SessionOperation::Create => "Creating session…",
+            SessionOperation::Create(_) => "Creating session…",
             SessionOperation::Rename(_) => "Renaming session…",
             SessionOperation::Fork(_) => "Forking session…",
         }
@@ -1122,7 +1172,7 @@ impl DesktopApp {
         self.sessions_failure_context = match &operation {
             SessionOperation::List => "List refresh failed; previous inventory and selection retained. Refresh to retry",
             SessionOperation::Search(_) => "Search failed; previous results retained. Search again to retry",
-            SessionOperation::Create => "Create outcome unknown; refresh/search to confirm remote state before retrying",
+            SessionOperation::Create(_) => "Create outcome unknown; refresh/search to confirm remote state before retrying",
             SessionOperation::Rename(_) => "Rename outcome unknown; reload the selected session to confirm its title before retrying",
             SessionOperation::Fork(_) => "Fork outcome unknown; refresh/search to confirm remote state before retrying",
         };
@@ -1135,9 +1185,9 @@ impl DesktopApp {
                     .list(None)
                     .map(SessionUpdate::List),
                 SessionOperation::Search(query) => client.search(query).map(SessionUpdate::Search),
-                SessionOperation::Create => client
+                SessionOperation::Create(workspace_id) => client
                     .create(CreateSessionRequest {
-                        workspace_id: None,
+                        workspace_id,
                         cwd: None,
                         session_id: None,
                         agent_preset: None,
@@ -2859,6 +2909,46 @@ impl DesktopApp {
         });
     }
 
+    /// Opens the Workspace projection stream; baseline replaces local state.
+    pub(crate) fn start_workspace_follow(&mut self) {
+        if self.workspace_receiver.is_some() {
+            return;
+        }
+        let Some(mux) = self.streams.clone() else {
+            self.workspace_error = Some("Remote streams are not connected".to_owned());
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        self.workspace_receiver = Some(receiver);
+        std::thread::spawn(move || {
+            match streams::workspace_follow(&mux) {
+                Ok(stream) => {
+                    for frame in stream {
+                        let update = frame.map_err(|error| error.to_string());
+                        let failed = update.is_err();
+                        if sender.send(update).is_err() || failed {
+                            break;
+                        }
+                    }
+                }
+                Err(error) => {
+                    let _ = sender.send(Err(error.to_string()));
+                }
+            }
+        });
+    }
+
+    fn apply_workspace_frame(&mut self, frame: WorkspaceFollowFrame) {
+        apply_workspace_frame(
+            &mut self.workspaces,
+            &mut self.selected_workspace,
+            &mut self.archived_session_ids,
+            &mut self.pinned_session_ids,
+            frame,
+        );
+        self.workspace_error = None;
+    }
+
     fn poll_jobs(&mut self) {
         loop {
             let update = self
@@ -3127,7 +3217,7 @@ impl DesktopApp {
 
     /// Creates a Session and focuses the composer.
     pub(crate) fn new_session(&mut self) {
-        self.request_sessions(SessionOperation::Create);
+        self.request_sessions(SessionOperation::Create(self.selected_workspace.clone()));
         self.focus_composer = true;
     }
 
@@ -3928,7 +4018,7 @@ impl DesktopApp {
                 self.active_view = ActiveView::Goals;
             }
             CommandId::NewSession => {
-                self.request_sessions(SessionOperation::Create);
+                self.request_sessions(SessionOperation::Create(self.selected_workspace.clone()));
                 self.focus_composer = true;
             }
             CommandId::ToggleExplorer => {
@@ -4426,6 +4516,7 @@ impl DesktopApp {
                     }
                     self.streams = Some(streams);
                     self.transport = Some(transport);
+                    self.start_workspace_follow();
                     self.connect_receiver = None;
                     self.status = "Connected — loading sessions…".to_owned();
                     self.refresh_sessions();
@@ -4558,6 +4649,22 @@ impl DesktopApp {
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.sessions_error = Some("Pin worker stopped unexpectedly".into());
                     self.pin_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.repaint_soon = true;
+                }
+            }
+        }
+        if let Some(receiver) = &self.workspace_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(frame)) => self.apply_workspace_frame(frame),
+                Ok(Err(error)) => {
+                    self.workspace_error = Some(format!("Workspace sync failed: {error}"));
+                    self.workspace_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.workspace_error = Some("Workspace sync stopped unexpectedly".into());
+                    self.workspace_receiver = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     self.repaint_soon = true;
@@ -5466,6 +5573,7 @@ fn has_pending_workers(app: &DesktopApp) -> bool {
         || app.sessions_receiver.is_some()
         || app.archive_receiver.is_some()
         || app.pin_receiver.is_some()
+        || app.workspace_receiver.is_some()
         || app.page_receiver.is_some()
         || app.chat_receiver.is_some()
         || app.cancel_receiver.is_some()
@@ -6290,6 +6398,49 @@ impl gpui::Render for DesktopApp {
 mod tests {
     use super::*;
     use dsh_client_core::models::ModelProviderGroup;
+
+    #[test]
+    fn workspace_frames_upsert_remove_order_and_clear_selection() {
+        use dsh_client_core::streams::{WorkspaceBaseline, WorkspaceView};
+        fn view(id: &str) -> WorkspaceView {
+            WorkspaceView {
+                workspace_id: id.to_owned(),
+                path: format!("/ws/{id}"),
+                title: id.to_owned(),
+                session_ids: vec![id.to_owned()],
+                created_at: String::new(),
+                updated_at: String::new(),
+            }
+        }
+        let mut workspaces = Vec::new();
+        let mut selected = Some("w2".to_owned());
+        let mut archived = Vec::new();
+        let mut pinned = Vec::new();
+        apply_workspace_frame(
+            &mut workspaces,
+            &mut selected,
+            &mut archived,
+            &mut pinned,
+            WorkspaceFollowFrame::Baseline {
+                value: WorkspaceBaseline {
+                    items: vec![view("w1"), view("w2")],
+                    archived_session_ids: vec!["a1".to_owned()],
+                    pinned_session_ids: Vec::new(),
+                },
+            },
+        );
+        assert_eq!(workspaces.iter().map(|item| item.workspace_id.as_str()).collect::<Vec<_>>(), ["w1", "w2"]);
+        assert_eq!(archived, ["a1"]);
+        apply_workspace_frame(
+            &mut workspaces,
+            &mut selected,
+            &mut archived,
+            &mut pinned,
+            WorkspaceFollowFrame::Remove { workspace_id: "w2".to_owned() },
+        );
+        assert_eq!(workspaces.iter().map(|item| item.workspace_id.as_str()).collect::<Vec<_>>(), ["w1"]);
+        assert_eq!(selected, None);
+    }
 
     #[test]
     fn fork_checkpoint_blank_means_latest_and_only_non_negative_integers_pass() {

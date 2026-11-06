@@ -292,6 +292,18 @@ pub(crate) fn panel(
         ));
     } else {
         for summary in &app.sessions {
+            if let Some(selected_workspace) = &app.selected_workspace {
+                let Some(workspace) = app
+                    .workspaces
+                    .iter()
+                    .find(|item| &item.workspace_id == selected_workspace)
+                else {
+                    continue;
+                };
+                if !workspace.session_ids.contains(&summary.session_id) {
+                    continue;
+                }
+            }
             let id = summary.session_id.clone();
             let title = session_list::session_label(summary);
             let mut meta = session_list::relative_time(summary.updated_at, now);
@@ -370,6 +382,55 @@ pub(crate) fn panel(
                 })),
         );
 
+    let mut workspace_row = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(theme.sp(4.))
+        .px(theme.sp(8.))
+        .pb(theme.sp(6.));
+    if !app.workspaces.is_empty() {
+        workspace_row = workspace_row.child(
+            widgets::section_label(theme, "WORKSPACE"),
+        );
+        workspace_row = workspace_row.child(
+            widgets::Button::new(theme, "All")
+                .enabled(app.selected_workspace.is_some())
+                .build()
+                .id("workspace-all")
+                .on_click(cx.listener(|app, _, _, cx| {
+                    app.selected_workspace = None;
+                    cx.notify();
+                })),
+        );
+        for workspace in app.workspaces.clone() {
+            let workspace_id = workspace.workspace_id.clone();
+            let title = session_list::truncate(
+                if workspace.title.is_empty() { workspace.path.as_str() } else { workspace.title.as_str() },
+                22,
+            );
+            workspace_row = workspace_row.child(
+                widgets::Button::new(theme, title)
+                    .enabled(app.selected_workspace.as_deref() != Some(workspace_id.as_str()))
+                    .build()
+                    .id(gpui::SharedString::from(format!("workspace-select-{workspace_id}")))
+                    .on_click(cx.listener(move |app, _, _, cx| {
+                        app.selected_workspace = Some(workspace_id.clone());
+                        cx.notify();
+                    })),
+            );
+        }
+    }
+    if let Some(error) = app.workspace_error.clone() {
+        workspace_row = workspace_row.child(
+            div()
+                .text_size(theme.fs(9.))
+                .text_color(theme.error)
+                .truncate()
+                .child(error),
+        );
+    }
+
     let mut column = div()
         .flex()
         .flex_col()
@@ -381,6 +442,7 @@ pub(crate) fn panel(
         .border_color(theme.border)
         .bg(theme.surface)
         .child(header)
+        .child(workspace_row)
         .child(
             div()
                 .flex()
