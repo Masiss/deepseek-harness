@@ -61,6 +61,10 @@ pub struct Transcript {
     state_seq: i64,
     /// Highest event sequence projected; `-1` when nothing was projected.
     last_seq: i64,
+    /// Folded plan-mode state; the last `plan/mode` event wins.
+    plan_active: bool,
+    /// Sequence of the newest `plan/mode` event applied.
+    plan_seq: i64,
     /// `tool/call` arrival times by call id, for result durations.
     call_times: HashMap<String, (i64, i64)>,
 }
@@ -76,6 +80,8 @@ impl Default for Transcript {
             last_turn_end: None,
             state_seq: 0,
             last_seq: -1,
+            plan_active: false,
+            plan_seq: -1,
             call_times: HashMap::new(),
         }
     }
@@ -92,6 +98,8 @@ impl Transcript {
         self.last_turn_end = None;
         self.state_seq = 0;
         self.last_seq = -1;
+        self.plan_active = false;
+        self.plan_seq = -1;
         self.call_times.clear();
     }
 
@@ -136,6 +144,14 @@ impl Transcript {
                 }
             }
             let at = self.rows.partition_point(|row| row.seq < event.seq);
+            if event.event_type == "plan/mode" && event.seq >= self.plan_seq {
+                self.plan_active = event
+                    .data
+                    .get("active")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                self.plan_seq = event.seq;
+            }
             // Turn outcome comes from `turn/end.reason.kind`, which the runtime
             // records for every closed turn. A failed tool call is a row above,
             // not a turn failure, so it never sets the run state. Batches can
@@ -207,6 +223,11 @@ impl Transcript {
     /// Highest projected sequence, or `-1` before any event.
     pub fn last_seq(&self) -> i64 {
         self.last_seq
+    }
+
+    /// Whether the folded plan-mode state is active.
+    pub fn plan_active(&self) -> bool {
+        self.plan_active
     }
 
     /// Retained rows, oldest first.
@@ -818,6 +839,21 @@ mod tests {
         let before = transcript.rows().len();
         transcript.merge([&events[0]]);
         assert_eq!(transcript.rows().len(), before);
+    }
+
+    #[test]
+    fn plan_mode_folds_latest_event_in_sequence_order() {
+        let mut transcript = Transcript::default();
+        assert!(!transcript.plan_active());
+        transcript.apply(&event(1, "plan/mode", serde_json::json!({"active": true})));
+        assert!(transcript.plan_active());
+        transcript.apply(&event(2, "plan/mode", serde_json::json!({"active": false})));
+        assert!(!transcript.plan_active());
+        // An older plan event arriving late must not overwrite the newer state.
+        transcript.apply(&event(0, "plan/mode", serde_json::json!({"active": true})));
+        assert!(!transcript.plan_active());
+        transcript.reset();
+        assert!(!transcript.plan_active());
     }
 
     #[test]

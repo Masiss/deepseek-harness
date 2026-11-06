@@ -4214,6 +4214,25 @@ impl DesktopApp {
         self.host_command_loading = true;
     }
 
+    /// Whether the connected Host registered the `plan` command.
+    pub(crate) fn plan_command_available(&self) -> bool {
+        self.host_commands.iter().any(|command| command.name == "plan")
+    }
+
+    /// Toggles plan mode through the runtime's own `/plan` command.
+    pub(crate) fn toggle_plan_mode(&mut self) {
+        let Some(transport) = self.transport.clone() else {
+            self.status = "Connect before changing plan mode".to_owned();
+            return;
+        };
+        let line = if self.transcript.plan_active() {
+            "/plan off"
+        } else {
+            "/plan"
+        };
+        self.submit_slash_command(line.to_owned(), transport);
+    }
+
     /// Executes one Host-registered command line and reports its real outcome.
     pub(crate) fn run_host_command(&mut self, command: CommandDescriptor) {
         let (Some(session_id), Some(transport)) =

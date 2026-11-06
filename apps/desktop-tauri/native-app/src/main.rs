@@ -6971,6 +6971,21 @@ impl DesktopApp {
                     {
                         self.cancel_turn();
                     }
+                    let can_toggle_plan = !self.plan_command_loading
+                        && !self.chat_loading
+                        && !self.assistant_streaming
+                        && self.transport.is_some();
+                    if ui
+                        .add_enabled(can_toggle_plan, egui::Button::new("Plan"))
+                        .clicked()
+                    {
+                        self.run_plan_command(!self.transcript.plan_active());
+                    }
+                    ui.add_enabled(false, egui::Button::new("Ask"))
+                        .on_hover_text("Ask mode is not provided by this profile.");
+                    if let Some(status) = &self.plan_command_status {
+                        ui.label(status);
+                    }
                     });
                 });
                         });

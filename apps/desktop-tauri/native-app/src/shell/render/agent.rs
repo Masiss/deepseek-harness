@@ -767,6 +767,37 @@ fn composer(
                         })),
                 )
                 .child(
+                    widgets::Button::new(
+                        theme,
+                        if app.transcript.plan_active() {
+                            "Plan (on) → Build"
+                        } else {
+                            "Plan"
+                        },
+                    )
+                    .enabled(transport && app.plan_command_available())
+                    .build()
+                    .id("composer-mode-plan")
+                    .on_click(cx.listener(|app, _, _, cx| {
+                        app.toggle_plan_mode();
+                        cx.notify();
+                    })),
+                )
+                .child(
+                    widgets::Button::new(theme, "Ask")
+                        .enabled(false)
+                        .build()
+                        .id("composer-mode-ask"),
+                )
+                .when(!app.plan_command_available(), |element| {
+                    element.child(
+                        div()
+                            .text_size(theme.fs(9.))
+                            .text_color(theme.muted)
+                            .child("Plan/Ask unavailable in this profile"),
+                    )
+                })
+                .child(
                     widgets::Button::new(theme, "History")
                         .enabled(!app.prompt_history.is_empty())
                         .build()
