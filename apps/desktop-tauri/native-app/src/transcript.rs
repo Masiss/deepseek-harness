@@ -22,6 +22,8 @@ pub enum RowKind {
     Assistant,
     Reasoning,
     ToolResult,
+    /// A tool result the runtime marked as failed.
+    ToolError,
     Approval,
     Job,
     Todo,
@@ -51,6 +53,12 @@ pub struct Transcript {
     applied: BTreeSet<i64>,
     bytes: usize,
     has_cjk: bool,
+    /// Whether the newest `turn/start` has no matching `turn/end` yet.
+    open_turn: bool,
+    /// `reason.kind` of the newest `turn/end`; unknown kinds stay verbatim.
+    last_turn_end: Option<String>,
+    /// Sequence of the newest turn event that set the two fields above.
+    state_seq: i64,
 }
 
 impl Transcript {
@@ -60,6 +68,9 @@ impl Transcript {
         self.applied.clear();
         self.bytes = 0;
         self.has_cjk = false;
+        self.open_turn = false;
+        self.last_turn_end = None;
+        self.state_seq = 0;
     }
 
     /// Merges durable events in sequence order, ignoring any already projected.
@@ -85,6 +96,30 @@ impl Transcript {
                 continue;
             }
             let at = self.rows.partition_point(|row| row.seq < event.seq);
+            // Turn outcome comes from `turn/end.reason.kind`, which the runtime
+            // records for every closed turn. A failed tool call is a row above,
+            // not a turn failure, so it never sets the run state. Batches can
+            // arrive out of order across pages, so only turn events at or
+            // after the newest seen sequence may move the state.
+            if event.seq >= self.state_seq {
+                match event.event_type.as_str() {
+                    "turn/start" => {
+                        self.open_turn = true;
+                        self.state_seq = event.seq;
+                    }
+                    "turn/end" => {
+                        self.open_turn = false;
+                        self.last_turn_end = event
+                            .data
+                            .get("reason")
+                            .and_then(|reason| reason.get("kind"))
+                            .and_then(Value::as_str)
+                            .map(str::to_owned);
+                        self.state_seq = event.seq;
+                    }
+                    _ => {}
+                }
+            }
             for (offset, row) in project(event).into_iter().enumerate() {
                 self.bytes += row.text.len();
                 self.has_cjk |= crate::fonts::contains_cjk(&row.text);
@@ -102,6 +137,27 @@ impl Transcript {
     /// Applies a snapshot's records without discarding older retained history.
     pub fn apply_snapshot(&mut self, records: &[dsh_client_core::follow::EventFrame]) {
         self.merge(records.iter().map(|record| &record.event));
+    }
+
+    /// State of the most recent turn, derived from `turn/start` and
+    /// `turn/end` events only. Tool errors never make a turn look failed;
+    /// `max-tokens` reads as `partial` and an aborted turn as `interrupted`.
+    pub fn run_state(&self, streaming: bool) -> &str {
+        if streaming {
+            "streaming"
+        } else if self.open_turn {
+            "running"
+        } else {
+            match self.last_turn_end.as_deref() {
+                Some("error") => "failed",
+                Some("blocked") => "blocked",
+                Some("aborted") | Some("interrupted") => "interrupted",
+                Some("max-tokens") => "partial",
+                Some("forked") => "forked",
+                Some(other) => other,
+                None => "completed",
+            }
+        }
     }
 
     /// Retained rows, oldest first.
@@ -245,15 +301,39 @@ fn project(event: &SessionWireEvent) -> Vec<TranscriptRow> {
                 .get("isError")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            let mut text = content_text(message.get("content"));
+            if is_error {
+                if let Some(error) = event.data.get("error") {
+                    let name = error.get("name").and_then(Value::as_str);
+                    let code = error.get("code").and_then(Value::as_str);
+                    let detail = match (name, code) {
+                        (Some(name), Some(code)) => Some(format!("{name} ({code})")),
+                        (Some(name), None) => Some(name.to_owned()),
+                        (None, Some(code)) => Some(code.to_owned()),
+                        (None, None) => None,
+                    };
+                    if let Some(detail) = detail {
+                        if !text.is_empty() {
+                            text.push('\n');
+                        }
+                        text.push_str("Error: ");
+                        text.push_str(&detail);
+                    }
+                }
+            }
             vec![TranscriptRow {
                 seq: event.seq,
-                kind: RowKind::ToolResult,
+                kind: if is_error {
+                    RowKind::ToolError
+                } else {
+                    RowKind::ToolResult
+                },
                 title: if is_error {
                     "Tool error".to_owned()
                 } else {
                     "Tool result".to_owned()
                 },
-                text: content_text(message.get("content")),
+                text,
                 message_id: None,
             }]
         }
@@ -609,6 +689,76 @@ mod tests {
     }
 
     #[test]
+    fn run_state_follows_turn_end_reason_not_tool_errors() {
+        let mut transcript = Transcript::default();
+        assert_eq!(transcript.run_state(false), "completed");
+        assert_eq!(transcript.run_state(true), "streaming");
+        // A failed tool call is a row, not a failed turn.
+        transcript.apply(&event(
+            1,
+            "tool/result",
+            serde_json::json!({"message": {"isError": true, "content": []}}),
+        ));
+        assert_eq!(transcript.run_state(false), "completed");
+        // A turn without its closer reads as running.
+        transcript.apply(&event(2, "turn/start", serde_json::json!({"turn": 1})));
+        assert_eq!(transcript.run_state(false), "running");
+        transcript.apply(&event(
+            3,
+            "turn/end",
+            serde_json::json!({"turn": 1, "reason": {"kind": "error"}}),
+        ));
+        assert_eq!(transcript.run_state(false), "failed");
+    }
+
+    #[test]
+    fn run_state_distinguishes_blocked_partial_and_interrupted_turns() {
+        let mut transcript = Transcript::default();
+        transcript.apply(&event(
+            1,
+            "turn/end",
+            serde_json::json!({"turn": 1, "reason": {"kind": "blocked"}}),
+        ));
+        assert_eq!(transcript.run_state(false), "blocked");
+        transcript.apply(&event(
+            2,
+            "turn/end",
+            serde_json::json!({"turn": 2, "reason": {"kind": "max-tokens"}}),
+        ));
+        assert_eq!(transcript.run_state(false), "partial");
+        transcript.apply(&event(
+            3,
+            "turn/end",
+            serde_json::json!({"turn": 3, "reason": {"kind": "aborted"}}),
+        ));
+        assert_eq!(transcript.run_state(false), "interrupted");
+        transcript.apply(&event(
+            4,
+            "turn/end",
+            serde_json::json!({"turn": 4, "reason": {"kind": "completed"}}),
+        ));
+        assert_eq!(transcript.run_state(false), "completed");
+    }
+
+    #[test]
+    fn older_turn_events_do_not_regress_run_state() {
+        let mut transcript = Transcript::default();
+        transcript.apply(&event(
+            5,
+            "turn/end",
+            serde_json::json!({"turn": 2, "reason": {"kind": "error"}}),
+        ));
+        assert_eq!(transcript.run_state(false), "failed");
+        // An older page arriving late must not overwrite the newer outcome.
+        transcript.apply(&event(
+            1,
+            "turn/end",
+            serde_json::json!({"turn": 1, "reason": {"kind": "completed"}}),
+        ));
+        assert_eq!(transcript.run_state(false), "failed");
+    }
+
+    #[test]
     fn live_follow_frames_project_in_wire_order() {
         // These are the frames `session/follow` delivers: a snapshot, then events.
         let snapshot: dsh_client_core::follow::FollowFrame =
@@ -690,7 +840,10 @@ mod tests {
         transcript.apply(&event(
             1,
             "tool/result",
-            serde_json::json!({"message": {"isError": true, "content": [{"type": "text", "text": "exit 1"}]}}),
+            serde_json::json!({
+                "message": {"isError": true, "content": [{"type": "text", "text": "exit 1"}]},
+                "error": {"name": "FsError", "code": "ENOENT"}
+            }),
         ));
         transcript.apply(&event(
             2,
@@ -727,7 +880,8 @@ mod tests {
                 "Job completed"
             ]
         );
-        assert_eq!(transcript.rows()[0].text, "exit 1");
+        assert_eq!(transcript.rows()[0].text, "exit 1\nError: FsError (ENOENT)");
+        assert_eq!(transcript.rows()[0].kind, RowKind::ToolError);
     }
 
     #[test]

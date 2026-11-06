@@ -12,6 +12,8 @@ pub struct TextDocument {
     pub host_path: String,
     /// Decoded text, rendered literally without markup or link interpretation.
     pub text: String,
+    /// Freshness token from the Host, used to guard a later write.
+    pub version: Option<String>,
 }
 
 /// Caller-supplied decoded image and identity.

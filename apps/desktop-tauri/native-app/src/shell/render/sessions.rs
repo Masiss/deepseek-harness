@@ -1,12 +1,12 @@
 //! Sessions column: inventory, search, and Session actions.
 
-use gpui::{div, prelude::*, StatefulInteractiveElement, px, AnyElement, Context};
+use gpui::{div, prelude::*, px, AnyElement, Context, StatefulInteractiveElement};
 
+use super::widgets;
 use crate::layout;
 use crate::session_list;
 use crate::shell::app::DesktopApp;
 use crate::shell::theme::Theme;
-use super::widgets;
 
 /// Draws the Session sidebar.
 pub(crate) fn panel(
@@ -93,7 +93,11 @@ pub(crate) fn panel(
         .h(theme.sp(36.))
         .rounded(theme.corner())
         .border_1()
-        .border_color(if connected { theme.accent } else { theme.border })
+        .border_color(if connected {
+            theme.accent
+        } else {
+            theme.border
+        })
         .bg(theme.code_background)
         .text_color(if connected { theme.accent } else { theme.muted })
         .text_size(theme.fs(12.))
@@ -110,6 +114,7 @@ pub(crate) fn panel(
 
     let selected_session = app.selected_session.clone();
     let title_input = app.text_field("session-title", "New session title", false, cx);
+    let fork_seq_input = app.text_field("session-fork-seq", "Fork at seq (blank = latest)", false, cx);
     let actions = div()
         .flex()
         .flex_col()
@@ -147,6 +152,28 @@ pub(crate) fn panel(
                             app.rename_selected_session();
                             cx.notify();
                         })),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .gap(theme.sp(4.))
+                .child(
+                    div()
+                        .flex_1()
+                        .h(theme.control_height())
+                        .px(theme.sp(6.))
+                        .rounded(theme.corner())
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.code_background)
+                        .overflow_hidden()
+                        .child(crate::shell::text_input::text_input_element(
+                            &fork_seq_input,
+                            theme,
+                            theme.control_height() - px(2.),
+                        )),
                 )
                 .child(
                     widgets::Button::new(theme, "Fork")
@@ -182,7 +209,10 @@ pub(crate) fn panel(
                 false,
                 selected,
                 cx,
-                move |app| app.choose_session(id.clone()),
+                move |app| {
+                    app.choose_session(id.clone());
+                    app.show_session_menu = false;
+                },
             ));
         }
         if results.has_more {
@@ -225,7 +255,10 @@ pub(crate) fn panel(
                 summary.running,
                 selected,
                 cx,
-                move |app| app.choose_session(id.clone()),
+                move |app| {
+                    app.choose_session(id.clone());
+                    app.show_session_menu = false;
+                },
             ));
         }
     }
@@ -346,7 +379,13 @@ pub(crate) fn panel(
         );
     }
     column
-        .child(div().flex_1().min_h(px(0.)).px(theme.sp(6.)).child(inventory))
+        .child(
+            div()
+                .flex_1()
+                .min_h(px(0.))
+                .px(theme.sp(6.))
+                .child(inventory),
+        )
         .child(footer)
         .into_any_element()
 }
@@ -372,11 +411,7 @@ fn session_row(
 ) -> AnyElement {
     let title = title.to_owned();
     let meta = meta.to_owned();
-    let primary = if selected {
-        theme.accent
-    } else {
-        theme.text
-    };
+    let primary = if selected { theme.accent } else { theme.text };
     let row = div()
         .flex()
         .flex_row()

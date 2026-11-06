@@ -5,7 +5,7 @@ use gpui::{div, prelude::*, StatefulInteractiveElement, px, AnyElement, Context}
 
 use crate::layout;
 use crate::transcript::RowKind;
-use crate::ui_preferences::{ThemeMode, UiDensity};
+use crate::ui_preferences::{AccentScheme, KeymapPreset, ThemeMode, UiDensity};
 use crate::shell::app::{ActiveView, DesktopApp, GoalAction};
 use crate::shell::theme::Theme;
 use super::widgets;
@@ -152,6 +152,8 @@ fn settings(
     let compact = app.ui_preferences.density == UiDensity::Compact;
     let scale = app.ui_preferences.ui_scale;
     let explorer = app.show_explorer;
+    let accent = app.ui_preferences.accent_scheme;
+    let restore_last_session = app.ui_preferences.restore_last_session;
     let message = app.preferences_message.clone();
     let update_status = app.update_status.clone();
     let checking = app.update_open_receiver.is_some();
@@ -199,6 +201,109 @@ fn settings(
                         .on_click(cx.listener(|app, _, window, cx| {
                             app.update_preferences(window, |preferences| {
                                 preferences.theme = ThemeMode::Dark;
+                            });
+                            cx.notify();
+                        })),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(6.))
+                .child(line(theme, "Accent"))
+                .child(
+                    widgets::Button::new(theme, "Harness")
+                        .enabled(accent != AccentScheme::Harness)
+                        .build()
+                        .id("pref-accent-harness")
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            app.update_preferences(window, |preferences| {
+                                preferences.accent_scheme = AccentScheme::Harness;
+                            });
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    widgets::Button::new(theme, "Blue")
+                        .enabled(accent != AccentScheme::Blue)
+                        .build()
+                        .id("pref-accent-blue")
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            app.update_preferences(window, |preferences| {
+                                preferences.accent_scheme = AccentScheme::Blue;
+                            });
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    widgets::Button::new(theme, "Teal")
+                        .enabled(accent != AccentScheme::Teal)
+                        .build()
+                        .id("pref-accent-teal")
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            app.update_preferences(window, |preferences| {
+                                preferences.accent_scheme = AccentScheme::Teal;
+                            });
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    widgets::Button::new(theme, "Violet")
+                        .enabled(accent != AccentScheme::Violet)
+                        .build()
+                        .id("pref-accent-violet")
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            app.update_preferences(window, |preferences| {
+                                preferences.accent_scheme = AccentScheme::Violet;
+                            });
+                            cx.notify();
+                        })),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(6.))
+                .child(line(theme, "Keymap preset"))
+                .child(
+                    widgets::Button::new(theme, "DSH")
+                        .enabled(app.ui_preferences.keymap_preset != KeymapPreset::Dsh)
+                        .build()
+                        .id("pref-keymap-dsh")
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            app.update_preferences(window, |preferences| {
+                                preferences.keymap_preset = KeymapPreset::Dsh;
+                                preferences.keybindings.apply_preset(KeymapPreset::Dsh);
+                            });
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    widgets::Button::new(theme, "Zed")
+                        .enabled(app.ui_preferences.keymap_preset != KeymapPreset::Zed)
+                        .build()
+                        .id("pref-keymap-zed")
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            app.update_preferences(window, |preferences| {
+                                preferences.keymap_preset = KeymapPreset::Zed;
+                                preferences.keybindings.apply_preset(KeymapPreset::Zed);
+                            });
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    widgets::Button::new(theme, "VS Code")
+                        .enabled(app.ui_preferences.keymap_preset != KeymapPreset::Vscode)
+                        .build()
+                        .id("pref-keymap-vscode")
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            app.update_preferences(window, |preferences| {
+                                preferences.keymap_preset = KeymapPreset::Vscode;
+                                preferences.keybindings.apply_preset(KeymapPreset::Vscode);
                             });
                             cx.notify();
                         })),
@@ -290,6 +395,32 @@ fn settings(
                         })),
                 ),
         )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(6.))
+                .child(line(theme, "Restore last Session"))
+                .child(
+                    widgets::Button::new(
+                        theme,
+                        if restore_last_session { "On" } else { "Off" },
+                    )
+                    .build()
+                    .id("pref-restore-session")
+                    .on_click(cx.listener(move |app, _, window, cx| {
+                        app.update_preferences(window, |preferences| {
+                            preferences.restore_last_session = !restore_last_session;
+                        });
+                        cx.notify();
+                    })),
+                ),
+        )
+        .child(line(
+            theme,
+            "Unsent composer text is kept per Session and saved with this client.",
+        ))
         .when_some(message, |element, message| {
             element.child(
                 div()
@@ -484,6 +615,7 @@ fn plugins(
             .child(section(theme, "BUNDLES"));
         for bundle in &bundles {
             let name = bundle.name.clone();
+            let remove_name = bundle.name.clone();
             let enabled = bundle.enabled;
             let state = if enabled { "enabled" } else { "disabled" };
             content = content.child(
@@ -517,6 +649,17 @@ fn plugins(
                                     app.set_bundle_enabled(name.clone(), !enabled);
                                     cx.notify();
                                 })),
+                            )
+                            .child(
+                                widgets::Button::new(theme, "Remove")
+                                    .danger()
+                                    .enabled(!busy)
+                                    .build()
+                                    .id(gpui::SharedString::from(format!("bundle-remove-{remove_name}")))
+                                    .on_click(cx.listener(move |app, _, _, cx| {
+                                        app.remove_bundle(remove_name.clone());
+                                        cx.notify();
+                                    })),
                             ),
                     )
                     .when_some(bundle.description.clone(), |element, description| {
@@ -1172,6 +1315,7 @@ fn document(
                     .text_size(theme.fs(11.))
                     .child(text.text.clone()),
             );
+    } else if let Some(image) = image {
     } else if let Some(image) = image {
         content = content
             .child(

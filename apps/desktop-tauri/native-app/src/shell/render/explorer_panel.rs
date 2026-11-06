@@ -1,12 +1,12 @@
 //! Workspace Explorer column: repository tree and read-only source preview.
 
-use gpui::{div, prelude::*, StatefulInteractiveElement, px, AnyElement, Context};
+use gpui::{div, prelude::*, px, AnyElement, Context, StatefulInteractiveElement};
 
+use super::widgets;
 use crate::explorer::{ExplorerRow, ExplorerRowKind};
 use crate::layout;
 use crate::shell::app::{ActiveView, DesktopApp};
 use crate::shell::theme::Theme;
-use super::widgets;
 
 /// Draws the docked Explorer column.
 pub(crate) fn tree_and_preview(
@@ -16,8 +16,10 @@ pub(crate) fn tree_and_preview(
     cx: &mut Context<DesktopApp>,
 ) -> AnyElement {
     let transport = app.transport.clone();
+    let streams = app.streams.clone();
     app.explorer.prepare(
         transport.as_ref(),
+        streams.as_ref(),
         app.selected_session.as_deref(),
         single_pane,
     );
@@ -52,8 +54,23 @@ pub(crate) fn tree_and_preview(
 
     if app.explorer.session().is_none() {
         return column
-            .child(padded_note(theme, "Select a Session to browse its workspace."))
+            .child(padded_note(
+                theme,
+                "Select a Session to browse its workspace.",
+            ))
             .into_any_element();
+    }
+
+    let watch_error = app.explorer.watch_error().map(str::to_owned);
+    if let Some(error) = watch_error {
+        column = column.child(
+            div()
+                .px(theme.sp(10.))
+                .pb(theme.sp(4.))
+                .text_size(theme.fs(10.))
+                .text_color(theme.muted)
+                .child(format!("⚠ {error}")),
+        );
     }
 
     if single_pane && app.explorer.preview_pane_visible() {
@@ -62,6 +79,17 @@ pub(crate) fn tree_and_preview(
             .into_any_element();
     }
 
+    let filter = app.text_field("explorer-query", "Filter files", false, cx);
+    column = column.child(
+        div()
+            .px(theme.sp(10.))
+            .pb(theme.sp(4.))
+            .child(crate::shell::text_input::text_input_element(
+                &filter,
+                theme,
+                theme.sp(160.),
+            )),
+    );
     let mut tree = div()
         .flex()
         .flex_col()
@@ -69,7 +97,17 @@ pub(crate) fn tree_and_preview(
         .w_full()
         .child(widgets::section_label(theme, "REPOSITORY TREE"));
 
-    let rows = app.explorer.visible_rows();
+    let query = app.input_text("explorer-query", cx).to_ascii_lowercase();
+    let rows: Vec<_> = app
+        .explorer
+        .visible_rows()
+        .into_iter()
+        .filter(|row| {
+            query.is_empty()
+                || row.label.to_ascii_lowercase().contains(&query)
+                || row.path.to_ascii_lowercase().contains(&query)
+        })
+        .collect();
     for row in rows {
         tree = tree.child(tree_row(theme, &row, transport.is_some(), cx));
     }
@@ -92,9 +130,12 @@ pub(crate) fn tree_and_preview(
         ));
     }
     if !single_pane {
-        column = column
-            .child(widgets::separator(theme))
-            .child(preview(app, theme, transport.is_some(), cx));
+        column = column.child(widgets::separator(theme)).child(preview(
+            app,
+            theme,
+            transport.is_some(),
+            cx,
+        ));
     }
     column.into_any_element()
 }
@@ -169,11 +210,7 @@ pub(crate) fn fullscreen(
         .into_any_element()
 }
 
-fn header(
-    theme: &Theme,
-    connected: bool,
-    cx: &mut Context<DesktopApp>,
-) -> AnyElement {
+fn header(theme: &Theme, connected: bool, cx: &mut Context<DesktopApp>) -> AnyElement {
     div()
         .flex()
         .flex_row()
@@ -306,11 +343,8 @@ fn tree_row(
                         .on_click(cx.listener(move |app, _, _, cx| {
                             if let Some(session_id) = app.selected_session.clone() {
                                 let transport = app.transport.clone();
-                                app.explorer.retry_listing(
-                                    transport.as_ref(),
-                                    &session_id,
-                                    &path,
-                                );
+                                app.explorer
+                                    .retry_listing(transport.as_ref(), &session_id, &path);
                             }
                             cx.notify();
                         })),
@@ -350,6 +384,8 @@ fn preview(
     let path = app.explorer.preview_path().map(str::to_owned);
     let pending = app.explorer.preview_pending();
     let error = app.explorer.preview_error().map(str::to_owned);
+    let stale = app.explorer.preview_stale();
+    let absent = app.explorer.preview_absent();
     let text = app.explorer.preview().cloned();
 
     let mut pane = div()
@@ -428,6 +464,30 @@ fn preview(
         );
     }
     pane = pane.child(crumbs).child(widgets::separator(theme));
+
+    if absent {
+        pane = pane.child(
+            div()
+                .px(theme.sp(8.))
+                .py(theme.sp(4.))
+                .rounded(theme.corner())
+                .bg(theme.surface_raised)
+                .text_size(theme.fs(10.))
+                .text_color(theme.warn)
+                .child("This file no longer exists on disk. The last read is shown below."),
+        );
+    } else if stale {
+        pane = pane.child(
+            div()
+                .px(theme.sp(8.))
+                .py(theme.sp(4.))
+                .rounded(theme.corner())
+                .bg(theme.surface_raised)
+                .text_size(theme.fs(10.))
+                .text_color(theme.warn)
+                .child("This file changed on disk. Reload to see the new content."),
+        );
+    }
 
     if pending {
         pane = pane.child(

@@ -19,6 +19,7 @@ mod transcript_view;
 mod ui_preferences;
 mod updater;
 
+use crate::command_registry::CommandId;
 use document_preview::{
     DocumentPreview, ImageDocument, ImagePreview, PreviewDocument, TextDocument,
 };
@@ -70,7 +71,6 @@ use dsh_client_core::{
     },
     Error,
 };
-use crate::command_registry::CommandId;
 use eframe::egui;
 use explorer::WorkspaceExplorer;
 use fs2::FileExt;
@@ -90,6 +90,7 @@ use ui_preferences::{UiPreferences, UiPreferencesAction, UiPreferencesPanel};
 enum PluginAction {
     SetPlugin { id: String, enabled: bool },
     SetBundle { name: String, enabled: bool },
+    RemoveBundle { name: String },
 }
 
 enum ApprovalCommand {
@@ -1587,6 +1588,7 @@ struct DesktopApp {
     session_query: String,
     session_search: Option<SessionSearchResponse>,
     session_title: String,
+    fork_seq_text: String,
     sessions_status: String,
     sessions_error: Option<String>,
     sessions_failure_context: &'static str,
@@ -1788,6 +1790,7 @@ impl DesktopApp {
             session_query: String::new(),
             session_search: None,
             session_title: String::new(),
+            fork_seq_text: String::new(),
             sessions_status: String::new(),
             sessions_error: None,
             sessions_failure_context: "",
@@ -2338,6 +2341,7 @@ impl DesktopApp {
                 PluginAction::SetBundle { name, enabled } => {
                     client.set_bundle_enabled(&name, enabled)
                 }
+                PluginAction::RemoveBundle { name } => client.remove_bundle(&name),
             };
             let _ = sender.send(result);
         });
@@ -2547,6 +2551,7 @@ impl DesktopApp {
                             name,
                             host_path: page.stat.absolute_path,
                             text: page.text,
+                            version: Some(page.stat.version),
                         })
                     })
                     .map_err(|error| error.to_string())
@@ -3662,6 +3667,13 @@ impl DesktopApp {
                 self.show_skills = !self.show_skills;
                 self.active_view = ActiveView::Skills;
             }
+            // The retired egui shell predates the palette, About dialog, and
+            // Escape dismissal that the gpui shell owns.
+            CommandId::OpenFile
+            | CommandId::About
+            | CommandId::ShowPalette
+            | CommandId::Dismiss
+            | CommandId::Quit => {}
         }
     }
 
@@ -3768,7 +3780,7 @@ impl DesktopApp {
         }
         self.poll_dialog();
         self.poll_attachment();
-        self.explorer.poll();
+        let _ = self.explorer.poll(self.transport.as_ref());
         self.poll_jobs();
         self.poll_schedules();
         if self.dialog.is_some()
@@ -4964,14 +4976,36 @@ impl DesktopApp {
                                                 },
                                             ));
                                         }
+                                        let fork_field = ui.add(
+                                            egui::TextEdit::singleline(&mut self.fork_seq_text)
+                                                .hint_text("Fork at seq (blank = latest)")
+                                                .desired_width(ui.available_width()),
+                                        );
+                                        accessible_label(&fork_field, "Fork checkpoint sequence");
                                         if ui.button("Fork selected").clicked() {
-                                            self.request_sessions(SessionOperation::Fork(
-                                                ForkSessionRequest {
-                                                    session_id,
-                                                    at_seq: None,
-                                                    allow_migration: None,
-                                                },
-                                            ));
+                                            let checkpoint = self.fork_seq_text.trim().to_owned();
+                                            let at_seq = if checkpoint.is_empty() {
+                                                None
+                                            } else {
+                                                match checkpoint.parse::<i64>() {
+                                                    Ok(seq) if seq >= 0 => Some(seq),
+                                                    _ => {
+                                                        self.sessions_error = Some(format!(
+                                                            "Fork checkpoint must be a non-negative integer sequence, got {checkpoint:?}. Blank means latest."
+                                                        ));
+                                                        None
+                                                    }
+                                                }
+                                            };
+                                            if checkpoint.is_empty() || at_seq.is_some() {
+                                                self.request_sessions(SessionOperation::Fork(
+                                                    ForkSessionRequest {
+                                                        session_id,
+                                                        at_seq,
+                                                        allow_migration: None,
+                                                    },
+                                                ));
+                                            }
                                         }
                                     });
                                 });
@@ -5788,6 +5822,14 @@ impl DesktopApp {
                                             plugin_action = Some(PluginAction::SetBundle {
                                                 name: bundle.name.clone(),
                                                 enabled: !bundle.enabled,
+                                            });
+                                        }
+                                        if ui
+                                            .add_enabled(!busy, egui::Button::new("Remove").small())
+                                            .clicked()
+                                        {
+                                            plugin_action = Some(PluginAction::RemoveBundle {
+                                                name: bundle.name.clone(),
                                             });
                                         }
                                     });

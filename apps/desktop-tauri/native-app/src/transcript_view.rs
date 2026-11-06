@@ -77,13 +77,13 @@ pub(super) fn render_transcript(
                 if !row.text.is_empty() {
                     let text = egui::RichText::new(&row.text).size(13.0);
                     let text = match row.kind {
-                        RowKind::ToolResult | RowKind::Job | RowKind::Todo => {
+                        RowKind::ToolResult | RowKind::ToolError | RowKind::Job | RowKind::Todo => {
                             text.monospace().size(11.0)
                         }
                         RowKind::Reasoning => text.italics().color(ui.visuals().weak_text_color()),
                         _ => text,
                     };
-                    if matches!(row.kind, RowKind::ToolResult | RowKind::Job) {
+                    if matches!(row.kind, RowKind::ToolResult | RowKind::ToolError | RowKind::Job) {
                         egui::Frame::new()
                             .fill(ui.visuals().extreme_bg_color)
                             .stroke(egui::Stroke::new(

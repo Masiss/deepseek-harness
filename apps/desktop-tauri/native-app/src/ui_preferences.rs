@@ -4,9 +4,9 @@
 use eframe::egui;
 #[cfg(feature = "legacy-egui")]
 use egui::Color32;
-#[cfg(feature = "legacy-egui")]
 use crate::command_registry::CommandId;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::fmt;
 use std::fs::{self, OpenOptions};
@@ -14,11 +14,13 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 4;
 /// First on-disk format; its fields are all still read, new ones stay defaulted.
 const SCHEMA_VERSION_V1: u32 = 1;
-/// Appearance/editor format before the workspace panel preferences were added.
-const SCHEMA_VERSION_V2: u32 = 2;
+/// Largest composer draft persisted for one Session, in bytes.
+pub const SESSION_DRAFT_BYTES_MAX: usize = 64 * 1024;
+/// Largest number of Session drafts persisted in the preferences file.
+pub const SESSION_DRAFTS_MAX: usize = 200;
 const UI_SCALE_MIN: f32 = 0.8;
 const UI_SCALE_MAX: f32 = 1.5;
 const RADIUS_MIN: f32 = 0.0;
@@ -26,6 +28,8 @@ const RADIUS_MAX: f32 = 12.0;
 const SESSION_PANEL_WIDTH_MIN: f32 = crate::layout::SIDEBAR_MIN;
 const SESSION_PANEL_WIDTH_MAX: f32 = crate::layout::SIDEBAR_MAX;
 const WORKSPACE_PANEL_WIDTH_MIN: f32 = crate::layout::EXPLORER_MIN;
+const CHANGES_PANEL_WIDTH_MIN: f32 = crate::layout::CHANGES_MIN;
+const CHANGES_PANEL_WIDTH_MAX: f32 = crate::layout::CHANGES_MAX;
 const WORKSPACE_PANEL_WIDTH_MAX: f32 = crate::layout::EXPLORER_MAX;
 const INVALID_CHORD: &str = "keyboard shortcuts look like Ctrl+Shift+S, or none";
 
@@ -64,6 +68,62 @@ pub enum UiDensity {
     Comfortable,
     /// Reduce spacing between controls and rows.
     Compact,
+}
+
+/// Accent family used for active/focus elements; does not change error/warn colors.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AccentScheme {
+    /// Harness orange (previous default).
+    #[default]
+    Harness,
+    Blue,
+    Teal,
+    Violet,
+}
+
+impl AccentScheme {
+    /// Accent fill for the active light/dark scheme.
+    pub fn accent(self, dark: bool) -> Rgba8 {
+        match self {
+            Self::Harness => {
+                if dark {
+                    Rgba8::rgb(0xe9, 0x56, 0x18)
+                } else {
+                    Rgba8::rgb(0xe9, 0x56, 0x18)
+                }
+            }
+            Self::Blue => Rgba8::rgb(0x2e, 0x6b, 0xd8),
+            Self::Teal => Rgba8::rgb(0x0e, 0x9a, 0x7a),
+            Self::Violet => Rgba8::rgb(0x7b, 0x5c, 0xd8),
+        }
+    }
+
+    /// Accent text/links.
+    pub fn accent_text(self, _dark: bool) -> Rgba8 {
+        match self {
+            Self::Harness => {
+                if _dark {
+                    Rgba8::rgb(0xff, 0x9b, 0x70)
+                } else {
+                    Rgba8::rgb(0xa8, 0x3b, 0x10)
+                }
+            }
+            Self::Blue => Rgba8::rgb(0x2e, 0x6b, 0xd8),
+            Self::Teal => Rgba8::rgb(0x0e, 0x9a, 0x7a),
+            Self::Violet => Rgba8::rgb(0x7b, 0x5c, 0xd8),
+        }
+    }
+}
+
+/// One keymap preset name.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum KeymapPreset {
+    #[default]
+    Dsh,
+    Zed,
+    Vscode,
 }
 
 /// Named color pack layered over the chosen light or dark theme.
@@ -296,14 +356,23 @@ impl Default for Keybindings {
 }
 
 impl Keybindings {
-    /// The parsed chords for this set, or `None` for a disabled entry.
-    pub fn chords(&self) -> Result<[Option<KeyChord>; 4], UiPreferencesError> {
-        Ok([
-            KeyChord::parse(&self.open_settings)?,
-            KeyChord::parse(&self.open_marketplace)?,
-            KeyChord::parse(&self.open_goals)?,
-            KeyChord::parse(&self.new_session)?,
-        ])
+    /// Chord text for one command.
+    ///
+    /// @param command - Command whose shortcut is requested.
+    /// @returns The configured chord where the editor owns it, otherwise the
+    /// registry default, or `None` when the command has no shortcut.
+    pub fn chord_for(&self, command: CommandId) -> Option<String> {
+        let configured = match command {
+            CommandId::ToggleSettings => Some(&self.open_settings),
+            CommandId::ToggleMarketplace => Some(&self.open_marketplace),
+            CommandId::ToggleGoals => Some(&self.open_goals),
+            CommandId::NewSession => Some(&self.new_session),
+            _ => None,
+        };
+        match configured {
+            Some(text) => Some(text.clone()),
+            None => command.default_chord().map(str::to_owned),
+        }
     }
 
     /// Consumes the chord bound to one shared command, if any.
@@ -327,6 +396,30 @@ impl Keybindings {
             _ => None,
         };
         chord.is_some_and(|chord| chord.consume(input))
+    }
+
+    /// Applies one preset to the four overridable shortcuts.
+    pub fn apply_preset(&mut self, preset: KeymapPreset) {
+        match preset {
+            KeymapPreset::Dsh => {
+                self.open_settings = default_open_settings();
+                self.open_marketplace = default_open_marketplace();
+                self.open_goals = default_open_goals();
+                self.new_session = default_new_session();
+            }
+            KeymapPreset::Zed => {
+                self.open_settings = "Ctrl+Comma".to_owned();
+                self.open_marketplace = "Ctrl+Shift+M".to_owned();
+                self.open_goals = "Ctrl+Shift+G".to_owned();
+                self.new_session = "Ctrl+N".to_owned();
+            }
+            KeymapPreset::Vscode => {
+                self.open_settings = "Ctrl+Comma".to_owned();
+                self.open_marketplace = "Ctrl+Shift+X".to_owned();
+                self.open_goals = "Ctrl+Shift+G".to_owned();
+                self.new_session = "Ctrl+N".to_owned();
+            }
+        }
     }
 }
 
@@ -531,6 +624,12 @@ pub struct UiPreferences {
     /// Client-local keyboard shortcuts.
     #[serde(default)]
     pub keybindings: Keybindings,
+    /// Accent family for active/focus elements.
+    #[serde(default)]
+    pub accent_scheme: AccentScheme,
+    /// Keymap preset applied to the four overridable shortcuts.
+    #[serde(default)]
+    pub keymap_preset: KeymapPreset,
     /// Initial width of the resizable Sessions panel.
     #[serde(default = "default_session_panel_width")]
     pub session_panel_width: f32,
@@ -540,6 +639,18 @@ pub struct UiPreferences {
     /// Initial width of the resizable workspace Explorer.
     #[serde(default = "default_workspace_panel_width")]
     pub workspace_panel_width: f32,
+    /// Initial width of the docked Changes column.
+    #[serde(default = "default_changes_panel_width")]
+    pub changes_panel_width: f32,
+    /// Whether startup reopens the last Session the user had open.
+    #[serde(default = "default_restore_last_session")]
+    pub restore_last_session: bool,
+    /// Session the user opened most recently, for the startup restore.
+    #[serde(default)]
+    pub last_session_id: Option<String>,
+    /// Unsent composer text per Session, keyed by Session id.
+    #[serde(default)]
+    pub session_drafts: BTreeMap<String, String>,
 }
 
 impl Default for UiPreferences {
@@ -553,10 +664,16 @@ impl Default for UiPreferences {
             custom_theme: CustomTheme::default(),
             fonts: FontSettings::default(),
             radius: default_radius(),
+            accent_scheme: AccentScheme::default(),
+            keymap_preset: KeymapPreset::default(),
             keybindings: Keybindings::default(),
             session_panel_width: default_session_panel_width(),
             show_workspace_explorer: default_workspace_explorer_visible(),
             workspace_panel_width: default_workspace_panel_width(),
+            changes_panel_width: default_changes_panel_width(),
+            restore_last_session: default_restore_last_session(),
+            last_session_id: None,
+            session_drafts: BTreeMap::new(),
         }
     }
 }
@@ -591,9 +708,7 @@ impl UiPreferences {
             })?;
         // Version 1 files predate the custom palette, fonts, and radius; every new
         // field defaults, so the generation upgrade keeps the stored choices.
-        if preferences.schema_version == SCHEMA_VERSION_V1
-            || preferences.schema_version == SCHEMA_VERSION_V2
-        {
+        if (SCHEMA_VERSION_V1..SCHEMA_VERSION).contains(&preferences.schema_version) {
             preferences.schema_version = SCHEMA_VERSION;
         }
         preferences.validate()?;
@@ -629,10 +744,44 @@ impl UiPreferences {
                 "workspacePanelWidth must be within the Explorer panel range",
             ));
         }
+        if !self.changes_panel_width.is_finite()
+            || !(CHANGES_PANEL_WIDTH_MIN..=CHANGES_PANEL_WIDTH_MAX)
+                .contains(&self.changes_panel_width)
+        {
+            return Err(UiPreferencesError::InvalidValue(
+                "changesPanelWidth must be within the Changes panel range",
+            ));
+        }
         if !self.radius.is_finite() || !(RADIUS_MIN..=RADIUS_MAX).contains(&self.radius) {
             return Err(UiPreferencesError::InvalidValue(
                 "radius must be from 0 to 12",
             ));
+        }
+        if self
+            .last_session_id
+            .as_ref()
+            .is_some_and(|id| id.is_empty() || id.chars().count() > 256)
+        {
+            return Err(UiPreferencesError::InvalidValue(
+                "lastSessionId must be a non-empty String of at most 256 characters",
+            ));
+        }
+        if self.session_drafts.len() > SESSION_DRAFTS_MAX {
+            return Err(UiPreferencesError::InvalidValue(
+                "sessionDrafts must hold at most 200 Sessions",
+            ));
+        }
+        for (session_id, draft) in &self.session_drafts {
+            if session_id.is_empty() || session_id.chars().count() > 256 {
+                return Err(UiPreferencesError::InvalidValue(
+                    "each sessionDrafts key must be a non-empty Session id of at most 256 characters",
+                ));
+            }
+            if draft.len() > SESSION_DRAFT_BYTES_MAX {
+                return Err(UiPreferencesError::InvalidValue(
+                    "each sessionDrafts value must be at most 64 KiB",
+                ));
+            }
         }
         for (scheme, palette) in [
             ("dark", &self.custom_theme.dark),
@@ -652,14 +801,20 @@ impl UiPreferences {
                 return Err(UiPreferencesError::InvalidFontFamily { role });
             }
         }
-        let chords = self.keybindings.chords()?;
-        let enabled: Vec<KeyChord> = chords.iter().flatten().copied().collect();
-        for (index, chord) in enabled.iter().enumerate() {
-            if enabled[index + 1..].contains(chord) {
+        let mut enabled: Vec<KeyChord> = Vec::new();
+        for command in CommandId::ALL {
+            let Some(text) = self.keybindings.chord_for(command) else {
+                continue;
+            };
+            let Some(chord) = KeyChord::parse(&text)? else {
+                continue;
+            };
+            if enabled.contains(&chord) {
                 return Err(UiPreferencesError::InvalidValue(
                     "each keyboard shortcut must use a different chord",
                 ));
             }
+            enabled.push(chord);
         }
         Ok(())
     }
@@ -668,7 +823,7 @@ impl UiPreferences {
     #[allow(dead_code)]
     pub fn parse_json(text: &str) -> Result<Self, UiPreferencesError> {
         let mut preferences: Self = serde_json::from_str(text).map_err(UiPreferencesError::Json)?;
-        if preferences.schema_version == SCHEMA_VERSION_V1 {
+        if (SCHEMA_VERSION_V1..SCHEMA_VERSION).contains(&preferences.schema_version) {
             preferences.schema_version = SCHEMA_VERSION;
         }
         preferences.validate()?;
@@ -759,6 +914,7 @@ pub fn apply(context: &egui::Context, preferences: &UiPreferences) {
             &mut style.visuals,
             preferences.theme_pack,
             &preferences.custom_theme,
+            preferences.accent_scheme,
         );
     });
 }
@@ -808,7 +964,12 @@ pub(crate) struct Palette {
     pub(crate) error: Rgba8,
 }
 
-pub(crate) fn palette(pack: ThemePack, dark: bool, custom: &CustomTheme) -> Option<Palette> {
+pub(crate) fn palette(
+    pack: ThemePack,
+    dark: bool,
+    custom: &CustomTheme,
+    accent: AccentScheme,
+) -> Option<Palette> {
     match (pack, dark) {
         (ThemePack::Default, dark) => {
             let palette = if dark {
@@ -821,12 +982,8 @@ pub(crate) fn palette(pack: ThemePack, dark: bool, custom: &CustomTheme) -> Opti
                 extreme: palette.surface.rgba8_or(Rgba8::BLACK),
                 text: palette.text.rgba8_or(Rgba8::WHITE),
                 selection: palette.selection.rgba8_or(Rgba8::BLUE),
-                accent: palette.accent.rgba8_or(Rgba8::LIGHT_BLUE),
-                accent_text: if dark {
-                    Rgba8::rgb(0xff, 0x9b, 0x70)
-                } else {
-                    Rgba8::rgb(0xa8, 0x3b, 0x10)
-                },
+                accent: accent.accent(dark),
+                accent_text: accent.accent_text(dark),
                 widget: palette.surface.rgba8_or(Rgba8::BLACK),
                 stroke: palette.border.rgba8_or(Rgba8::GRAY),
                 muted: palette.muted.rgba8_or(Rgba8::GRAY),
@@ -913,7 +1070,7 @@ pub(crate) fn palette(pack: ThemePack, dark: bool, custom: &CustomTheme) -> Opti
 /// Returns the active accent fill for buttons that carry the primary action.
 #[cfg(feature = "legacy-egui")]
 pub(crate) fn accent_fill(preferences: &UiPreferences, dark: bool) -> Color32 {
-    palette(preferences.theme_pack, dark, &preferences.custom_theme).map_or_else(
+    palette(preferences.theme_pack, dark, &preferences.custom_theme, preferences.accent_scheme).map_or_else(
         || Color32::from_rgb(0xe9, 0x56, 0x18),
         |palette| palette.accent.to_color32(),
     )
@@ -935,8 +1092,8 @@ fn apply_corner_radius(visuals: &mut egui::Visuals, radius: egui::CornerRadius) 
 }
 
 #[cfg(feature = "legacy-egui")]
-fn apply_theme_pack(visuals: &mut egui::Visuals, pack: ThemePack, custom: &CustomTheme) {
-    let Some(palette) = palette(pack, visuals.dark_mode, custom) else {
+fn apply_theme_pack(visuals: &mut egui::Visuals, pack: ThemePack, custom: &CustomTheme, accent: AccentScheme) {
+    let Some(palette) = palette(pack, visuals.dark_mode, custom, accent) else {
         return;
     };
     visuals.panel_fill = palette.panel.to_color32();
@@ -1174,6 +1331,23 @@ impl UiPreferencesPanel {
             ui.add_space(8.0);
             ui.separator();
             ui.collapsing("Keyboard shortcuts", |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Keymap preset");
+                    for (label, preset) in [
+                        ("DSH", KeymapPreset::Dsh),
+                        ("Zed", KeymapPreset::Zed),
+                        ("VS Code", KeymapPreset::Vscode),
+                    ] {
+                        let current = self.draft.keymap_preset == preset;
+                        if ui
+                            .add_enabled(!current, egui::Button::new(label).small())
+                            .clicked()
+                        {
+                            self.draft.keymap_preset = preset;
+                            self.draft.keybindings.apply_preset(preset);
+                        }
+                    }
+                });
                 for (label, value) in [
                     ("Open settings", &mut self.draft.keybindings.open_settings),
                     (
@@ -1542,6 +1716,14 @@ fn default_workspace_panel_width() -> f32 {
     crate::layout::EXPLORER_DEFAULT
 }
 
+fn default_changes_panel_width() -> f32 {
+    crate::layout::CHANGES_DEFAULT
+}
+
+fn default_restore_last_session() -> bool {
+    true
+}
+
 fn default_interface_font() -> String {
     "Noto Sans".to_owned()
 }
@@ -1623,15 +1805,20 @@ mod tests {
     fn save_and_load_round_trip_preferences() {
         let directory = TestDirectory::new();
         let path = directory.file();
-        let preferences = UiPreferences {
+        let mut preferences = UiPreferences {
             theme: ThemeMode::Dark,
             ui_scale: 1.2,
             density: UiDensity::Compact,
             session_panel_width: 320.0,
             show_workspace_explorer: false,
             workspace_panel_width: 440.0,
+            restore_last_session: false,
+            last_session_id: Some("session-42".to_owned()),
             ..UiPreferences::default()
         };
+        preferences
+            .session_drafts
+            .insert("session-42".to_owned(), "half-written prompt".to_owned());
         preferences.save(&path).unwrap();
         assert_eq!(UiPreferences::load(&path).unwrap(), preferences);
         preferences.save(&path).unwrap();
@@ -1641,15 +1828,51 @@ mod tests {
     #[test]
     fn rejects_unsupported_versions_invalid_values_and_unknown_fields() {
         for text in [
-            r#"{"schemaVersion":4}"#,
+            r#"{"schemaVersion":5}"#,
             r#"{"uiScale":3.0}"#,
             r#"{"sessionPanelWidth":500.0}"#,
             r#"{"workspacePanelWidth":600.0}"#,
             r#"{"theme":"sepia"}"#,
             r#"{"unknown":true}"#,
+            r#"{"lastSessionId":""}"#,
         ] {
             assert!(UiPreferences::parse_json(text).is_err(), "{text}");
         }
+    }
+
+    #[test]
+    fn rejects_oversized_session_drafts() {
+        let mut preferences = UiPreferences::default();
+        preferences.session_drafts.insert(
+            "s1".to_owned(),
+            "x".repeat(SESSION_DRAFT_BYTES_MAX + 1),
+        );
+        assert!(preferences.validate().is_err());
+
+        let mut preferences = UiPreferences::default();
+        for index in 0..=SESSION_DRAFTS_MAX {
+            preferences
+                .session_drafts
+                .insert(format!("s{index}"), "draft".to_owned());
+        }
+        assert!(preferences.validate().is_err());
+    }
+
+    #[test]
+    fn reads_a_version_three_file_and_defaults_session_restore_state() {
+        let directory = TestDirectory::new();
+        let path = directory.file();
+        fs::write(
+            &path,
+            r#"{"schemaVersion":3,"theme":"dark","sessionPanelWidth":320.0}"#,
+        )
+        .unwrap();
+        let loaded = UiPreferences::load(&path).unwrap();
+        assert_eq!(loaded.schema_version, SCHEMA_VERSION);
+        assert_eq!(loaded.theme, ThemeMode::Dark);
+        assert!(loaded.restore_last_session);
+        assert_eq!(loaded.last_session_id, None);
+        assert!(loaded.session_drafts.is_empty());
     }
 
     #[test]
@@ -1845,13 +2068,13 @@ mod tests {
     #[test]
     fn default_theme_uses_the_harness_dark_and_light_tokens() {
         let custom = CustomTheme::default();
-        let dark = palette(ThemePack::Default, true, &custom).expect("dark Harness palette");
+        let dark = palette(ThemePack::Default, true, &custom, AccentScheme::default()).expect("dark Harness palette");
         assert_eq!(dark.panel, Rgba8::rgb(0x17, 0x1a, 0x1f));
         assert_eq!(dark.extreme, Rgba8::rgb(0x22, 0x27, 0x2e));
         assert_eq!(dark.accent, Rgba8::rgb(0xe9, 0x56, 0x18));
         assert_eq!(dark.accent_text, Rgba8::rgb(0xff, 0x9b, 0x70));
 
-        let light = palette(ThemePack::Default, false, &custom).expect("light Harness palette");
+        let light = palette(ThemePack::Default, false, &custom, AccentScheme::default()).expect("light Harness palette");
         assert_eq!(light.panel, Rgba8::rgb(0xf1, 0xf2, 0xf3));
         assert_eq!(light.accent, Rgba8::rgb(0xe9, 0x56, 0x18));
         assert_eq!(light.accent_text, Rgba8::rgb(0xa8, 0x3b, 0x10));

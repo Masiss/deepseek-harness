@@ -95,6 +95,12 @@ pub(crate) struct TerminalPanel {
     pub(crate) mode_tracker: terminal_ansi::InputModeTracker,
     /// Set when the panel gate should poll again soon.
     pub(crate) dirty: bool,
+    /// Whether typed keys go straight to the program instead of a submit line.
+    pub(crate) raw_keys: bool,
+    /// First selected output line, by index into [`Self::parsed`].
+    pub(crate) selection_start: Option<usize>,
+    /// Last selected output line, which may precede the first.
+    pub(crate) selection_end: Option<usize>,
 }
 
 /// Removes one Office preview's PDF and raster files when conversion finishes.
@@ -151,6 +157,56 @@ impl TerminalPanel {
         self.output_revision = self.output_revision.wrapping_add(1);
         self.mode_tracker.reset();
         self.modes = terminal_ansi::InputModes::default();
+        self.clear_selection();
+    }
+
+    /// Drops the output selection.
+    pub(crate) fn clear_selection(&mut self) {
+        self.selection_start = None;
+        self.selection_end = None;
+    }
+
+    /// Starts a selection at one output line.
+    pub(crate) fn begin_selection(&mut self, line: usize) {
+        self.selection_start = Some(line);
+        self.selection_end = Some(line);
+    }
+
+    /// Extends the selection to one output line.
+    pub(crate) fn extend_selection(&mut self, line: usize) {
+        if self.selection_start.is_some() {
+            self.selection_end = Some(line);
+        }
+    }
+
+    /// The inclusive selected line range, in display order.
+    pub(crate) fn selection_range(&self) -> Option<(usize, usize)> {
+        let start = self.selection_start?;
+        let end = self.selection_end.unwrap_or(start);
+        Some(if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        })
+    }
+
+    /// Whether one output line is inside the selection.
+    pub(crate) fn line_selected(&self, line: usize) -> bool {
+        self.selection_range()
+            .is_some_and(|(start, end)| (start..=end).contains(&line))
+    }
+
+    /// Text of the selected lines, or `None` when nothing is selected.
+    pub(crate) fn selected_output(&self) -> Option<String> {
+        let (start, end) = self.selection_range()?;
+        let lines: Vec<String> = self
+            .parsed
+            .iter()
+            .skip(start)
+            .take(end.saturating_sub(start) + 1)
+            .map(output_line_text)
+            .collect();
+        (!lines.is_empty()).then(|| lines.join("\n"))
     }
 
     pub(crate) fn push_output(&mut self, text: &str) {
@@ -223,6 +279,116 @@ impl TerminalPanel {
         self.inventory = Some(receiver);
         self.status = "Loading terminal inventory / applying operation…".to_owned();
         self.error = None;
+    }
+
+    pub(crate) fn request_list(&mut self, transport: HttpTransport) {
+        self.request(transport, TerminalOperation::List);
+    }
+
+    pub(crate) fn create_default(&mut self, transport: HttpTransport) {
+        let id = format!(
+            "native-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        self.request(
+            transport,
+            TerminalOperation::Create(TerminalCreateRequest {
+                shell_path: None,
+                id,
+                cols: self.cols,
+                rows: self.rows,
+            }),
+        );
+    }
+
+    pub(crate) fn select_terminal(&mut self, id: String) {
+        if self.selected.as_deref() == Some(id.as_str()) {
+            return;
+        }
+        self.detach();
+        self.clear_output();
+        self.text.clear();
+        self.snapshot_status.clear();
+        self.state_status.clear();
+        self.ack_status.clear();
+        self.error = None;
+        self.title = self
+            .items
+            .iter()
+            .find(|item| item.id == id)
+            .map_or_else(String::new, |item| item.title.clone());
+        if let Some(item) = self.items.iter().find(|item| item.id == id) {
+            self.cols = item.cols;
+            self.rows = item.rows;
+        }
+        self.selected = Some(id);
+    }
+
+    pub(crate) fn attach_selected(&mut self, streams: RemoteStreamMux) {
+        self.attach(streams);
+    }
+
+    pub(crate) fn close_selected(&mut self, transport: HttpTransport) {
+        let Some(id) = self.selected.clone() else {
+            return;
+        };
+        self.detach();
+        self.request(
+            transport,
+            TerminalOperation::Close(TerminalCloseRequest { id }),
+        );
+    }
+
+    pub(crate) fn rename_selected(&mut self, transport: HttpTransport, title: String) {
+        let Some(id) = self.selected.clone() else {
+            return;
+        };
+        if title.trim().is_empty() {
+            return;
+        }
+        self.request(
+            transport,
+            TerminalOperation::Rename(TerminalRenameRequest {
+                id,
+                title: title.trim().to_owned(),
+            }),
+        );
+    }
+
+    /// Rebuilds the parsed screen when output or width changed.
+    pub(crate) fn refresh_screen(&mut self) {
+        if self.parsed_revision != self.output_revision || self.parsed_width != self.cols {
+            let screen = terminal_ansi::parse_screen(&self.output, self.cols as usize);
+            self.parsed = screen.lines;
+            self.parsed_revision = self.output_revision;
+            self.parsed_width = self.cols;
+            if !screen.replies.is_empty() {
+                self.reply_to_program(&screen.replies);
+            }
+        }
+    }
+
+    /// Current attachment state, named for the panel header.
+    pub(crate) fn lifecycle_label(&self) -> &'static str {
+        if self.error.is_some() {
+            return "error";
+        }
+        if self.updates.is_some() {
+            return if self.snapshot_status.is_empty() {
+                "starting"
+            } else {
+                "attached"
+            };
+        }
+        if self.selected.is_some() {
+            "detached"
+        } else {
+            "idle"
+        }
     }
 
     pub(crate) fn attach(&mut self, streams: RemoteStreamMux) {
@@ -605,9 +771,169 @@ mod tests {
     }
 }
 
+/// Editable text of one parsed output line.
+pub(crate) fn output_line_text(line: &terminal_ansi::AnsiLine) -> String {
+    line.spans.iter().map(|span| span.text.as_str()).collect()
+}
+
 #[cfg(test)]
 mod panel_tests {
     use super::*;
+    use dsh_client_core::terminal::{
+        TerminalOutputFrame, TerminalShell, TerminalSnapshotFrame, TerminalState,
+    };
+
+    fn info() -> WebTerminalInfo {
+        WebTerminalInfo {
+            id: "t1".to_owned(),
+            title: "shell".to_owned(),
+            shell: TerminalShell {
+                path: "/bin/sh".to_owned(),
+                args: Vec::new(),
+                name: "sh".to_owned(),
+            },
+            cwd: "/tmp".to_owned(),
+            cols: 80,
+            rows: 24,
+            state: TerminalState::Running,
+            exit_code: None,
+            error: None,
+        }
+    }
+
+    fn snapshot() -> TerminalFrame {
+        TerminalFrame::Snapshot(TerminalSnapshotFrame {
+            sequence: 1,
+            screen: "hello".to_owned(),
+            info: info(),
+            writable: true,
+            input_window: None,
+        })
+    }
+
+    fn attached_panel() -> (TerminalPanel, mpsc::Sender<TerminalUpdate>) {
+        let (sender, receiver) = mpsc::channel();
+        let mut panel = TerminalPanel::default();
+        panel.items = vec![info()];
+        panel.selected = Some("t1".to_owned());
+        panel.updates = Some(receiver);
+        (panel, sender)
+    }
+
+    #[test]
+    fn snapshot_and_output_frames_populate_the_screen() {
+        let (mut panel, sender) = attached_panel();
+        sender
+            .send(TerminalUpdate::Frame(Box::new(snapshot())))
+            .unwrap();
+        panel.poll();
+        assert_eq!(panel.output, "hello");
+        assert!(panel.writable);
+        assert_eq!(panel.lifecycle_label(), "attached");
+
+        sender
+            .send(TerminalUpdate::Frame(Box::new(TerminalFrame::Output(
+                TerminalOutputFrame {
+                    sequence: 2,
+                    data: " world".to_owned(),
+                },
+            ))))
+            .unwrap();
+        panel.poll();
+        assert_eq!(panel.output, "hello world");
+        panel.refresh_screen();
+        let first: String = panel.parsed[0]
+            .spans
+            .iter()
+            .map(|span| span.text.as_str())
+            .collect();
+        assert_eq!(first, "hello world");
+    }
+
+    #[test]
+    fn a_dropped_stream_reports_detached_and_keeps_scrollback() {
+        let (mut panel, sender) = attached_panel();
+        sender
+            .send(TerminalUpdate::Frame(Box::new(snapshot())))
+            .unwrap();
+        panel.poll();
+        drop(sender);
+        panel.poll();
+        assert_eq!(panel.lifecycle_label(), "detached");
+        assert_eq!(panel.selected.as_deref(), Some("t1"));
+        assert_eq!(panel.output, "hello");
+        assert_eq!(panel.status, "Terminal stream ended");
+    }
+
+    #[test]
+    fn detach_keeps_the_terminal_and_screen_for_reconnect() {
+        let (mut panel, sender) = attached_panel();
+        sender
+            .send(TerminalUpdate::Frame(Box::new(snapshot())))
+            .unwrap();
+        panel.poll();
+        panel.detach();
+        assert_eq!(panel.lifecycle_label(), "detached");
+        assert_eq!(panel.selected.as_deref(), Some("t1"));
+        assert_eq!(panel.output, "hello");
+        assert!(panel.input.is_none());
+        assert_eq!(panel.status, "Detached (shell remains alive)");
+    }
+
+    #[test]
+    fn a_new_session_clears_the_previous_terminals() {
+        let (mut panel, sender) = attached_panel();
+        sender
+            .send(TerminalUpdate::Frame(Box::new(snapshot())))
+            .unwrap();
+        panel.poll();
+        panel.select_session(Some("other".to_owned()), None, None);
+        assert!(panel.selected.is_none());
+        assert!(panel.output.is_empty());
+        assert!(panel.items.is_empty());
+        assert_eq!(panel.lifecycle_label(), "idle");
+    }
+
+    #[test]
+    fn line_selection_copies_the_selected_range() {
+        let mut panel = TerminalPanel::default();
+        panel.push_output("first\nsecond\nthird");
+        panel.refresh_screen();
+        assert!(panel.selected_output().is_none());
+        panel.begin_selection(0);
+        panel.extend_selection(1);
+        assert!(panel.line_selected(0));
+        assert!(panel.line_selected(1));
+        assert!(!panel.line_selected(2));
+        assert_eq!(panel.selected_output().as_deref(), Some("first\nsecond"));
+    }
+
+    #[test]
+    fn selection_accepts_a_reversed_range() {
+        let mut panel = TerminalPanel::default();
+        panel.push_output("a\nb\nc");
+        panel.refresh_screen();
+        panel.begin_selection(2);
+        panel.extend_selection(1);
+        assert_eq!(panel.selection_range(), Some((1, 2)));
+        assert_eq!(panel.selected_output().as_deref(), Some("b\nc"));
+    }
+
+    #[test]
+    fn clearing_output_drops_the_selection() {
+        let mut panel = TerminalPanel::default();
+        panel.push_output("a\nb");
+        panel.refresh_screen();
+        panel.begin_selection(0);
+        panel.clear_output();
+        assert!(panel.selected_output().is_none());
+        assert!(!panel.line_selected(0));
+    }
+
+    #[test]
+    fn terminal_panel_starts_with_submit_line_input() {
+        assert!(!TerminalPanel::default().raw_keys);
+    }
 
     #[test]
     fn terminal_panel_push_output_accumulates_and_bumps_revision() {

@@ -32,6 +32,7 @@ actions!(
         Home,
         End,
         ShowCharacterPalette,
+        EscapeInput,
         Paste,
         Cut,
         Copy,
@@ -47,6 +48,10 @@ pub(crate) enum TextInputEvent {
     Changed(String),
     /// Enter (single line) or Ctrl/Cmd+Enter (multiline) requested submission.
     Submit,
+    /// A single-line input received Up/Down for list navigation.
+    Navigate(i8),
+    /// A single-line input received a named cursor key a terminal can encode.
+    Key(&'static str),
 }
 
 /// Registers the editing chords every text input uses.
@@ -74,9 +79,32 @@ pub(crate) fn bind_keys(cx: &mut App) {
             KeyBinding::new("ctrl-z", Undo, context),
             KeyBinding::new("ctrl-shift-z", Redo, context),
             KeyBinding::new("ctrl-shift-p", ShowCharacterPalette, context),
+            KeyBinding::new("escape", EscapeInput, context),
         ]);
     }
     cx.bind_keys(bindings);
+}
+
+/// Named keys a single-line input reports without an editing action of its own.
+fn unbound_named_key(key: &str) -> Option<&'static str> {
+    match key {
+        "pageup" => Some("pageup"),
+        "pagedown" => Some("pagedown"),
+        "insert" => Some("insert"),
+        "f1" => Some("f1"),
+        "f2" => Some("f2"),
+        "f3" => Some("f3"),
+        "f4" => Some("f4"),
+        "f5" => Some("f5"),
+        "f6" => Some("f6"),
+        "f7" => Some("f7"),
+        "f8" => Some("f8"),
+        "f9" => Some("f9"),
+        "f10" => Some("f10"),
+        "f11" => Some("f11"),
+        "f12" => Some("f12"),
+        _ => None,
+    }
 }
 
 /// Editing state for one text field.
@@ -253,6 +281,7 @@ impl TextInput {
         } else {
             self.move_to(self.selected_range.start, cx);
         }
+        self.emit_named_key("left", cx);
     }
 
     fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
@@ -261,14 +290,23 @@ impl TextInput {
         } else {
             self.move_to(self.selected_range.end, cx);
         }
+        self.emit_named_key("right", cx);
     }
 
     fn up(&mut self, _: &Up, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_vertical(-1, cx);
+        if self.multiline {
+            self.move_vertical(-1, cx);
+        } else {
+            cx.emit(TextInputEvent::Navigate(-1));
+        }
     }
 
     fn down(&mut self, _: &Down, _: &mut Window, cx: &mut Context<Self>) {
-        self.move_vertical(1, cx);
+        if self.multiline {
+            self.move_vertical(1, cx);
+        } else {
+            cx.emit(TextInputEvent::Navigate(1));
+        }
     }
 
     fn move_vertical(&mut self, direction: i32, cx: &mut Context<Self>) {
@@ -356,6 +394,7 @@ impl TextInput {
         let caret = self.cursor_offset();
         let (_, start) = self.line_for_offset(caret);
         self.move_to(start, cx);
+        self.emit_named_key("home", cx);
     }
 
     fn end(&mut self, _: &End, _: &mut Window, cx: &mut Context<Self>) {
@@ -366,6 +405,20 @@ impl TextInput {
             .get(index)
             .map_or(self.content.len(), |line| start + line.len());
         self.move_to(end, cx);
+        self.emit_named_key("end", cx);
+    }
+
+    /// Reports Escape for terminal input, then lets the shell dismiss overlays.
+    fn escape_input(&mut self, _: &EscapeInput, _: &mut Window, cx: &mut Context<Self>) {
+        self.emit_named_key("escape", cx);
+        cx.propagate();
+    }
+
+    /// Reports a cursor key only for a single-line field.
+    fn emit_named_key(&self, key: &'static str, cx: &mut Context<Self>) {
+        if !self.multiline {
+            cx.emit(TextInputEvent::Key(key));
+        }
     }
 
     fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
@@ -373,6 +426,7 @@ impl TextInput {
             self.select_to(self.previous_boundary(self.cursor_offset()), cx);
         }
         self.replace_text_in_range(None, "", window, cx);
+        self.emit_named_key("backspace", cx);
     }
 
     fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
@@ -380,6 +434,7 @@ impl TextInput {
             self.select_to(self.next_boundary(self.selected_range.end), cx);
         }
         self.replace_text_in_range(None, "", window, cx);
+        self.emit_named_key("delete", cx);
     }
 
     fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -418,11 +473,13 @@ impl TextInput {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
-        if !self.selected_range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.content[self.selected_range.clone()].to_string(),
-            ));
+        if self.selected_range.is_empty() {
+            self.emit_named_key("ctrl-c", cx);
+            return;
         }
+        cx.write_to_clipboard(ClipboardItem::new_string(
+            self.content[self.selected_range.clone()].to_string(),
+        ));
     }
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
@@ -443,6 +500,9 @@ impl TextInput {
             } else {
                 self.replace_text_in_range(None, "\n", window, cx);
             }
+        }
+        if let Some(key) = unbound_named_key(keystroke.key.as_str()) {
+            self.emit_named_key(key, cx);
         }
     }
 
@@ -930,4 +990,50 @@ pub(crate) fn text_input_element(
             theme: theme.clone(),
             height,
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unbound_named_keys_cover_page_function_and_insert_keys() {
+        assert_eq!(unbound_named_key("pageup"), Some("pageup"));
+        assert_eq!(unbound_named_key("pagedown"), Some("pagedown"));
+        assert_eq!(unbound_named_key("insert"), Some("insert"));
+        assert_eq!(unbound_named_key("f1"), Some("f1"));
+        assert_eq!(unbound_named_key("f12"), Some("f12"));
+        assert_eq!(unbound_named_key("f13"), None);
+        assert_eq!(unbound_named_key("enter"), None);
+        assert_eq!(unbound_named_key("a"), None);
+    }
+
+    fn test_font() -> Font {
+        Font {
+            family: "Sans".into(),
+            features: Default::default(),
+            fallbacks: None,
+            weight: FontWeight::NORMAL,
+            style: gpui::FontStyle::Normal,
+        }
+    }
+
+    #[test]
+    fn ime_marked_text_renders_underlined_and_selected_text_highlighted() {
+        let color = Hsla { h: 0., s: 0., l: 1., a: 1. };
+        let selection = Hsla { h: 0., s: 0., l: 0., a: 1. };
+        let accent = Hsla { h: 0., s: 1., l: 0.5, a: 1. };
+        // "hello" with "ell" marked by IME composition.
+        let runs = build_runs("hello", 0..0, Some(1..4), test_font(), color, selection, accent);
+        // Runs cover the whole text exactly once.
+        assert_eq!(runs.iter().map(|run| run.len).sum::<usize>(), 5);
+        // The marked slice carries the IME underline; outer runs do not.
+        let marked = runs.iter().filter(|run| run.underline.is_some()).count();
+        assert_eq!(marked, 1);
+        // Selection highlights without an IME mark when nothing is composing.
+        let plain = build_runs("hello", 1..3, None, test_font(), color, selection, accent);
+        assert_eq!(plain.iter().map(|run| run.len).sum::<usize>(), 5);
+        assert_eq!(plain.iter().filter(|run| run.underline.is_some()).count(), 0);
+        assert_eq!(plain.iter().filter(|run| run.background_color.is_some()).count(), 1);
+    }
 }

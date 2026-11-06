@@ -2,8 +2,10 @@
 
 use gpui::{div, prelude::*, StatefulInteractiveElement, px, AnyElement, Context, Window};
 
+use crate::explorer::{ExplorerRow, ExplorerRowKind};
 use crate::layout;
 use crate::transcript::{RowKind, TranscriptRow};
+use dsh_client_core::chat::PromptMode;
 use crate::shell::app::DesktopApp;
 use crate::shell::theme::Theme;
 use super::widgets;
@@ -126,14 +128,14 @@ fn session_tab(
     } else {
         app.session_title.clone()
     };
-    let state = if app.transport.is_none() {
-        "Session · Host disconnected"
-    } else if app.chat_loading || app.assistant_streaming {
-        "Running · Host connected"
-    } else {
-        "Idle · Host connected"
-    };
     let wide = viewport_width >= layout::EXPLORER_DOCK_MIN_WIDTH;
+    let state = if app.transport.is_none() {
+        "Session · Host disconnected".to_owned()
+    } else if app.chat_loading || app.assistant_streaming {
+        "Streaming · Host connected".to_owned()
+    } else {
+        format!("{} · Host connected", app.transcript.run_state(false)).to_owned()
+    };
     let explorer_shown = app.show_explorer;
     div()
         .flex()
@@ -282,6 +284,7 @@ fn row_accent(theme: &Theme, kind: RowKind) -> gpui::Hsla {
         RowKind::Assistant => theme.text,
         RowKind::Reasoning => theme.muted,
         RowKind::ToolResult => theme.muted,
+        RowKind::ToolError => theme.error,
         RowKind::Approval => theme.warn,
         RowKind::Job => theme.accent,
         RowKind::Todo => theme.accent,
@@ -296,7 +299,7 @@ fn transcript_row(theme: &Theme, row: &TranscriptRow, rating: Option<&String>) -
     let is_user = row.kind == RowKind::User;
     let background = match row.kind {
         RowKind::User => theme.surface_raised,
-        RowKind::ToolResult | RowKind::Job => theme.code_background,
+        RowKind::ToolResult | RowKind::ToolError | RowKind::Job => theme.code_background,
         _ => theme.background,
     };
     let mut card = div()
@@ -346,7 +349,10 @@ fn transcript_row(theme: &Theme, row: &TranscriptRow, rating: Option<&String>) -
                     .w_full()
                     .text_size(theme.fs(12.5))
                     .when(
-                        matches!(row.kind, RowKind::ToolResult | RowKind::Job),
+                        matches!(
+                            row.kind,
+                            RowKind::ToolResult | RowKind::ToolError | RowKind::Job
+                        ),
                         |element| element.font(theme.mono_font()).text_size(theme.fs(11.)),
                     )
                     .child(row.text.clone()),
@@ -354,6 +360,9 @@ fn transcript_row(theme: &Theme, row: &TranscriptRow, rating: Option<&String>) -
         });
     if matches!(row.kind, RowKind::Reasoning | RowKind::Notice) {
         card = card.text_color(theme.muted);
+    }
+    if matches!(row.kind, RowKind::ToolError) {
+        card = card.border_1().border_color(theme.error);
     }
     card.into_any_element()
 }
@@ -364,6 +373,7 @@ fn row_kind_label(kind: RowKind) -> &'static str {
         RowKind::Assistant => "ASSISTANT",
         RowKind::Reasoning => "REASONING",
         RowKind::ToolResult => "TOOL",
+        RowKind::ToolError => "TOOL ERROR",
         RowKind::Approval => "APPROVAL",
         RowKind::Job => "JOB",
         RowKind::Todo => "TASKS",
@@ -630,6 +640,9 @@ fn composer(
     cx: &mut Context<DesktopApp>,
 ) -> AnyElement {
     let input = app.text_field("composer", "Message (Ctrl+Enter to send)", true, cx);
+    if let Some(text) = app.pending_composer_text.take() {
+        input.update(cx, |input, cx| input.set_text(text, cx));
+    }
     let enabled = !app.chat_loading && app.transport.is_some();
     let can_send = enabled
         && !app.chat_text.trim().is_empty()
@@ -662,6 +675,14 @@ fn composer(
                     theme.sp(60.),
                 )),
         )
+        .when(app.chat_text.trim().ends_with('@'), |element| {
+            element.child(
+                div()
+                    .text_size(theme.fs(10.))
+                    .text_color(theme.muted)
+                    .child("Type a workspace-relative path after @, then send."),
+            )
+        })
         .child(
             div()
                 .flex()
@@ -718,6 +739,70 @@ fn composer(
                             cx.notify();
                         })),
                 )
+                .child(
+                    widgets::Button::new(
+                        theme,
+                        if app.prompt_mode == PromptMode::Queue {
+                            "Queue"
+                        } else {
+                            "Queue"
+                        },
+                    )
+                    .enabled(transport && app.prompt_mode != PromptMode::Queue)
+                    .build()
+                    .id("composer-mode-queue")
+                    .on_click(cx.listener(|app, _, _, cx| {
+                        app.prompt_mode = PromptMode::Queue;
+                        cx.notify();
+                    })),
+                )
+                .child(
+                    widgets::Button::new(theme, "Steer")
+                        .enabled(transport && app.prompt_mode != PromptMode::Steer)
+                        .build()
+                        .id("composer-mode-steer")
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.prompt_mode = PromptMode::Steer;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    widgets::Button::new(theme, "History")
+                        .enabled(!app.prompt_history.is_empty())
+                        .build()
+                        .id("composer-history")
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.prompt_history_open = !app.prompt_history_open;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    widgets::Button::new(theme, "Next")
+                        .enabled(!app.prompt_history.is_empty())
+                        .build()
+                        .id("composer-history-next")
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.recall_prompt_history(-1);
+                            if let Some(text) = app.pending_composer_text.clone() {
+                                app.set_input("composer", &text, cx);
+                            }
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    widgets::Button::new(theme, "＠")
+                        .enabled(transport)
+                        .build()
+                        .id("composer-file-picker")
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.file_picker_open = !app.file_picker_open;
+                            if app.file_picker_open {
+                                app.file_picker_query.clear();
+                                app.set_input("file-picker-query", "", cx);
+                            }
+                            cx.notify();
+                        })),
+                )
                 .child(div().flex_1())
                 .when(busy, |element| {
                     element.child(
@@ -731,6 +816,18 @@ fn composer(
                             })),
                     )
                 })
+                .when(busy, |element| {
+                    element.child(
+                        widgets::Button::new(theme, "Queue")
+                            .build()
+                            .id("composer-queue")
+                            .on_click(cx.listener(|app, _, _, cx| {
+                                app.queue_prompt();
+                                app.set_input("composer", "", cx);
+                                cx.notify();
+                            })),
+                    )
+                })
                 .child(
                     widgets::Button::new(theme, "Send")
                         .primary()
@@ -739,7 +836,6 @@ fn composer(
                         .id("composer-send")
                         .on_click(cx.listener(|app, _, _, cx| {
                             if !app.chat_text.trim().is_empty()
-                                && !app.chat_loading
                                 && app.transport.is_some()
                                 && app.attachment_receiver.is_none()
                             {
@@ -766,6 +862,154 @@ fn composer(
         .px(theme.sp(14.))
         .pb(theme.sp(8.))
         .child(div().w_full().max_w(theme.sp(800.)).child(body));
+    if app.prompt_history_open {
+        let prompts: Vec<String> = app.prompt_history.clone();
+        let mut list = div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .max_w(theme.sp(800.))
+            .max_h(theme.sp(140.))
+            .id("prompt-history-scroll").overflow_y_scroll()
+            .bg(theme.surface_raised)
+            .rounded(theme.corner())
+            .border_1()
+            .border_color(theme.border)
+            .px(theme.sp(6.))
+            .py(theme.sp(4.))
+            .gap(px(1.));
+        if prompts.is_empty() {
+            list = list.child(
+                div()
+                    .text_size(theme.fs(10.))
+                    .text_color(theme.muted)
+                    .child("No prompt history yet."),
+            );
+        }
+        for (index, prompt) in prompts.into_iter().rev().enumerate() {
+            let text = prompt.clone();
+            list = list.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .w_full()
+                    .px(theme.sp(6.))
+                    .py(px(2.))
+                    .rounded(theme.corner())
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme.surface))
+                    .id(gpui::SharedString::from(format!("prompt-history-{index}")))
+                    .child(
+                        div()
+                            .text_size(theme.fs(10.5))
+                            .truncate()
+                            .child(prompt),
+                    )
+                    .on_click(cx.listener(move |app, _, _, cx| {
+                        app.chat_text = text.clone();
+                        app.pending_composer_text = Some(text.clone());
+                        app.prompt_history_open = false;
+                        app.set_input("composer", &text, cx);
+                        cx.notify();
+                    })),
+            );
+        }
+        column = column.child(list);
+    }
+    if app.file_picker_open {
+        let query_input = app.text_field("file-picker-query", "Filter loaded files by name or path", false, cx);
+        let query = app.file_picker_query.to_ascii_lowercase();
+        let rows: Vec<ExplorerRow> = app
+            .explorer
+            .visible_rows()
+            .into_iter()
+            .filter(|row| {
+                matches!(row.kind, ExplorerRowKind::File { .. })
+                    && (query.is_empty()
+                        || row.label.to_ascii_lowercase().contains(&query)
+                        || row.path.to_ascii_lowercase().contains(&query))
+            })
+            .take(12)
+            .collect();
+        let mut list = div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .max_w(theme.sp(800.))
+            .max_h(theme.sp(140.))
+            .id("file-picker-scroll").id("prompt-history-scroll").overflow_y_scroll()
+            .bg(theme.surface_raised)
+            .rounded(theme.corner())
+            .border_1()
+            .border_color(theme.border)
+            .px(theme.sp(6.))
+            .py(theme.sp(4.))
+            .gap(px(1.));
+        if rows.is_empty() {
+            list = list.child(
+                div()
+                    .text_size(theme.fs(10.))
+                    .text_color(theme.muted)
+                    .child("No loaded files match."),
+            );
+        }
+        for row in rows {
+            let path = row.path.clone();
+            list = list.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .px(theme.sp(6.))
+                    .py(px(1.))
+                    .rounded(theme.corner())
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme.surface))
+                    .id(gpui::SharedString::from(format!("file-pick-{path}")))
+                    .child(
+                        div()
+                            .text_size(theme.fs(10.5))
+                            .truncate()
+                            .child(row.label),
+                    )
+                    .child(
+                        div()
+                            .text_size(theme.fs(9.))
+                            .text_color(theme.muted)
+                            .truncate()
+                            .child(path.clone()),
+                    )
+                    .on_click(cx.listener(move |app, _, _, cx| {
+                        app.insert_file_reference(&path);
+                        let text = app.chat_text.clone();
+                        app.set_input("composer", &text, cx);
+                        app.set_input("file-picker-query", "", cx);
+                        cx.notify();
+                    })),
+            );
+        }
+        column = column
+            .child(
+                div()
+                    .w_full()
+                    .max_w(theme.sp(800.))
+                    .h(theme.control_height())
+                    .px(theme.sp(6.))
+                    .rounded(theme.corner())
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.surface_raised)
+                    .overflow_hidden()
+                    .child(crate::shell::text_input::text_input_element(
+                        &query_input,
+                        theme,
+                        theme.control_height() - px(2.),
+                    )),
+            )
+            .child(list);
+    }
     if menu_open {
         column = column.child(model_menu(app, theme, cx));
     }

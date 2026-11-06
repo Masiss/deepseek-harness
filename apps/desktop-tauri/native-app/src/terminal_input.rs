@@ -101,6 +101,72 @@ pub fn mouse(modes: InputModes, action: MouseAction, col: usize, row: usize) -> 
     ))
 }
 
+/// Encodes one named key press for the attached program.
+///
+/// @param key - gpui key name: `enter`, `tab`, `backspace`, `escape`, `delete`,
+/// `insert`, `home`, `end`, `pageup`, `pagedown`, `up`, `down`, `left`, `right`,
+/// `space`, or `f1` through `f12`.
+/// @returns The bytes to write, or `None` for a key the terminal does not receive.
+pub fn key(key: &str) -> Option<String> {
+    Some(
+        match key {
+            "enter" => "\r",
+            "tab" => "\t",
+            "backspace" => "\u{7f}",
+            "escape" => "\u{1b}",
+            "delete" => "\u{1b}[3~",
+            "insert" => "\u{1b}[2~",
+            "home" => "\u{1b}[H",
+            "end" => "\u{1b}[F",
+            "pageup" => "\u{1b}[5~",
+            "pagedown" => "\u{1b}[6~",
+            "up" => "\u{1b}[A",
+            "down" => "\u{1b}[B",
+            "right" => "\u{1b}[C",
+            "left" => "\u{1b}[D",
+            "space" => " ",
+            "ctrl-c" => "\u{3}",
+            _ => return function_key(key),
+        }
+        .to_owned(),
+    )
+}
+
+/// One function key's conventional sequence.
+fn function_key(key: &str) -> Option<String> {
+    let number: u8 = key.strip_prefix('f')?.parse().ok()?;
+    Some(
+        match number {
+            1 => "\u{1b}OP",
+            2 => "\u{1b}OQ",
+            3 => "\u{1b}OR",
+            4 => "\u{1b}OS",
+            5 => "\u{1b}[15~",
+            6 => "\u{1b}[17~",
+            7 => "\u{1b}[18~",
+            8 => "\u{1b}[19~",
+            9 => "\u{1b}[20~",
+            10 => "\u{1b}[21~",
+            11 => "\u{1b}[23~",
+            12 => "\u{1b}[24~",
+            _ => return None,
+        }
+        .to_owned(),
+    )
+}
+
+/// Encodes one vertical navigation step as the cursor key the program expects.
+///
+/// @param delta - `-1` for Up, `1` for Down.
+/// @returns The bytes to write, or `None` for any other step.
+pub fn arrow(delta: i8) -> Option<String> {
+    match delta {
+        -1 => key("up"),
+        1 => key("down"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,6 +184,41 @@ mod tests {
             MouseReporting::AnyMotion => modes.mouse_motion = true,
         }
         modes
+    }
+
+    #[test]
+    fn named_keys_use_terminal_sequences() {
+        assert_eq!(key("enter").as_deref(), Some("\r"));
+        assert_eq!(key("tab").as_deref(), Some("\t"));
+        assert_eq!(key("backspace").as_deref(), Some("\u{7f}"));
+        assert_eq!(key("home").as_deref(), Some("\u{1b}[H"));
+        assert_eq!(key("end").as_deref(), Some("\u{1b}[F"));
+        assert_eq!(key("delete").as_deref(), Some("\u{1b}[3~"));
+        assert_eq!(key("insert").as_deref(), Some("\u{1b}[2~"));
+        assert_eq!(key("pageup").as_deref(), Some("\u{1b}[5~"));
+        assert_eq!(key("pagedown").as_deref(), Some("\u{1b}[6~"));
+        assert_eq!(key("left").as_deref(), Some("\u{1b}[D"));
+        assert_eq!(key("right").as_deref(), Some("\u{1b}[C"));
+        assert_eq!(key("space").as_deref(), Some(" "));
+        assert_eq!(key("ctrl-c").as_deref(), Some("\u{3}"));
+        assert_eq!(key("mediaplay"), None);
+    }
+
+    #[test]
+    fn function_keys_use_their_conventional_sequences() {
+        assert_eq!(key("f1").as_deref(), Some("\u{1b}OP"));
+        assert_eq!(key("f4").as_deref(), Some("\u{1b}OS"));
+        assert_eq!(key("f5").as_deref(), Some("\u{1b}[15~"));
+        assert_eq!(key("f12").as_deref(), Some("\u{1b}[24~"));
+        assert_eq!(key("f13"), None);
+    }
+
+    #[test]
+    fn arrow_encodes_only_vertical_steps() {
+        assert_eq!(arrow(-1).as_deref(), Some("\u{1b}[A"));
+        assert_eq!(arrow(1).as_deref(), Some("\u{1b}[B"));
+        assert_eq!(arrow(0), None);
+        assert_eq!(arrow(2), None);
     }
 
     #[test]

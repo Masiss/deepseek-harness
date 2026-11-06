@@ -16,8 +16,14 @@ use crate::ui_preferences::UiPreferences;
 use dsh_client_core::{
     approvals::{ApprovalDecision, PendingApproval},
     chat::{AcceptedResponse, ChatClient, PromptContentPart, PromptMode, PromptRequest},
-    commands::{CommandExecution, CommandResult, CommandsClient},
+    commands::{
+        CommandDescriptor, CommandExecution, CommandResult, CommandSubmitAttachment, CommandsClient,
+    },
     follow::{self, FollowFrame, FollowRequest},
+    git::{
+        GitBranches, GitCheckoutResult, GitClient, GitCommitResult, GitDiff, GitFile,
+        GitOperationResult, GitOperationState, GitPathResult, GitRemoteResult, GitStatus,
+    },
     goals::{CreateGoalRequest, EditGoalRequest, GoalRef, GoalView, GoalsClient},
     marketplace::{MarketplaceClient, MarketplaceInstallOptions},
     message_feedback::{MessageFeedbackClient, MessageFeedbackItem},
@@ -75,6 +81,7 @@ use gpui::{App, AppContext, Context, Window, WindowAppearance};
 enum PluginAction {
     SetPlugin { id: String, enabled: bool },
     SetBundle { name: String, enabled: bool },
+    RemoveBundle { name: String },
 }
 
 enum ApprovalCommand {
@@ -123,10 +130,186 @@ enum SessionUpdate {
     Forked(String),
 }
 
+/// What startup does with the last opened Session.
+#[derive(Debug, PartialEq, Eq)]
+enum RestoreSession {
+    /// Restore is disabled or a Session is already open.
+    None,
+    /// The remembered Session is present in the list.
+    Load(String),
+    /// The remembered Session is gone; open `fallback` when one exists.
+    Missing {
+        last: String,
+        fallback: Option<String>,
+    },
+}
+
+/// Chooses the startup Session from the remembered id and the live list.
+fn restore_session_target(
+    restore_enabled: bool,
+    last_session_id: Option<&str>,
+    sessions: &[SessionSummary],
+    selected_session: Option<&str>,
+) -> RestoreSession {
+    if !restore_enabled || selected_session.is_some() {
+        return RestoreSession::None;
+    }
+    let Some(last) = last_session_id else {
+        return RestoreSession::None;
+    };
+    if sessions.iter().any(|session| session.session_id == last) {
+        return RestoreSession::Load(last.to_owned());
+    }
+    let fallback = sessions
+        .iter()
+        .max_by_key(|session| session.updated_at)
+        .map(|session| session.session_id.clone());
+    RestoreSession::Missing {
+        last: last.to_owned(),
+        fallback,
+    }
+}
+
+/// Stores or removes one Session draft, returning whether it changed.
+fn remember_draft(
+    drafts: &mut std::collections::BTreeMap<String, String>,
+    session_id: &str,
+    text: &str,
+) -> bool {
+    if text.is_empty() {
+        drafts.remove(session_id).is_some()
+    } else if drafts.get(session_id).is_some_and(|draft| draft == text) {
+        false
+    } else {
+        drafts.insert(session_id.to_owned(), text.to_owned());
+        true
+    }
+}
+
+/// Whether `selected_session` has a Host-reported run in flight.
+fn session_is_running(sessions: &[SessionSummary], selected_session: Option<&str>) -> bool {
+    let Some(selected_session) = selected_session else {
+        return false;
+    };
+    sessions
+        .iter()
+        .find(|session| session.session_id == selected_session)
+        .is_some_and(|session| session.running)
+}
+
+/// Classify a Git failure for the surfaces that display it, keeping the Host's
+/// own wording for anything a caller can act on.
+/// Host commands whose name or description contain the lowercased query.
+fn matching_host_commands(
+    commands: &[CommandDescriptor],
+    query: &str,
+) -> Vec<CommandDescriptor> {
+    let query = query.trim().to_lowercase();
+    commands
+        .iter()
+        .filter(|command| {
+            query.is_empty()
+                || command.name.to_lowercase().contains(&query)
+                || command.description.to_lowercase().contains(&query)
+        })
+        .cloned()
+        .collect()
+}
+
+/// One palette row step, clamped to the available rows.
+fn stepped_selection(current: usize, delta: i8, len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let moved = current as isize + isize::from(delta);
+    moved.clamp(0, len as isize - 1) as usize
+}
+
+/// What one raw-mode edit added after the shared prefix, and how many characters it deleted.
+fn raw_keystroke(previous: &str, next: &str) -> (String, usize) {
+    let shared = previous
+        .chars()
+        .zip(next.chars())
+        .take_while(|(left, right)| left == right)
+        .map(|(left, _)| left.len_utf8())
+        .sum::<usize>();
+    (
+        next[shared..].to_owned(),
+        previous[shared..].chars().count(),
+    )
+}
+
+fn failure_text(error: &Error) -> String {
+    match error {
+        Error::Remote { code, .. } if code == "git/not-repository" => "No repository".to_owned(),
+        Error::Remote { code, .. } if code == "git/unavailable" => {
+            "git is not installed on the Host".to_owned()
+        }
+        Error::Remote { code, message, .. } if code.starts_with("git/") => message.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// First seven characters of a commit id, or the id itself when shorter.
+fn short_object_id(commit: &str) -> &str {
+    &commit[..commit.len().min(7)]
+}
+
+/// Whether the Host-side discard guard refuses this change kind.
+fn git_status_cannot_discard(status: &str) -> bool {
+    !matches!(status, "modified" | "deleted" | "typechange")
+}
+
+/// Whether a discard confirmation still describes the latest Git status.
+fn discard_confirmation_is_fresh(
+    status: Option<&GitStatus>,
+    session_id: &str,
+    selected_session_id: Option<&str>,
+    path: &str,
+    expected_status: &str,
+    staged: bool,
+    worktree: bool,
+) -> bool {
+    selected_session_id == Some(session_id)
+        && status.is_some_and(|status| {
+            status.files.iter().any(|file| {
+                file.path == path
+                    && file.status == expected_status
+                    && file.staged == staged
+                    && file.worktree == worktree
+                    && !git_status_cannot_discard(&file.status)
+            })
+        })
+}
+
+/// Whether a checkout confirmation still describes the latest repository state.
+fn checkout_confirmation_is_fresh(
+    status: Option<&GitStatus>,
+    branches: Option<&GitBranches>,
+    session_id: &str,
+    selected_session_id: Option<&str>,
+    current: &Option<String>,
+    target: &str,
+    head: &Option<String>,
+    changed_files: &[GitFile],
+) -> bool {
+    selected_session_id == Some(session_id)
+        && status.is_some_and(|status| {
+            status.branch == *current
+                && status.commit == *head
+                && status.files.as_slice() == changed_files
+        })
+        && branches.is_some_and(|branches| {
+            branches
+                .branches
+                .iter()
+                .any(|branch| branch.name == target)
+        })
+}
+
 /// Application state owns the transport and the last session-list result so UI rendering stays local.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ActiveView {
-    Sessions,
+pub(crate) enum ActiveView {    Sessions,
     Explorer,
     Settings,
     Document,
@@ -134,6 +317,79 @@ pub(crate) enum ActiveView {
     Skills,
     Marketplace,
     Goals,
+}
+
+/// Panel edge the user is dragging.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ResizeTarget {
+    Explorer,
+    Changes,
+    /// Boundary between one terminal pane and the next, by left pane index.
+    TerminalPane(usize),
+}
+
+/// One in-flight drag of a docked panel's edge.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PanelDrag {
+    pub(crate) target: ResizeTarget,
+    /// Window x where the drag began.
+    pub(crate) start_x: f32,
+    /// Panel width when the drag began, or the left pane's weight for a splitter.
+    pub(crate) start_width: f32,
+    /// Right pane's weight for a terminal splitter.
+    pub(crate) start_secondary: f32,
+}
+
+/// Which Changes list the right column shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChangesTab {
+    Diff,
+    Files,
+    Branches,
+}
+
+/// Destructive Git action whose confirmation dialog is open.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum GitConfirmation {
+    Discard {
+        session_id: String,
+        path: String,
+        status: String,
+        staged: bool,
+        worktree: bool,
+    },
+    Checkout {
+        session_id: String,
+        current: Option<String>,
+        target: String,
+        head: Option<String>,
+        changed_files: Vec<GitFile>,
+    },
+}
+
+/// One settled Git worker result.
+/// Index or work-tree verb one path mutation runs.
+#[derive(Clone, Copy)]
+enum GitPathVerb {
+    Stage,
+    Unstage,
+    Discard,
+}
+
+enum GitUpdate {
+    Status(Result<GitStatus, Error>),
+    Branches(Result<GitBranches, Error>),
+    Checkout(Result<GitCheckoutResult, Error>),
+    Diff(Result<GitDiff, Error>),
+    Path(Result<GitPathResult, Error>),
+    Commit(Result<GitCommitResult, Error>),
+    State(Result<GitOperationState, Error>),
+    StatusAndState(
+        Result<GitStatus, Error>,
+        Result<GitOperationState, Error>,
+    ),
+    Remote(&'static str, Result<GitRemoteResult, Error>),
+    Operation(Result<GitOperationResult, Error>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,6 +422,39 @@ enum DialogPurpose {
 type PluginInventoryResult =
     Result<(PluginInventorySnapshot, Vec<BundleInfo>, Vec<ManagedPlugin>), Error>;
 
+/// Terminal panes one window may show at once, including the primary pane.
+pub(crate) const MAX_TERMINAL_PANES: usize = 4;
+
+/// Input field keys, one per pane index.
+pub(crate) const TERMINAL_INPUT_KEYS: [&str; MAX_TERMINAL_PANES] = [
+    "terminal-input",
+    "terminal-input-1",
+    "terminal-input-2",
+    "terminal-input-3",
+];
+
+/// Title field keys, one per pane index.
+pub(crate) const TERMINAL_TITLE_KEYS: [&str; MAX_TERMINAL_PANES] = [
+    "terminal-title",
+    "terminal-title-1",
+    "terminal-title-2",
+    "terminal-title-3",
+];
+
+/// Pane index one terminal input field key addresses.
+fn terminal_input_index(key: &str) -> Option<usize> {
+    TERMINAL_INPUT_KEYS
+        .iter()
+        .position(|candidate| *candidate == key)
+}
+
+/// One palette row: a shell command or a Host-registered human command.
+#[derive(Clone)]
+pub(crate) enum PaletteEntry {
+    Shell(CommandId),
+    Host(CommandDescriptor),
+}
+
 pub(crate) struct DesktopApp {
     pub(crate) host: Option<Host>,
     pub(crate) host_receiver: Option<mpsc::Receiver<Host>>,
@@ -177,6 +466,8 @@ pub(crate) struct DesktopApp {
     pub(crate) session_query: String,
     pub(crate) session_search: Option<SessionSearchResponse>,
     pub(crate) session_title: String,
+    /// Checkpoint sequence entered for the next fork; blank means latest.
+    pub(crate) fork_seq_text: String,
     pub(crate) sessions_status: String,
     pub(crate) sessions_error: Option<String>,
     pub(crate) sessions_failure_context: &'static str,
@@ -192,6 +483,24 @@ pub(crate) struct DesktopApp {
     pub(crate) page_receiver: Option<mpsc::Receiver<Result<PageLoad, Error>>>,
     pub(crate) page_through_seq: Option<i64>,
     pub(crate) chat_text: String,
+    /// Delivery mode selected for the next prompt.
+    pub(crate) prompt_mode: PromptMode,
+    /// Recently sent prompts for recall.
+    pub(crate) prompt_history: Vec<String>,
+    pub(crate) prompt_history_index: Option<usize>,
+    /// Whether the prompt history popover is open.
+    pub(crate) prompt_history_open: bool,
+    /// Whether the @ file picker is open.
+    pub(crate) file_picker_open: bool,
+    pub(crate) file_picker_query: String,
+    /// Composer text to install into the text field on the next render.
+    pub(crate) pending_composer_text: Option<String>,
+    /// Whether the last Session id or a draft changed on disk.
+    pub(crate) session_state_dirty: bool,
+    /// When the Session state last changed, used to debounce its save.
+    pub(crate) session_state_changed_at: Option<std::time::Instant>,
+    /// Last time a run-state poll refreshed the Session list.
+    pub(crate) last_session_poll: std::time::Instant,
     pub(crate) focus_composer: bool,
     pub(crate) cancel_receiver: Option<mpsc::Receiver<Result<AcceptedResponse, Error>>>,
     pub(crate) dialog: Option<(DialogPurpose, mpsc::Receiver<Option<PathBuf>>)>,
@@ -278,10 +587,72 @@ pub(crate) struct DesktopApp {
     pub(crate) plugin_write_receiver: Option<mpsc::Receiver<Result<ChangeResult, Error>>>,
     pub(crate) plugin_write_status: Option<String>,
     pub(crate) terminal: TerminalPanel,
+    /// Additional terminal panes beside the primary one.
+    pub(crate) terminal_extra: Vec<Box<TerminalPanel>>,
+    /// Relative width of each pane; missing entries mean an even share.
+    pub(crate) terminal_pane_widths: Vec<f32>,
+    /// Focused terminal pane; `0` is {@link terminal}.
+    pub(crate) terminal_focus: usize,
     pub(crate) bottom_tool: Option<BottomTool>,
     pub(crate) explorer: WorkspaceExplorer,
     pub(crate) show_explorer: bool,
     pub(crate) explorer_fullscreen: bool,
+    /// Whether the right Changes column is docked.
+    pub(crate) show_changes: bool,
+    pub(crate) changes_tab: ChangesTab,
+    /// Latest Host-reported Git status for the selected Session.
+    pub(crate) git_status: Option<GitStatus>,
+    /// Latest Host-reported branch list for the selected Session.
+    pub(crate) git_branches: Option<GitBranches>,
+    /// Path whose diff the Changes panel shows.
+    pub(crate) git_selected_path: Option<String>,
+    /// Whether the selected path's diff reads the staged side.
+    pub(crate) git_diff_staged: bool,
+    /// Latest diff for {@link git_selected_path}.
+    pub(crate) git_diff: Option<GitDiff>,
+    /// In-progress rebase, cherry-pick, merge, or revert and its conflicts.
+    pub(crate) git_state: Option<GitOperationState>,
+    /// Git's own text for the last remote or multi-step action.
+    pub(crate) git_remote_summary: Option<String>,
+    /// Two-step confirmation for push.
+    pub(crate) git_push_confirm: bool,
+    /// Set when a state refresh waits for the current Git worker.
+    pub(crate) git_state_pending: bool,
+    /// Failure of the last Git verb, already classified for display.
+    pub(crate) git_error: Option<String>,
+    /// Whether a Git verb is in flight.
+    pub(crate) git_loading: bool,
+    /// At most one Git verb runs at a time, so responses stay ordered.
+    pub(crate) git_receiver: Option<mpsc::Receiver<GitUpdate>>,
+    /// Destructive Git action waiting for the user's explicit confirmation.
+    pub(crate) git_confirmation: Option<GitConfirmation>,
+    /// Whether the workspace watcher changed since the last Git refresh check.
+    pub(crate) git_refresh_pending: bool,
+    /// Last watcher timestamp the Git auto-refresh check consumed.
+    pub(crate) git_refresh_probe_started_at: Option<std::time::Instant>,
+    /// Whether the Session switcher popover is open.
+    pub(crate) show_session_menu: bool,
+    /// The panel edge being dragged, while the pointer is down.
+    pub(crate) panel_drag: Option<PanelDrag>,
+    /// Whether the About dialog is open.
+    pub(crate) show_about: bool,
+    /// Whether the command palette is open.
+    pub(crate) palette_open: bool,
+    /// Current palette query, mirrored from its text field.
+    pub(crate) palette_query: String,
+    /// Set when the palette's search field must take focus on the next frame.
+    pub(crate) focus_palette: bool,
+    /// Selected row in the palette's current match list.
+    pub(crate) palette_selected: usize,
+    /// Host-registered human commands the palette offers for the selected Session.
+    pub(crate) host_commands: Vec<CommandDescriptor>,
+    pub(crate) host_commands_receiver: Option<mpsc::Receiver<Result<Vec<CommandDescriptor>, Error>>>,
+    pub(crate) host_commands_loading: bool,
+    pub(crate) host_commands_error: Option<String>,
+    pub(crate) host_command_receiver: Option<mpsc::Receiver<Result<Option<CommandExecution>, Error>>>,
+    pub(crate) host_command_loading: bool,
+    /// Composer line returned to the user when the Host does not resolve it.
+    pub(crate) pending_slash_line: Option<String>,
     pub(crate) schedules: Vec<serde_json::Value>,
     pub(crate) schedules_session: Option<String>,
     pub(crate) schedules_receiver: Option<mpsc::Receiver<Result<Vec<serde_json::Value>, String>>>,
@@ -328,6 +699,24 @@ pub(crate) struct DesktopApp {
     pub(crate) model_menu_open: bool,
     /// Shortcut commands waiting for the poll loop.
     pub(crate) commands: Arc<Mutex<Vec<CommandId>>>,
+}
+
+/// Parses the fork checkpoint field: blank means the latest sequence.
+fn parse_fork_checkpoint(text: &str) -> Result<Option<i64>, String> {
+    let checkpoint = text.trim();
+    if checkpoint.is_empty() {
+        return Ok(None);
+    }
+    checkpoint
+        .parse::<i64>()
+        .ok()
+        .filter(|seq| *seq >= 0)
+        .map(Some)
+        .ok_or_else(|| {
+            format!(
+                "Fork checkpoint must be a non-negative integer sequence, got {checkpoint:?}. Blank means latest."
+            )
+        })
 }
 
 /// Host settings editor state for the gpui Settings surface.
@@ -411,6 +800,7 @@ impl DesktopApp {
             session_query: String::new(),
             session_search: None,
             session_title: String::new(),
+            fork_seq_text: String::new(),
             sessions_status: String::new(),
             sessions_error: None,
             sessions_failure_context: "",
@@ -426,6 +816,16 @@ impl DesktopApp {
             page_receiver: None,
             page_through_seq: None,
             chat_text: String::new(),
+            prompt_mode: PromptMode::Queue,
+            prompt_history: Vec::new(),
+            prompt_history_index: None,
+            prompt_history_open: false,
+            file_picker_open: false,
+            file_picker_query: String::new(),
+            pending_composer_text: None,
+            session_state_dirty: false,
+            session_state_changed_at: None,
+            last_session_poll: std::time::Instant::now(),
             focus_composer: false,
             cancel_receiver: None,
             dialog: None,
@@ -511,10 +911,44 @@ impl DesktopApp {
             plugin_write_receiver: None,
             plugin_write_status: None,
             terminal: TerminalPanel::default(),
+            terminal_extra: Vec::new(),
+            terminal_pane_widths: Vec::new(),
+            terminal_focus: 0,
             bottom_tool: None,
             explorer: WorkspaceExplorer::default(),
             show_explorer,
             explorer_fullscreen: false,
+            show_changes: true,
+            changes_tab: ChangesTab::Diff,
+            git_status: None,
+            git_branches: None,
+            git_selected_path: None,
+            git_diff_staged: false,
+            git_diff: None,
+            git_state: None,
+            git_remote_summary: None,
+            git_push_confirm: false,
+            git_confirmation: None,
+            git_refresh_pending: false,
+            git_refresh_probe_started_at: None,
+            git_state_pending: false,
+            git_error: None,
+            git_loading: false,
+            git_receiver: None,
+            show_session_menu: false,
+            panel_drag: None,
+            show_about: false,
+            palette_open: false,
+            palette_query: String::new(),
+            focus_palette: false,
+            palette_selected: 0,
+            host_commands: Vec::new(),
+            host_commands_receiver: None,
+            host_commands_loading: false,
+            host_commands_error: None,
+            host_command_receiver: None,
+            host_command_loading: false,
+            pending_slash_line: None,
             schedules: Vec::new(),
             schedules_session: None,
             schedules_receiver: None,
@@ -866,6 +1300,7 @@ impl DesktopApp {
                 PluginAction::SetBundle { name, enabled } => {
                     client.set_bundle_enabled(&name, enabled)
                 }
+                PluginAction::RemoveBundle { name } => client.remove_bundle(&name),
             };
             let _ = sender.send(result);
         });
@@ -1075,6 +1510,7 @@ impl DesktopApp {
                             name,
                             host_path: page.stat.absolute_path,
                             text: page.text,
+                            version: Some(page.stat.version),
                         })
                     })
                     .map_err(|error| error.to_string())
@@ -1170,6 +1606,643 @@ impl DesktopApp {
         )
     }
 
+    /// Copies the composer text into the selected Session's draft.
+    pub(crate) fn remember_active_draft(&mut self) {
+        let Some(session_id) = self.selected_session.clone() else {
+            return;
+        };
+        let changed = remember_draft(
+            &mut self.ui_preferences.session_drafts,
+            &session_id,
+            &self.chat_text,
+        );
+        if changed {
+            self.mark_session_state_dirty();
+        }
+    }
+
+    /// Restores the selected Session's draft into the composer.
+    fn restore_active_draft(&mut self, session_id: &str) {
+        let draft = self
+            .ui_preferences
+            .session_drafts
+            .get(session_id)
+            .cloned()
+            .unwrap_or_default();
+        self.chat_text = draft.clone();
+        self.pending_composer_text = Some(draft);
+    }
+
+    /// Marks the last-Session state and drafts for a debounced save.
+    fn mark_session_state_dirty(&mut self) {
+        self.session_state_dirty = true;
+        self.session_state_changed_at = Some(std::time::Instant::now());
+    }
+
+    /// Writes the last-Session state and drafts.
+    fn flush_session_state(&mut self) {
+        if !self.session_state_dirty {
+            return;
+        }
+        self.session_state_dirty = false;
+        if let Err(error) = self.ui_preferences.save(&self.ui_preferences_path) {
+            self.status = format!("Could not save Session drafts: {error}");
+        }
+    }
+
+    /// Writes Session state after edits have been quiet for the debounce window.
+    fn flush_session_state_if_quiet(&mut self) {
+        if !self.session_state_dirty {
+            return;
+        }
+        let quiet = self
+            .session_state_changed_at
+            .is_none_or(|changed| changed.elapsed() >= std::time::Duration::from_millis(750));
+        if quiet {
+            self.flush_session_state();
+        }
+    }
+
+    /// Whether the selected Session has a Host-reported run in flight.
+    pub(crate) fn selected_session_running(&self) -> bool {
+        session_is_running(&self.sessions, self.selected_session.as_deref())
+    }
+
+    /// Drops Git state when no Session is selected or the Host is gone.
+    fn reset_git(&mut self) {
+        self.git_status = None;
+        self.git_branches = None;
+        self.git_selected_path = None;
+        self.git_diff = None;
+        self.git_state = None;
+        self.git_remote_summary = None;
+        self.git_push_confirm = false;
+        self.git_confirmation = None;
+        self.git_refresh_pending = false;
+        self.git_refresh_probe_started_at = None;
+        self.git_state_pending = false;
+        self.git_error = None;
+        self.git_loading = false;
+        self.git_receiver = None;
+    }
+
+    /// Refreshes the selected Session's repository status from the Host.
+    pub(crate) fn refresh_git(&mut self) {
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.reset_git();
+            return;
+        };
+        if self.git_receiver.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = GitClient::new(&transport).status(session_id);
+            let _ = sender.send(GitUpdate::Status(result));
+        });
+        self.git_receiver = Some(receiver);
+        self.git_loading = true;
+        self.git_error = None;
+    }
+
+    /// Loads the local branch list for the selected Session.
+    pub(crate) fn refresh_git_branches(&mut self) {
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.reset_git();
+            return;
+        };
+        if self.git_receiver.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = GitClient::new(&transport).branches(session_id);
+            let _ = sender.send(GitUpdate::Branches(result));
+        });
+        self.git_receiver = Some(receiver);
+        self.git_loading = true;
+        self.git_error = None;
+    }
+
+    /// Loads the in-progress operation and conflict paths.
+    pub(crate) fn refresh_git_state(&mut self) {
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.git_state = None;
+            return;
+        };
+        if self.git_receiver.is_some() {
+            self.git_state_pending = true;
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = GitClient::new(&transport).state(session_id);
+            let _ = sender.send(GitUpdate::State(result));
+        });
+        self.git_receiver = Some(receiver);
+        self.git_loading = true;
+    }
+
+    /// Runs one remote action and reloads the repository after it settles.
+    pub(crate) fn run_git_remote(&mut self, operation: &'static str) {
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.reset_git();
+            return;
+        };
+        if self.git_receiver.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let client = GitClient::new(&transport);
+            let result = match operation {
+                "fetch" => client.fetch(session_id),
+                "pull" => client.pull(session_id),
+                _ => client.push(session_id),
+            };
+            let _ = sender.send(GitUpdate::Remote(operation, result));
+        });
+        self.git_receiver = Some(receiver);
+        self.git_loading = true;
+        self.git_remote_summary = None;
+        self.git_error = None;
+    }
+
+    /// Rebases the current branch onto one local branch.
+    pub(crate) fn rebase_git_branch(&mut self, branch: String) {
+        self.run_git_operation(move |client, session_id| client.rebase(session_id, branch));
+    }
+
+    /// Cherry-picks one commit onto the current branch.
+    pub(crate) fn cherry_pick_git_commit(&mut self, commit: String) {
+        self.run_git_operation(move |client, session_id| client.cherry_pick(session_id, commit));
+    }
+
+    /// Continues the in-progress rebase or cherry-pick.
+    pub(crate) fn continue_git_operation(&mut self) {
+        self.run_git_operation(|client, session_id| client.continue_operation(session_id));
+    }
+
+    /// Aborts the in-progress rebase or cherry-pick.
+    pub(crate) fn abort_git_operation(&mut self) {
+        self.run_git_operation(|client, session_id| client.abort_operation(session_id));
+    }
+
+    fn run_git_operation(
+        &mut self,
+        operation: impl FnOnce(&GitClient<'_>, String) -> Result<GitOperationResult, Error> + Send + 'static,
+    ) {
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.reset_git();
+            return;
+        };
+        if self.git_receiver.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let client = GitClient::new(&transport);
+            let result = operation(&client, session_id);
+            let _ = sender.send(GitUpdate::Operation(result));
+        });
+        self.git_receiver = Some(receiver);
+        self.git_loading = true;
+        self.git_remote_summary = None;
+        self.git_error = None;
+    }
+
+    /// Selects one changed path and loads its diff for the current side.
+    pub(crate) fn select_git_path(&mut self, path: String) {
+        self.git_selected_path = Some(path);
+        self.refresh_git_diff();
+    }
+
+    /// Toggles the diff side for the selected path.
+    pub(crate) fn set_git_diff_staged(&mut self, staged: bool) {
+        self.git_diff_staged = staged;
+        self.refresh_git_diff();
+    }
+
+    /// Loads the selected path's diff from the Host.
+    pub(crate) fn refresh_git_diff(&mut self) {
+        let (Some(session_id), Some(transport), Some(path)) = (
+            self.selected_session.clone(),
+            self.transport.clone(),
+            self.git_selected_path.clone(),
+        ) else {
+            self.git_diff = None;
+            return;
+        };
+        if self.git_receiver.is_some() {
+            return;
+        }
+        let staged = self.git_diff_staged;
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = GitClient::new(&transport).diff(session_id, path, staged);
+            let _ = sender.send(GitUpdate::Diff(result));
+        });
+        self.git_receiver = Some(receiver);
+        self.git_loading = true;
+        self.git_error = None;
+    }
+
+    /// Stages one changed path.
+    pub(crate) fn stage_git_path(&mut self, path: String) {
+        self.mutate_git_path(path, GitPathVerb::Stage);
+    }
+
+    /// Unstages one changed path.
+    pub(crate) fn unstage_git_path(&mut self, path: String) {
+        self.mutate_git_path(path, GitPathVerb::Unstage);
+    }
+
+    /// Opens a confirmation before discarding one path's unstaged change.
+    pub(crate) fn discard_git_path(&mut self, path: String) {
+        let Some(session_id) = self.selected_session.clone() else {
+            return;
+        };
+        let Some(file) = self
+            .git_status
+            .as_ref()
+            .and_then(|status| status.files.iter().find(|file| file.path == path))
+            .cloned()
+        else {
+            self.git_error =
+                Some("Discard cancelled: the file list changed before confirmation.".to_owned());
+            return;
+        };
+        if !file.worktree || git_status_cannot_discard(&file.status) {
+            self.git_error =
+                Some("Discard unavailable for this file's current Git state.".to_owned());
+            return;
+        }
+        self.git_confirmation = Some(GitConfirmation::Discard {
+            session_id,
+            path,
+            status: file.status.clone(),
+            staged: file.staged,
+            worktree: file.worktree,
+        });
+    }
+
+    /// Confirms a pending discard after rechecking the last Git status.
+    pub(crate) fn confirm_git_confirmation(&mut self) {
+        let Some(confirmation) = self.git_confirmation.take() else {
+            return;
+        };
+        match confirmation {
+            GitConfirmation::Discard {
+                session_id,
+                path,
+                status,
+                staged,
+                worktree,
+            } => {
+                let fresh = discard_confirmation_is_fresh(
+                    self.git_status.as_ref(),
+                    &session_id,
+                    self.selected_session.as_deref(),
+                    &path,
+                    &status,
+                    staged,
+                    worktree,
+                );
+                if !fresh {
+                    self.git_error = Some(
+                        "Discard cancelled: the file changed after confirmation opened.".to_owned(),
+                    );
+                    self.refresh_git();
+                    return;
+                }
+                self.mutate_git_path(path, GitPathVerb::Discard);
+            }
+            GitConfirmation::Checkout {
+                session_id,
+                current,
+                target,
+                head,
+                changed_files,
+            } => {
+                let fresh = checkout_confirmation_is_fresh(
+                    self.git_status.as_ref(),
+                    self.git_branches.as_ref(),
+                    &session_id,
+                    self.selected_session.as_deref(),
+                    &current,
+                    &target,
+                    &head,
+                    &changed_files,
+                );
+                if !fresh {
+                    self.git_error = Some(
+                        "Checkout cancelled: the repository changed after confirmation opened."
+                            .to_owned(),
+                    );
+                    self.refresh_git();
+                    self.refresh_git_branches();
+                    return;
+                }
+                self.checkout_git_branch_after_confirmation(target);
+            }
+        }
+    }
+
+    fn mutate_git_path(&mut self, path: String, verb: GitPathVerb) {
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.reset_git();
+            return;
+        };
+        if self.git_receiver.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let client = GitClient::new(&transport);
+            let result = match verb {
+                GitPathVerb::Stage => client.stage(session_id, path),
+                GitPathVerb::Unstage => client.unstage(session_id, path),
+                GitPathVerb::Discard => client.discard(session_id, path),
+            };
+            let _ = sender.send(GitUpdate::Path(result));
+        });
+        self.git_receiver = Some(receiver);
+        self.git_loading = true;
+        self.git_error = None;
+    }
+
+    /// Commits the staged index with the composer's message.
+    pub(crate) fn commit_git(&mut self, message: String) {
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.reset_git();
+            return;
+        };
+        if message.trim().is_empty() || self.git_receiver.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = GitClient::new(&transport).commit(session_id, message);
+            let _ = sender.send(GitUpdate::Commit(result));
+        });
+        self.git_receiver = Some(receiver);
+        self.git_loading = true;
+        self.git_error = None;
+    }
+
+    /// Opens a confirmation before checking out one local branch.
+    pub(crate) fn checkout_git_branch(&mut self, branch: String) {
+        let Some(session_id) = self.selected_session.clone() else {
+            return;
+        };
+        let Some(status) = self.git_status.clone() else {
+            self.git_error =
+                Some("Checkout unavailable until the repository status is refreshed.".to_owned());
+            return;
+        };
+        if status.branch.as_deref() == Some(branch.as_str()) {
+            return;
+        }
+        let listed = self
+            .git_branches
+            .as_ref()
+            .is_some_and(|branches| branches.branches.iter().any(|item| item.name == branch));
+        if !listed {
+            self.git_error = Some(format!(
+                "Checkout unavailable: \"{branch}\" is no longer in the branch list."
+            ));
+            self.refresh_git_branches();
+            return;
+        }
+        self.git_confirmation = Some(GitConfirmation::Checkout {
+            session_id,
+            current: status.branch.clone(),
+            target: branch,
+            head: status.commit.clone(),
+            changed_files: status.files.clone(),
+        });
+    }
+
+    /// Checks out one local branch and reloads the repository state after it lands.
+    fn checkout_git_branch_after_confirmation(&mut self, branch: String) {
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.reset_git();
+            return;
+        };
+        if self.git_receiver.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = GitClient::new(&transport).checkout(session_id, branch);
+            let _ = sender.send(GitUpdate::Checkout(result));
+        });
+        self.git_receiver = Some(receiver);
+        self.git_loading = true;
+        self.git_error = None;
+    }
+
+    /// Applies one settled Git worker result; returns whether the frame changed.
+    fn poll_git(&mut self) -> bool {
+        let Some(receiver) = &self.git_receiver else {
+            return false;
+        };
+        match receiver.try_recv() {
+            Ok(update) => {
+                self.git_receiver = None;
+                self.git_loading = false;
+                match update {
+                    GitUpdate::Status(Ok(status)) => {
+                        self.git_status = Some(status);
+                        self.git_error = None;
+                    }
+                    GitUpdate::Status(Err(error)) => {
+                        self.git_status = None;
+                        self.git_error = Some(failure_text(&error));
+                    }
+                    GitUpdate::Branches(Ok(branches)) => {
+                        self.git_branches = Some(branches);
+                        self.git_error = None;
+                    }
+                    GitUpdate::Branches(Err(error)) => {
+                        self.git_branches = None;
+                        self.git_error = Some(failure_text(&error));
+                    }
+                    GitUpdate::Checkout(Ok(result)) => {
+                        self.git_branches = None;
+                        self.git_error = None;
+                        self.status = format!("Checked out {}", result.branch);
+                        self.refresh_git();
+                        self.refresh_git_state();
+                    }
+                    GitUpdate::Checkout(Err(error)) => {
+                        self.git_branches = None;
+                        self.git_error = Some(failure_text(&error));
+                    }
+                    GitUpdate::Diff(Ok(diff)) => {
+                        self.git_diff = Some(diff);
+                        self.git_error = None;
+                    }
+                    GitUpdate::Diff(Err(error)) => {
+                        self.git_diff = None;
+                        self.git_error = Some(failure_text(&error));
+                    }
+                    GitUpdate::Path(Ok(result)) => {
+                        self.git_diff = None;
+                        self.status = format!("{}: {}", result.operation, result.path);
+                        self.refresh_git();
+                        if self.changes_tab == ChangesTab::Branches {
+                            self.refresh_git_branches();
+                        }
+                    }
+                    GitUpdate::Path(Err(error)) => {
+                        self.git_error = Some(failure_text(&error));
+                    }
+                    GitUpdate::Commit(Ok(result)) => {
+                        self.git_diff = None;
+                        self.git_selected_path = None;
+                        self.status = format!("Committed {}", short_object_id(&result.commit));
+                        self.refresh_git();
+                        self.refresh_git_state();
+                    }
+                    GitUpdate::Commit(Err(error)) => {
+                        self.git_error = Some(failure_text(&error));
+                    }
+                    GitUpdate::State(Ok(state)) => {
+                        self.git_state = Some(state);
+                    }
+                    GitUpdate::StatusAndState(Ok(status), Ok(state)) => {
+                        self.git_status = Some(status);
+                        self.git_state = Some(state);
+                        self.git_error = None;
+                    }
+                    GitUpdate::StatusAndState(Ok(status), Err(error)) => {
+                        self.git_status = Some(status);
+                        self.git_state = None;
+                        self.git_error = Some(failure_text(&error));
+                    }
+                    GitUpdate::StatusAndState(Err(error), _) => {
+                        self.git_status = None;
+                        self.git_error = Some(failure_text(&error));
+                    }
+                    GitUpdate::State(Err(error)) => {
+                        self.git_state = None;
+                        self.git_error = Some(failure_text(&error));
+                    }
+                    GitUpdate::Remote(operation, Ok(result)) => {
+                        self.git_push_confirm = false;
+                        self.git_remote_summary = Some(if result.summary.is_empty() {
+                            format!("{} complete", result.operation)
+                        } else {
+                            result.summary.clone()
+                        });
+                        self.status = format!("{operation} complete");
+                        self.refresh_git();
+                        self.refresh_git_state();
+                    }
+                    GitUpdate::Remote(_, Err(error)) => {
+                        self.git_push_confirm = false;
+                        self.git_error = Some(failure_text(&error));
+                    }
+                    GitUpdate::Operation(Ok(result)) => {
+                        self.git_state = Some(result.state);
+                        if !result.output.is_empty() {
+                            self.git_remote_summary = Some(result.output);
+                        }
+                        self.refresh_git();
+                    }
+                    GitUpdate::Operation(Err(error)) => {
+                        self.git_error = Some(failure_text(&error));
+                    }
+                }
+                if self.git_state_pending {
+                    self.git_state_pending = false;
+                    self.refresh_git_state();
+                }
+                true
+            }
+            Err(mpsc::TryRecvError::Empty) => false,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.git_receiver = None;
+                self.git_loading = false;
+                self.git_state_pending = false;
+                self.git_error = Some("Git worker stopped unexpectedly".to_owned());
+                true
+            }
+        }
+    }
+
+    /// Refreshes the Session list for the live run badge without status noise.
+    fn refresh_sessions_quietly(&mut self) {
+        if self.sessions_receiver.is_some() {
+            return;
+        }
+        let status = self.sessions_status.clone();
+        self.refresh_sessions();
+        self.sessions_status = status;
+    }
+
+    /// Polls the canonical run state while a turn may still be active.
+    fn poll_run_state(&mut self) {
+        if !self.chat_loading && !self.sessions.iter().any(|session| session.running) {
+            return;
+        }
+        if self.last_session_poll.elapsed() < std::time::Duration::from_secs(3) {
+            return;
+        }
+        self.last_session_poll = std::time::Instant::now();
+        self.refresh_sessions_quietly();
+    }
+
+    /// Refreshes Git once a workspace watch reported a change.
+    ///
+    /// Status and operation state are one combined request so the panel cannot
+    /// show a diff/edit from one repository generation next to state from
+    /// another.
+    fn poll_git_auto_refresh(&mut self) {
+        if !self.git_refresh_pending || self.selected_session.is_none() {
+            return;
+        }
+        if self.git_receiver.is_some() {
+            return;
+        }
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let client = GitClient::new(&transport);
+            let status = client.status(session_id.clone());
+            let state = client.state(session_id);
+            let _ = sender.send(GitUpdate::StatusAndState(status, state));
+        });
+        self.git_receiver = Some(receiver);
+        self.git_loading = true;
+        self.git_error = None;
+        self.git_refresh_pending = false;
+        if self.git_selected_path.is_some() {
+            let _ = self.git_diff.take();
+        }
+    }
+
     pub(crate) fn load_session(&mut self, session_id: String) {
         self.load_session_with_policy(session_id, false);
     }
@@ -1181,6 +2254,9 @@ impl DesktopApp {
     fn load_session_with_policy(&mut self, session_id: String, retain_loaded_view: bool) {
         let retain_loaded_view =
             retain_loaded_view && self.selected_session.as_deref() == Some(session_id.as_str());
+        if !retain_loaded_view {
+            self.remember_active_draft();
+        }
         if !retain_loaded_view {
             self.session_title.clear();
             self.active_view = ActiveView::Sessions;
@@ -1198,10 +2274,19 @@ impl DesktopApp {
             self.selected_skill = None;
         }
         self.selected_session = Some(session_id.clone());
+        self.ui_preferences.last_session_id = Some(session_id.clone());
+        self.mark_session_state_dirty();
+        if !retain_loaded_view {
+            self.restore_active_draft(&session_id);
+        }
+        self.flush_session_state();
         self.explorer
             .select_session(Some(&session_id), self.transport.as_ref());
         if retain_loaded_view {
             self.terminal.select_session(None, None, None);
+            self.terminal_extra.clear();
+            self.terminal_pane_widths.clear();
+            self.terminal_focus = 0;
         }
         self.goal = None;
         self.goal_receiver = None;
@@ -1248,6 +2333,8 @@ impl DesktopApp {
             self.preview_error = None;
         }
         self.refresh_feedback();
+        self.refresh_git();
+        self.refresh_git_state();
         self.page_loading = true;
         let Some(transport) = self.transport.clone() else {
             self.page_loading = false;
@@ -1796,15 +2883,23 @@ impl DesktopApp {
             self.page_error = Some("Connect before sending a prompt".to_owned());
             return;
         };
+        if text.starts_with('/') {
+            self.submit_slash_command(text, transport);
+            return;
+        }
         let Some(streams) = self.streams.clone() else {
             self.page_error = Some("Remote streams are not connected".to_owned());
             return;
         };
+        let mode = self.prompt_mode;
         let attachment = self.attachment.clone();
         self.chat_text.clear();
         self.attachment = None;
         self.attachment_name.clear();
         self.chat_loading = true;
+        self.remember_active_draft();
+        self.record_prompt_history(&text);
+        self.refresh_sessions_quietly();
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
             let chat = ChatClient::new(&transport);
@@ -1817,7 +2912,7 @@ impl DesktopApp {
             let request = PromptRequest {
                 request_id: chat.next_request_id(),
                 session_id: session_id.clone(),
-                mode: PromptMode::Queue,
+                mode,
                 content,
                 client_time_zone: None,
             };
@@ -1850,8 +2945,105 @@ impl DesktopApp {
         self.chat_receiver = Some(receiver);
     }
 
-    /// Switches the central surface and its side effects, as the navigation rail does.
+    /// Records one sent prompt for later recall.
+    pub(crate) fn record_prompt_history(&mut self, text: &str) {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+        if self.prompt_history.last().map(String::as_str) != Some(trimmed) {
+            self.prompt_history.push(trimmed.to_owned());
+        }
+        if self.prompt_history.len() > 20 {
+            let excess = self.prompt_history.len() - 20;
+            self.prompt_history.drain(0..excess);
+        }
+        self.prompt_history_index = None;
+    }
+
+    /// Recalls a sent prompt into the composer.
+    pub(crate) fn recall_prompt_history(&mut self, direction: i8) {
+        if self.prompt_history.is_empty() {
+            return;
+        }
+        let index = match self.prompt_history_index {
+            None => {
+                if direction > 0 {
+                    self.prompt_history.len() - 1
+                } else {
+                    return;
+                }
+            }
+            Some(index) => {
+                if direction > 0 {
+                    index.saturating_sub(1)
+                } else {
+                    (index + 1).min(self.prompt_history.len() - 1)
+                }
+            }
+        };
+        self.prompt_history_index = Some(index);
+        if let Some(text) = self.prompt_history.get(index).cloned() {
+            self.chat_text = text.clone();
+            self.pending_composer_text = Some(text);
+        }
+    }
+
+    /// Inserts a workspace file reference into the composer.
+    pub(crate) fn insert_file_reference(&mut self, path: &str) {
+        if !self.chat_text.ends_with(' ') && !self.chat_text.is_empty() {
+            self.chat_text.push(' ');
+        }
+        self.chat_text.push_str(&format!("@{path} "));
+        self.pending_composer_text = Some(self.chat_text.clone());
+        self.file_picker_query.clear();
+        self.file_picker_open = false;
+        self.focus_composer = true;
+        self.remember_active_draft();
+    }
+
+    /// Sends a prompt while a turn is already running, without opening a second follow stream.
+    pub(crate) fn queue_prompt(&mut self) {
+        let text = self.chat_text.trim().to_owned();
+        if text.is_empty() || !self.chat_loading {
+            return;
+        }
+        let Some(session_id) = self.selected_session.clone() else {
+            return;
+        };
+        let Some(transport) = self.transport.clone() else {
+            self.page_error = Some("Connect before sending a prompt".to_owned());
+            return;
+        };
+        let mode = self.prompt_mode;
+        let attachment = self.attachment.clone();
+        self.chat_text.clear();
+        self.attachment = None;
+        self.attachment_name.clear();
+        self.remember_active_draft();
+        self.record_prompt_history(&text);
+        std::thread::spawn(move || {
+            let chat = ChatClient::new(&transport);
+            let mut content = vec![PromptContentPart::Text { text }];
+            if let Some(attachment) = attachment {
+                content.push(PromptContentPart::File {
+                    receipt_id: attachment.receipt_id,
+                });
+            }
+            let request = PromptRequest {
+                request_id: chat.next_request_id(),
+                session_id,
+                mode,
+                content,
+                client_time_zone: None,
+            };
+            let _ = chat.prompt(request);
+        });
+    }
+
     pub(crate) fn switch_view(&mut self, view: ActiveView) {
+        self.show_session_menu = false;
+        self.show_about = false;
         self.active_view = view;
         self.explorer_fullscreen = view == ActiveView::Explorer;
         self.show_settings = view == ActiveView::Settings;
@@ -1875,6 +3067,7 @@ impl DesktopApp {
     /// Opens a Session chosen in the list.
     pub(crate) fn choose_session(&mut self, session_id: String) {
         self.load_session(session_id);
+        self.refresh_sessions_quietly();
     }
 
     /// Creates a Session and focuses the composer.
@@ -1910,14 +3103,22 @@ impl DesktopApp {
         self.request_sessions(SessionOperation::Rename(RenameSessionRequest { session_id, title }));
     }
 
-    /// Forks the selected Session at its latest sequence.
+    /// Forks the selected Session at the entered checkpoint, or at its latest
+    /// sequence when the checkpoint field is blank.
     pub(crate) fn fork_selected_session(&mut self) {
         let Some(session_id) = self.selected_session.clone() else {
             return;
         };
+        let at_seq = match parse_fork_checkpoint(&self.fork_seq_text) {
+            Ok(at_seq) => at_seq,
+            Err(error) => {
+                self.sessions_error = Some(error);
+                return;
+            }
+        };
         self.request_sessions(SessionOperation::Fork(ForkSessionRequest {
             session_id,
-            at_seq: None,
+            at_seq,
             allow_migration: None,
         }));
     }
@@ -2082,6 +3283,203 @@ impl DesktopApp {
         }
     }
 
+    /// The pane at `index`, where `0` is the primary pane.
+    pub(crate) fn terminal_pane_at(&self, index: usize) -> Option<&TerminalPanel> {
+        if index == 0 {
+            Some(&self.terminal)
+        } else {
+            self.terminal_extra
+                .get(index - 1)
+                .map(|pane| pane.as_ref())
+        }
+    }
+
+    /// The pane at `index`, mutable.
+    pub(crate) fn terminal_pane_mut(&mut self, index: usize) -> Option<&mut TerminalPanel> {
+        if index == 0 {
+            Some(&mut self.terminal)
+        } else {
+            self.terminal_extra
+                .get_mut(index - 1)
+                .map(|pane| pane.as_mut())
+        }
+    }
+
+    /// Number of terminal panes currently shown.
+    pub(crate) fn terminal_pane_count(&self) -> usize {
+        1 + self.terminal_extra.len()
+    }
+
+    /// Terminal ids already shown in another pane, so a new pane can pick a free one.
+    fn terminal_pane_selected(&self) -> Vec<String> {
+        std::iter::once(&self.terminal)
+            .chain(self.terminal_extra.iter().map(|pane| pane.as_ref()))
+            .filter_map(|pane| pane.selected.clone())
+            .collect()
+    }
+
+    /// Relative width of one terminal pane.
+    pub(crate) fn terminal_pane_weight(&self, index: usize) -> f32 {
+        self.terminal_pane_widths
+            .get(index)
+            .copied()
+            .unwrap_or(1.0)
+    }
+
+    /// One pane's share of the pane row, in `0..=1`.
+    pub(crate) fn terminal_pane_fraction(&self, index: usize) -> f32 {
+        let total: f32 = (0..self.terminal_pane_count())
+            .map(|slot| self.terminal_pane_weight(slot))
+            .sum();
+        self.terminal_pane_weight(index) / total.max(f32::EPSILON)
+    }
+
+    /// Mirrors a terminal field's text, sending each key immediately in raw mode.
+    fn terminal_typed(&mut self, index: usize, text: String, cx: &mut Context<Self>) {
+        self.focus_terminal_pane(index);
+        let Some(panel) = self.terminal_pane_mut(index) else {
+            return;
+        };
+        if !panel.raw_keys {
+            panel.text = text;
+            return;
+        }
+        let previous = std::mem::take(&mut panel.text);
+        if text.is_empty() {
+            return;
+        }
+        let (added, removed) = raw_keystroke(&previous, &text);
+        if removed > 0 && !panel.send_encoded(&"\u{7f}".repeat(removed)) {
+            panel.error = Some("Terminal is not writable; attach first".to_owned());
+        }
+        if !added.is_empty() && !panel.send_encoded(&added) {
+            panel.error = Some("Terminal is not writable; attach first".to_owned());
+        }
+        panel.text.clear();
+        if let Some(input) = self.inputs.get(TERMINAL_INPUT_KEYS[index]).cloned() {
+            input.update(cx, |input, cx| input.set_text(String::new(), cx));
+        }
+        cx.notify();
+    }
+
+    /// Sends a cursor key in raw mode; a submit-line field leaves navigation alone.
+    fn terminal_navigate(&mut self, index: usize, delta: i8) {
+        let Some(panel) = self.terminal_pane_mut(index) else {
+            return;
+        };
+        if !panel.raw_keys {
+            return;
+        }
+        if let Some(bytes) = crate::terminal_input::arrow(delta) {
+            if !panel.send_encoded(&bytes) {
+                panel.error = Some("Terminal is not writable; attach first".to_owned());
+            }
+        }
+    }
+
+    /// Sends one named cursor or function key to a raw-mode pane.
+    fn terminal_named_key(&mut self, index: usize, name: &'static str) {
+        let Some(panel) = self.terminal_pane_mut(index) else {
+            return;
+        };
+        if !panel.raw_keys {
+            return;
+        }
+        if let Some(bytes) = crate::terminal_input::key(name) {
+            if !panel.send_encoded(&bytes) {
+                panel.error = Some("Terminal is not writable; attach first".to_owned());
+            }
+        }
+    }
+
+    /// Sends the addressed pane's field as one line, or Enter alone in raw mode.
+    pub(crate) fn submit_terminal_input(&mut self, index: usize) {
+        self.focus_terminal_pane(index);
+        let Some(panel) = self.terminal_pane_mut(index) else {
+            return;
+        };
+        let text = std::mem::take(&mut panel.text);
+        if panel.raw_keys {
+            if !panel.send_encoded("\r") {
+                panel.error = Some("Terminal is not writable; attach first".to_owned());
+            }
+            return;
+        }
+        if text.is_empty() {
+            return;
+        }
+        if !panel.send_encoded(&format!("{text}\r")) {
+            panel.error = Some("Terminal is not writable; attach first".to_owned());
+        }
+    }
+
+    /// Sets which terminal pane owns typed input.
+    pub(crate) fn focus_terminal_pane(&mut self, index: usize) {
+        if index < self.terminal_pane_count() {
+            self.terminal_focus = index;
+        }
+    }
+
+    /// Flips the focused pane between submit-line and raw keystroke input.
+    pub(crate) fn toggle_terminal_raw_keys(&mut self, cx: &mut Context<Self>) {
+        let index = self.terminal_focus;
+        if let Some(panel) = self.terminal_pane_mut(index) {
+            panel.raw_keys = !panel.raw_keys;
+            panel.text.clear();
+        }
+        if let Some(input) = self.inputs.get(TERMINAL_INPUT_KEYS[index]).cloned() {
+            input.update(cx, |input, cx| input.set_text(String::new(), cx));
+        }
+    }
+
+    /// Adds one pane over a terminal the other panes do not show yet.
+    pub(crate) fn add_terminal_pane(&mut self) {
+        if self.terminal_pane_count() >= MAX_TERMINAL_PANES {
+            self.status =
+                format!("At most {MAX_TERMINAL_PANES} terminal panes are shown at once");
+            return;
+        }
+        let Some(session) = self.selected_session.clone() else {
+            self.status = "Select a connected Session before adding a terminal pane".to_owned();
+            return;
+        };
+        let used = self.terminal_pane_selected();
+        let other = self
+            .terminal
+            .items
+            .iter()
+            .find(|item| !used.contains(&item.id))
+            .map(|item| item.id.clone());
+        let mut panel = TerminalPanel::default();
+        panel.session = Some(session);
+        panel.cols = self.terminal.cols;
+        panel.rows = self.terminal.rows;
+        panel.items = self.terminal.items.clone();
+        if let Some(id) = other {
+            panel.select_terminal(id);
+            if let Some(streams) = self.streams.clone() {
+                panel.attach_selected(streams);
+            }
+        }
+        panel.dirty = true;
+        self.terminal_extra.push(Box::new(panel));
+        self.terminal_pane_widths
+            .resize(self.terminal_pane_count(), 1.0);
+        self.terminal_focus = self.terminal_pane_count() - 1;
+    }
+
+    /// Removes one extra pane; the primary pane stays.
+    pub(crate) fn remove_terminal_pane(&mut self, index: usize) {
+        if index == 0 || index >= self.terminal_pane_count() {
+            return;
+        }
+        self.terminal_extra.remove(index - 1);
+        if self.terminal_pane_widths.len() > index {
+            self.terminal_pane_widths.remove(index);
+        }
+        self.terminal_focus = self.terminal_focus.min(self.terminal_pane_count() - 1);
+    }
+
     /// Returns the shell-owned input entity for `key`, creating it on first use.
     pub(crate) fn text_field(
         &mut self,
@@ -2096,9 +3494,47 @@ impl DesktopApp {
         let placeholder: gpui::SharedString = placeholder.to_owned().into();
         let input = cx.new(|cx| super::text_input::TextInput::state(placeholder, multiline, cx));
         cx.subscribe(&input, move |app, entity, event, cx| {
-            let super::text_input::TextInputEvent::Submit = event else {
-                return;
-            };
+            match event {
+                super::text_input::TextInputEvent::Changed(text)
+                    if terminal_input_index(key).is_some() =>
+                {
+                    if let Some(index) = terminal_input_index(key) {
+                        app.terminal_typed(index, text.clone(), cx);
+                    }
+                    return;
+                }
+                super::text_input::TextInputEvent::Navigate(delta)
+                    if terminal_input_index(key).is_some() =>
+                {
+                    if let Some(index) = terminal_input_index(key) {
+                        app.terminal_navigate(index, *delta);
+                    }
+                    cx.notify();
+                    return;
+                }
+                super::text_input::TextInputEvent::Key(name)
+                    if terminal_input_index(key).is_some() =>
+                {
+                    if let Some(index) = terminal_input_index(key) {
+                        app.terminal_named_key(index, name);
+                    }
+                    cx.notify();
+                    return;
+                }
+                super::text_input::TextInputEvent::Changed(text) if key == "palette-query" => {
+                    app.palette_query = text.clone();
+                    app.palette_selected = 0;
+                    cx.notify();
+                    return;
+                }
+                super::text_input::TextInputEvent::Navigate(delta) if key == "palette-query" => {
+                    app.move_palette_selection(*delta);
+                    cx.notify();
+                    return;
+                }
+                super::text_input::TextInputEvent::Submit => {}
+                _ => return,
+            }
             let text = entity.read(cx).text().to_owned();
             match key {
                 "composer" => {
@@ -2117,6 +3553,8 @@ impl DesktopApp {
                     app.search_sessions();
                 }
                 "session-title" => app.session_title = text,
+                "session-fork-seq" => app.fork_seq_text = text,
+                "file-picker-query" => app.file_picker_query = text,
                 "market-query" => {
                     app.market_query = text;
                     app.search_market();
@@ -2129,6 +3567,16 @@ impl DesktopApp {
                 "goal-objective" => app.goal_objective = text,
                 "goal-rounds" => app.goal_max_rounds = text,
                 "settings-draft" => app.host_settings_view.draft = Some(text),
+                "palette-query" => {
+                    app.palette_query = text;
+                    app.run_selected_palette_match();
+                }
+                _ if terminal_input_index(key).is_some() => {
+                    if let Some(index) = terminal_input_index(key) {
+                        app.submit_terminal_input(index);
+                    }
+                    entity.update(cx, |input, cx| input.set_text(String::new(), cx));
+                }
                 _ => {}
             }
             cx.notify();
@@ -2161,7 +3609,12 @@ impl DesktopApp {
     }
 
     /// Copies edited text inputs into the plain state fields the workers use.
-    pub(crate) fn sync_inputs(&mut self, cx: &App) {
+    pub(crate) fn sync_inputs(&mut self, cx: &mut Context<Self>) {
+        if let Some(input) = self.inputs.get("composer").cloned() {
+            if let Some(text) = self.pending_composer_text.take() {
+                input.update(cx, |input, cx| input.set_text(text, cx));
+            }
+        }
         for (key, field) in [
             ("composer", &mut self.chat_text),
             ("session-search", &mut self.session_query),
@@ -2171,19 +3624,90 @@ impl DesktopApp {
             ("document-path", &mut self.preview_path),
             ("goal-objective", &mut self.goal_objective),
             ("goal-rounds", &mut self.goal_max_rounds),
+            ("palette-query", &mut self.palette_query),
+            ("session-fork-seq", &mut self.fork_seq_text),
+            ("file-picker-query", &mut self.file_picker_query),
         ] {
             if let Some(input) = self.inputs.get(key) {
-                *field = input.read(cx).text().to_owned();
+                *field = input.read(&*cx).text().to_owned();
             }
         }
         if let Some(input) = self.inputs.get("settings-draft") {
-            self.host_settings_view.draft = Some(input.read(cx).text().to_owned());
+            self.host_settings_view.draft = Some(input.read(&*cx).text().to_owned());
         }
+        self.remember_active_draft();
     }
 
     /// Recomputes the theme after the preferences changed.
     pub(crate) fn refresh_theme(&mut self, window: &Window) {
         self.theme = Theme::new(&self.ui_preferences, appearance_is_dark(window.appearance()));
+    }
+
+    /// Starts resizing one docked panel from a pointer position.
+    pub(crate) fn begin_panel_drag(&mut self, target: ResizeTarget, start_x: f32) {
+        let (start_width, start_secondary) = match target {
+            ResizeTarget::Explorer => (self.ui_preferences.workspace_panel_width, 0.0),
+            ResizeTarget::Changes => (self.ui_preferences.changes_panel_width, 0.0),
+            ResizeTarget::TerminalPane(boundary) => {
+                self.terminal_pane_widths
+                    .resize(self.terminal_pane_count(), 1.0);
+                (
+                    self.terminal_pane_weight(boundary),
+                    self.terminal_pane_weight(boundary + 1),
+                )
+            }
+        };
+        self.panel_drag = Some(PanelDrag {
+            target,
+            start_x,
+            start_width,
+            start_secondary,
+        });
+    }
+
+    /// Applies a pointer position to the panel being resized, within its bounds.
+    pub(crate) fn drag_panel(&mut self, x: f32) {
+        let Some(drag) = self.panel_drag else {
+            return;
+        };
+        let delta = x - drag.start_x;
+        match drag.target {
+            ResizeTarget::Explorer => {
+                self.ui_preferences.workspace_panel_width = (drag.start_width + delta).clamp(
+                    crate::layout::EXPLORER_MIN,
+                    crate::layout::EXPLORER_MAX,
+                );
+            }
+            ResizeTarget::Changes => {
+                self.ui_preferences.changes_panel_width = (drag.start_width - delta)
+                    .clamp(crate::layout::CHANGES_MIN, crate::layout::CHANGES_MAX);
+            }
+            ResizeTarget::TerminalPane(boundary) => {
+                let total = drag.start_width + drag.start_secondary;
+                let minimum = 0.25_f32.min(total / 2.0);
+                let first = (drag.start_width + delta / 400.0).clamp(minimum, total - minimum);
+                if self.terminal_pane_widths.len() <= boundary + 1 {
+                    self.terminal_pane_widths
+                        .resize(self.terminal_pane_count(), 1.0);
+                }
+                if let Some(pair) = self
+                    .terminal_pane_widths
+                    .get_mut(boundary..boundary + 2)
+                {
+                    pair[0] = first;
+                    pair[1] = total - first;
+                }
+            }
+        }
+    }
+
+    /// Ends a resize and stores the resulting width.
+    pub(crate) fn finish_panel_drag(&mut self) {
+        if let Some(drag) = self.panel_drag.take() {
+            if !matches!(drag.target, ResizeTarget::TerminalPane(_)) {
+                self.persist_preferences();
+            }
+        }
     }
 
     /// Persists the current interface preferences.
@@ -2256,14 +3780,22 @@ impl DesktopApp {
         self.write_plugin(PluginAction::SetBundle { name, enabled });
     }
 
+    /// Removes one installed plugin bundle.
+    pub(crate) fn remove_bundle(&mut self, name: String) {
+        self.write_plugin(PluginAction::RemoveBundle { name });
+    }
+
     /// Installs a marketplace entry by its Host-provided spec.
     pub(crate) fn install_entry(&mut self, spec: String) {
         self.install_market_entry(spec, MarketplaceInstallOptions { registry: None });
     }
 
-    /// Applies the client-local shortcut bindings; each chord toggles its view once.
     /// Runs one shared shell command from the menu, shortcut, or palette.
-    pub(crate) fn run_command(&mut self, command: CommandId) {        match command {
+    pub(crate) fn run_command(&mut self, command: CommandId) {
+        self.show_session_menu = false;
+        self.top_menu_open = false;
+        self.show_about = false;
+        match command {
             CommandId::ToggleSettings => {
                 self.show_settings = !self.show_settings;
                 self.active_view = ActiveView::Settings;
@@ -2283,7 +3815,9 @@ impl DesktopApp {
             CommandId::ToggleExplorer => {
                 self.show_explorer = !self.show_explorer;
             }
-            CommandId::ToggleChanges => {}
+            CommandId::ToggleChanges => {
+                self.show_changes = !self.show_changes;
+            }
             CommandId::ToggleTerminal => {
                 self.bottom_tool = if self.bottom_tool == Some(BottomTool::Terminal) {
                     None
@@ -2299,7 +3833,269 @@ impl DesktopApp {
                 self.show_skills = !self.show_skills;
                 self.active_view = ActiveView::Skills;
             }
+            CommandId::OpenFile => {
+                self.switch_view(ActiveView::Document);
+                self.open_file_dialog();
+            }
+            CommandId::About => {
+                self.show_about = true;
+            }
+            CommandId::ShowPalette => {
+                self.palette_open = true;
+                self.palette_query.clear();
+                self.palette_selected = 0;
+                self.focus_palette = true;
+                self.refresh_host_commands();
+            }
+            CommandId::Dismiss => {
+                self.dismiss_overlay();
+            }
+            CommandId::Quit => {
+                self.flush_session_state();
+                self.quitting
+                    .store(true, std::sync::atomic::Ordering::Release);
+                self.close_requested = true;
+            }
         }
+    }
+
+    /// Closes the command palette and clears its query.
+    pub(crate) fn close_palette(&mut self) {
+        self.palette_open = false;
+        self.palette_query.clear();
+        self.palette_selected = 0;
+        self.focus_palette = false;
+    }
+
+    /// Closes the topmost overlay and reports whether one was open.
+    ///
+    /// Overlays stack in paint order, so a single Escape peels exactly the one
+    /// the user is looking at and leaves the rest untouched.
+    ///
+    /// @returns `true` when an overlay was closed.
+    pub(crate) fn dismiss_overlay(&mut self) -> bool {
+        // Reverse paint order, so Escape always peels the overlay on top.
+        if self.git_confirmation.is_some() {
+            self.git_confirmation = None;
+            return true;
+        }
+        if self.clear_goal_confirmation.is_some() {
+            self.clear_goal_confirmation = None;
+            return true;
+        }
+        if self.update_prompt.is_some() {
+            self.update_prompt = None;
+            return true;
+        }
+        if self.show_session_menu {
+            self.show_session_menu = false;
+            return true;
+        }
+        if self.top_menu_open {
+            self.top_menu_open = false;
+            return true;
+        }
+        if self.palette_open {
+            self.close_palette();
+            self.focus_composer = true;
+            return true;
+        }
+        if self.show_about {
+            self.show_about = false;
+            return true;
+        }
+        false
+    }
+
+    /// One row the palette can run.
+    pub(crate) fn palette_entries(&self) -> Vec<PaletteEntry> {
+        let query = self.palette_query.trim().to_lowercase();
+        let mut entries: Vec<PaletteEntry> = CommandId::matching(&self.palette_query)
+            .into_iter()
+            .map(PaletteEntry::Shell)
+            .collect();
+        entries.extend(
+            matching_host_commands(&self.host_commands, &query)
+                .into_iter()
+                .map(PaletteEntry::Host),
+        );
+        entries
+    }
+
+    /// Moves the palette selection by one step, clamped to the match list.
+    pub(crate) fn move_palette_selection(&mut self, delta: i8) {
+        self.palette_selected = stepped_selection(self.palette_selected, delta, self.palette_entries().len());
+    }
+
+    /// Runs the row the palette currently selects.
+    pub(crate) fn run_selected_palette_match(&mut self) {
+        let entries = self.palette_entries();
+        let Some(entry) = entries.get(self.palette_selected.min(entries.len().saturating_sub(1))) else {
+            return;
+        };
+        let entry = entry.clone();
+        self.run_palette_entry(entry);
+    }
+
+    /// Runs one palette row after closing the palette.
+    pub(crate) fn run_palette_entry(&mut self, entry: PaletteEntry) {
+        self.close_palette();
+        match entry {
+            PaletteEntry::Shell(command) => self.run_command(command),
+            PaletteEntry::Host(command) => self.run_host_command(command),
+        }
+    }
+
+    /// Loads the Host's human commands for the selected Session.
+    pub(crate) fn refresh_host_commands(&mut self) {
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.host_commands.clear();
+            self.host_commands_error = None;
+            return;
+        };
+        if self.host_commands_receiver.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = CommandsClient::new(&transport).list(&session_id);
+            let _ = sender.send(result);
+        });
+        self.host_commands_receiver = Some(receiver);
+        self.host_commands_loading = true;
+        self.host_commands_error = None;
+    }
+
+    /// Sends a composer line that starts with `/` to the Host command registry.
+    fn submit_slash_command(&mut self, line: String, transport: HttpTransport) {
+        let Some(session_id) = self.selected_session.clone() else {
+            return;
+        };
+        if self.host_command_receiver.is_some() {
+            self.page_error = Some("A Host command is already running".to_owned());
+            return;
+        }
+        let attachments = self
+            .attachment
+            .take()
+            .map(|attachment| {
+                vec![CommandSubmitAttachment::File {
+                    receipt_id: attachment.receipt_id,
+                }]
+            })
+            .unwrap_or_default();
+        self.attachment_name.clear();
+        self.chat_text.clear();
+        self.remember_active_draft();
+        self.record_prompt_history(&line);
+        self.pending_slash_line = Some(line.clone());
+        self.status = format!("Running {line}…");
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = CommandsClient::new(&transport).execute(&session_id, &line, attachments);
+            let _ = sender.send(result);
+        });
+        self.host_command_receiver = Some(receiver);
+        self.host_command_loading = true;
+    }
+
+    /// Executes one Host-registered command line and reports its real outcome.
+    pub(crate) fn run_host_command(&mut self, command: CommandDescriptor) {
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.status = "Select a connected Session before running a Host command".to_owned();
+            return;
+        };
+        if self.host_command_receiver.is_some() {
+            return;
+        }
+        let line = format!("/{}", command.name);
+        self.status = format!("Running {line}…");
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = CommandsClient::new(&transport).execute(&session_id, &line, Vec::new());
+            let _ = sender.send(result);
+        });
+        self.host_command_receiver = Some(receiver);
+        self.host_command_loading = true;
+    }
+
+    /// Settles command-list and command-execution workers.
+    fn poll_host_commands(&mut self) -> bool {
+        let mut changed = false;
+        if let Some(receiver) = &self.host_commands_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(commands)) => {
+                    self.host_commands = commands;
+                    self.host_commands_error = None;
+                    self.host_commands_loading = false;
+                    self.host_commands_receiver = None;
+                    changed = true;
+                }
+                Ok(Err(error)) => {
+                    self.host_commands_error = Some(failure_text(&error));
+                    self.host_commands_loading = false;
+                    self.host_commands_receiver = None;
+                    changed = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.host_commands_error = Some("Command list worker stopped unexpectedly".to_owned());
+                    self.host_commands_loading = false;
+                    self.host_commands_receiver = None;
+                    changed = true;
+                }
+            }
+        }
+        if let Some(receiver) = &self.host_command_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(execution)) => {
+                    if execution.is_some() {
+                        self.pending_slash_line = None;
+                    }
+                    self.status = match execution {
+                        Some(execution) => match execution.result {
+                            CommandResult::Success { text, .. } => text.unwrap_or_else(|| "Command completed".to_owned()),
+                            CommandResult::Error { text } => text,
+                        },
+                        None => {
+                            match self.pending_slash_line.take() {
+                                Some(line) => {
+                                    self.chat_text = line;
+                                    self.page_error = Some(
+                                        "The Host did not resolve that command; it is back in the composer."
+                                            .to_owned(),
+                                    );
+                                    "Unknown command".to_owned()
+                                }
+                                None => "The Host did not accept that command line".to_owned(),
+                            }
+                        }
+                    };
+                    self.host_command_loading = false;
+                    self.host_command_receiver = None;
+                    changed = true;
+                }
+                Ok(Err(error)) => {
+                    self.status = failure_text(&error);
+                    self.host_command_loading = false;
+                    self.host_command_receiver = None;
+                    self.pending_slash_line = None;
+                    changed = true;
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.status = "Command worker stopped unexpectedly".to_owned();
+                    self.host_command_loading = false;
+                    self.host_command_receiver = None;
+                    changed = true;
+                }
+            }
+        }
+        changed
     }
 
     pub(crate) fn tick(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -2314,11 +4110,27 @@ impl DesktopApp {
             self.run_command(command);
             self.repaint_soon = true;
         }
+        self.flush_session_state_if_quiet();
+        self.poll_run_state();
         self.poll_dialog();
         self.poll_attachment();
-        self.explorer.poll();
+        self.poll_git_auto_refresh();
+        if self.explorer.poll(self.transport.as_ref()) {
+            self.repaint_soon = true;
+        }
+        let previous_probe = self.git_refresh_probe_started_at;
+        self.git_refresh_probe_started_at = self.explorer.workspace_changed_since(previous_probe);
+        if self.git_refresh_probe_started_at != previous_probe {
+            self.git_refresh_pending = true;
+        }
         self.poll_jobs();
         self.poll_schedules();
+        if self.poll_git() {
+            self.repaint_soon = true;
+        }
+        if self.poll_host_commands() {
+            self.repaint_soon = true;
+        }
         if self.dialog.is_some()
             || self.jobs_receiver.is_some()
             || self.job_receiver.is_some()
@@ -2328,7 +4140,11 @@ impl DesktopApp {
             self.repaint_soon = true;
         }
         if self.quitting.load(Ordering::Acquire) {
+            self.flush_session_state();
             self.terminal.detach();
+            for pane in &mut self.terminal_extra {
+                pane.detach();
+            }
             self.close_requested = true;
             return false;
         }
@@ -2344,6 +4160,11 @@ impl DesktopApp {
                         self.transport = None;
                         self.streams = None;
                         self.connect_receiver = None;
+                        self.git_status = None;
+                        self.git_branches = None;
+                        self.git_error = None;
+                        self.git_loading = false;
+                        self.git_receiver = None;
                         if self.chat_loading {
                             self.chat_loading = false;
                             self.chat_receiver = None;
@@ -2354,6 +4175,9 @@ impl DesktopApp {
                             );
                         }
                         self.terminal.detach();
+                        for pane in &mut self.terminal_extra {
+                            pane.detach();
+                        }
                     }
                     host::HostEvent::UpdatePrompt(prompt) => {
                         self.update_prompt = Some(prompt);
@@ -2381,6 +4205,13 @@ impl DesktopApp {
             self.streams.clone(),
         );
         self.terminal.poll();
+        let session = self.selected_session.clone();
+        let transport = self.transport.clone();
+        let streams = self.streams.clone();
+        for pane in &mut self.terminal_extra {
+            pane.select_session(session.clone(), transport.clone(), streams.clone());
+            pane.poll();
+        }
         if let Some(receiver) = &self.host_receiver {
             match receiver.try_recv() {
                 Ok(host) => {
@@ -2507,6 +4338,29 @@ impl DesktopApp {
                             self.sessions = sessions;
                             self.session_search = None;
                             self.sessions_status = format!("{} session(s)", self.sessions.len());
+                            match restore_session_target(
+                                self.ui_preferences.restore_last_session,
+                                self.ui_preferences.last_session_id.as_deref(),
+                                &self.sessions,
+                                self.selected_session.as_deref(),
+                            ) {
+                                RestoreSession::None => {}
+                                RestoreSession::Load(session_id) => {
+                                    self.load_session(session_id);
+                                }
+                                RestoreSession::Missing { last, fallback } => {
+                                    if let Some(session_id) = fallback {
+                                        self.sessions_status = format!(
+                                            "Last Session {last} is unavailable; opened the most recent Session instead."
+                                        );
+                                        self.load_session(session_id);
+                                    } else {
+                                        self.sessions_status = format!(
+                                            "Last Session {last} is unavailable and no other Sessions exist."
+                                        );
+                                    }
+                                }
+                            }
                         }
                         SessionUpdate::Search(results) => {
                             self.sessions_status = format!("{} match(es)", results.items.len());
@@ -2802,6 +4656,7 @@ impl DesktopApp {
                 Ok(Ok(_)) => {
                     self.status = "Turn cancellation requested".to_owned();
                     self.cancel_receiver = None;
+                    self.refresh_sessions_quietly();
                 }
                 Ok(Err(error)) => {
                     self.page_error = Some(format!("Cancel failed: {error}"));
@@ -3103,6 +4958,7 @@ impl DesktopApp {
                             }
                             AssistantStreamFrame::End { .. } => {
                                 self.assistant_streaming = false;
+                                self.refresh_sessions_quietly();
                             }
                         }
                     }
@@ -3111,10 +4967,12 @@ impl DesktopApp {
                     self.page_error = Some(format!("Chat stream failed: {error}"));
                     self.chat_loading = false;
                     self.chat_receiver = None;
+                    self.refresh_sessions_quietly();
                 }
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.chat_loading = false;
                     self.chat_receiver = None;
+                    self.refresh_sessions_quietly();
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     self.repaint_soon = true;
@@ -3437,6 +5295,10 @@ fn has_pending_workers(app: &DesktopApp) -> bool {
         || app.terminal.inventory.is_some()
         || app.terminal.updates.is_some()
         || app.terminal.dirty
+        || app
+            .terminal_extra
+            .iter()
+            .any(|pane| pane.inventory.is_some() || pane.updates.is_some() || pane.dirty)
 
 }
 
@@ -3698,13 +5560,6 @@ fn probe_terminal(transport: HttpTransport, mux: RemoteStreamMux) {
             break;
         }
     }
-    let _ = input.send(TerminalInput::Write {
-        sequence: 2,
-        data: "exit\n".to_owned(),
-    });
-    let _ = client.close(TerminalCloseRequest {
-        id: "probe-terminal".to_owned(),
-    });
     if output.contains("terminal-probe-ok") {
         eprintln!(
             "dsh: native terminal=ok max_input={} max_cols={} exit={}",
@@ -3716,6 +5571,55 @@ fn probe_terminal(transport: HttpTransport, mux: RemoteStreamMux) {
         eprintln!(
             "dsh: native terminal=failed: no marker in output bytes={}",
             output.len()
+        );
+    }
+
+    // Detach the first attachment, then confirm the Host retained the PTY and its screen.
+    drop(frames);
+    drop(input);
+    let (mut frames, input) = match terminal::attach(&mux, session.as_str(), "probe-terminal") {
+        Ok(attachment) => attachment,
+        Err(error) => {
+            eprintln!("dsh: native terminal-reconnect=failed: attach: {error}");
+            let _ = client.close(TerminalCloseRequest {
+                id: "probe-terminal".to_owned(),
+            });
+            return;
+        }
+    };
+    let mut reattached = String::new();
+    let mut retained = false;
+    while let Some(frame) = frames.recv_timeout(Duration::from_secs(10)) {
+        match frame {
+            Ok(TerminalFrame::Snapshot(frame)) => reattached.push_str(&frame.screen),
+            Ok(TerminalFrame::Output(chunk)) => reattached.push_str(&chunk.data),
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("dsh: native terminal-reconnect=failed: frame: {error}");
+                break;
+            }
+        }
+        if reattached.contains("terminal-probe-ok") {
+            retained = true;
+            break;
+        }
+    }
+    let _ = input.send(TerminalInput::Write {
+        sequence: 2,
+        data: "exit\n".to_owned(),
+    });
+    let _ = client.close(TerminalCloseRequest {
+        id: "probe-terminal".to_owned(),
+    });
+    if retained {
+        eprintln!(
+            "dsh: native terminal-reconnect=ok bytes={}",
+            reattached.len()
+        );
+    } else {
+        eprintln!(
+            "dsh: native terminal-reconnect=failed: marker missing after reattach bytes={}",
+            reattached.len()
         );
     }
 }
@@ -4188,6 +6092,45 @@ mod tests {
     use dsh_client_core::models::ModelProviderGroup;
 
     #[test]
+    fn fork_checkpoint_blank_means_latest_and_only_non_negative_integers_pass() {
+        assert_eq!(parse_fork_checkpoint(""), Ok(None));
+        assert_eq!(parse_fork_checkpoint("  "), Ok(None));
+        assert_eq!(parse_fork_checkpoint("42"), Ok(Some(42)));
+        assert_eq!(parse_fork_checkpoint(" 7 "), Ok(Some(7)));
+        assert!(parse_fork_checkpoint("-1").is_err());
+        assert!(parse_fork_checkpoint("latest").is_err());
+        assert!(parse_fork_checkpoint("3.5").is_err());
+    }
+
+    #[test]
+    fn git_failures_pass_through_actionable_git_messages() {
+        let refused = Error::Remote {
+            code: "git/path-refused".to_owned(),
+            message: "\"a.txt\" has no staged change".to_owned(),
+            details: serde_json::Map::new(),
+        };
+        assert_eq!(failure_text(&refused), "\"a.txt\" has no staged change");
+        assert_eq!(short_object_id("0123456789abcdef"), "0123456");
+        assert_eq!(short_object_id("abc"), "abc");
+    }
+
+    #[test]
+    fn git_failures_keep_actionable_host_wording() {
+        let not_repository = Error::Remote {
+            code: "git/not-repository".to_owned(),
+            message: "not a git repository".to_owned(),
+            details: serde_json::Map::new(),
+        };
+        assert_eq!(failure_text(&not_repository), "No repository");
+        let unavailable = Error::Remote {
+            code: "git/unavailable".to_owned(),
+            message: "missing".to_owned(),
+            details: serde_json::Map::new(),
+        };
+        assert_eq!(failure_text(&unavailable), "git is not installed on the Host");
+    }
+
+    #[test]
     fn auto_connect_defaults_to_enabled() {
         assert!(auto_connect_enabled(None));
     }
@@ -4209,6 +6152,88 @@ mod tests {
         assert!(DesktopApp::is_office_path("deck.pptx"));
         assert!(!DesktopApp::is_office_path("docs/readme.txt"));
         assert!(!DesktopApp::is_office_path("docs/noext"));
+    }
+
+    fn summary(session_id: &str, updated_at: i64, running: bool) -> SessionSummary {
+        SessionSummary {
+            agent_available: true,
+            format_status: None,
+            session_id: session_id.to_owned(),
+            updated_at,
+            running,
+            blank: false,
+            parent_session_id: None,
+            origin: None,
+            cwd: None,
+            projections: None,
+        }
+    }
+
+    #[test]
+    fn restore_session_target_opens_the_remembered_session() {
+        let sessions = vec![summary("a", 1, false), summary("b", 2, false)];
+        assert_eq!(
+            restore_session_target(true, Some("a"), &sessions, None),
+            RestoreSession::Load("a".to_owned())
+        );
+    }
+
+    #[test]
+    fn restore_session_target_respects_the_setting_and_an_open_session() {
+        let sessions = vec![summary("a", 1, false)];
+        assert_eq!(
+            restore_session_target(false, Some("a"), &sessions, None),
+            RestoreSession::None
+        );
+        assert_eq!(
+            restore_session_target(true, Some("a"), &sessions, Some("a")),
+            RestoreSession::None
+        );
+        assert_eq!(
+            restore_session_target(true, None, &sessions, None),
+            RestoreSession::None
+        );
+    }
+
+    #[test]
+    fn restore_session_target_falls_back_to_the_most_recent_session() {
+        let sessions = vec![summary("a", 10, false), summary("b", 30, false)];
+        assert_eq!(
+            restore_session_target(true, Some("gone"), &sessions, None),
+            RestoreSession::Missing {
+                last: "gone".to_owned(),
+                fallback: Some("b".to_owned()),
+            }
+        );
+        assert_eq!(
+            restore_session_target(true, Some("gone"), &[], None),
+            RestoreSession::Missing {
+                last: "gone".to_owned(),
+                fallback: None,
+            }
+        );
+    }
+
+    #[test]
+    fn session_drafts_are_kept_per_session_and_cleared_when_empty() {
+        let mut drafts = std::collections::BTreeMap::new();
+        assert!(remember_draft(&mut drafts, "a", "first"));
+        assert!(!remember_draft(&mut drafts, "a", "first"));
+        assert!(remember_draft(&mut drafts, "b", "second"));
+        assert_eq!(drafts.get("a").map(String::as_str), Some("first"));
+        assert_eq!(drafts.get("b").map(String::as_str), Some("second"));
+        assert!(remember_draft(&mut drafts, "a", ""));
+        assert!(!drafts.contains_key("a"));
+        assert!(!remember_draft(&mut drafts, "missing", ""));
+    }
+
+    #[test]
+    fn run_badge_reads_only_the_selected_host_summary() {
+        let sessions = vec![summary("a", 1, false), summary("b", 2, true)];
+        assert!(session_is_running(&sessions, Some("b")));
+        assert!(!session_is_running(&sessions, Some("a")));
+        assert!(!session_is_running(&sessions, None));
+        assert!(!session_is_running(&sessions, Some("missing")));
     }
 
     #[test]
@@ -4420,11 +6445,132 @@ mod tests {
         assert!(DesktopApp::is_office_path("report.txt.docx"));
     }
 
+    fn host_command(name: &str, description: &str) -> CommandDescriptor {
+        CommandDescriptor {
+            definition_id: None,
+            name: name.to_owned(),
+            description: description.to_owned(),
+            input: None,
+        }
+    }
+
+    #[test]
+    fn palette_host_commands_match_name_or_description() {
+        let commands = vec![
+            host_command("review", "Review the current diff"),
+            host_command("test", "Run the test suite"),
+        ];
+        assert_eq!(matching_host_commands(&commands, "").len(), 2);
+        assert_eq!(
+            matching_host_commands(&commands, "diff")
+                .iter()
+                .map(|command| command.name.as_str())
+                .collect::<Vec<_>>(),
+            ["review"]
+        );
+        assert_eq!(matching_host_commands(&commands, "TEST").len(), 1);
+        assert!(matching_host_commands(&commands, "deploy").is_empty());
+    }
+
+    #[test]
+    fn palette_selection_clamps_to_available_rows() {
+        assert_eq!(stepped_selection(0, 1, 3), 1);
+        assert_eq!(stepped_selection(0, -1, 3), 0);
+        assert_eq!(stepped_selection(2, 1, 3), 2);
+        assert_eq!(stepped_selection(4, 0, 3), 2);
+        assert_eq!(stepped_selection(2, -1, 0), 0);
+    }
+
+    #[test]
+    fn terminal_input_fields_map_to_pane_indices() {
+        assert_eq!(terminal_input_index("terminal-input"), Some(0));
+        assert_eq!(terminal_input_index("terminal-input-3"), Some(3));
+        assert_eq!(terminal_input_index("terminal-input-4"), None);
+        assert_eq!(terminal_input_index("composer"), None);
+    }
+
+    #[test]
+    fn raw_keystroke_reports_appends_and_deletions() {
+        assert_eq!(raw_keystroke("", "a"), ("a".to_owned(), 0));
+        assert_eq!(raw_keystroke("ab", "abc"), ("c".to_owned(), 0));
+        assert_eq!(raw_keystroke("abc", "ab"), (String::new(), 1));
+        assert_eq!(raw_keystroke("abc", "x"), ("x".to_owned(), 3));
+        assert_eq!(raw_keystroke("abc", "abd"), ("d".to_owned(), 1));
+    }
+
     #[test]
     fn host_start_status_counts_whole_seconds() {
         use std::time::Duration;
         assert_eq!(host_start_status(Duration::from_millis(0)), "Starting Host sidecar… 0s");
         assert_eq!(host_start_status(Duration::from_millis(2_900)), "Starting Host sidecar… 2s");
         assert_eq!(host_start_status(Duration::from_secs(65)), "Starting Host sidecar… 65s");
+    }
+
+    #[test]
+    fn git_confirmations_refuse_stale_file_and_branch_state() {
+        use dsh_client_core::git::{GitBranches, GitBranch, GitFile, GitStatus};
+
+        let status = GitStatus {
+            branch: Some("main".to_owned()),
+            commit: Some("abc1234".to_owned()),
+            detached: false,
+            files: vec![GitFile {
+                path: "a.txt".to_owned(),
+                status: "modified".to_owned(),
+                staged: false,
+                worktree: true,
+            }],
+        };
+        assert!(discard_confirmation_is_fresh(
+            Some(&status),
+            "session",
+            Some("session"),
+            "a.txt",
+            "modified",
+            false,
+            true,
+        ));
+        assert!(!discard_confirmation_is_fresh(
+            Some(&status),
+            "session",
+            Some("session"),
+            "a.txt",
+            "modified",
+            true,
+            true,
+        ));
+
+        let branches = GitBranches {
+            branches: vec![GitBranch {
+                name: "feature".to_owned(),
+                commit: "def5678".to_owned(),
+                current: false,
+            }],
+            current: Some("main".to_owned()),
+        };
+        let expected = status.files.clone();
+        assert!(checkout_confirmation_is_fresh(
+            Some(&status),
+            Some(&branches),
+            "session",
+            Some("session"),
+            &Some("main".to_owned()),
+            "feature",
+            &Some("abc1234".to_owned()),
+            &expected,
+        ));
+
+        let mut changed = status.clone();
+        changed.files[0].status = "deleted".to_owned();
+        assert!(!checkout_confirmation_is_fresh(
+            Some(&changed),
+            Some(&branches),
+            "session",
+            Some("session"),
+            &Some("main".to_owned()),
+            "feature",
+            &Some("abc1234".to_owned()),
+            &expected,
+        ));
     }
 }

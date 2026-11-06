@@ -26,11 +26,16 @@ actions!(
         NewSession,
         ToggleSettings,
         ToggleExplorer,
+        ToggleChanges,
         ToggleTerminal,
         TogglePlugins,
         ToggleSkills,
         ToggleMarketplace,
         ToggleGoals,
+        OpenFile,
+        About,
+        ShowPalette,
+        Dismiss,
     ]
 );
 
@@ -77,102 +82,52 @@ pub(crate) fn run(services: ShellServices) {
     });
 }
 
-/// Registers the configurable shell chords plus the fixed view shortcuts.
-fn bind_shortcuts(cx: &mut App, preferences: &UiPreferences, commands: &Arc<Mutex<Vec<CommandId>>>) {
+/// Registers every shell chord from the command registry, then its handler.
+///
+/// Preferences override the chords of the four commands the keymap editor owns;
+/// every other command keeps its registry default. Both the chord and the action
+/// come from the same [`CommandId`], so a command cannot be bound twice.
+fn bind_shortcuts(
+    cx: &mut App,
+    preferences: &UiPreferences,
+    commands: &Arc<Mutex<Vec<CommandId>>>,
+) {
     cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
-    // gpui dispatches typed actions, so each chord needs its own handler.
-    cx.on_action({
-        let commands = commands.clone();
-        move |_: &NewSession, _: &mut App| {
-            commands
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(CommandId::NewSession);
-        }
-    });
-    cx.on_action({
-        let commands = commands.clone();
-        move |_: &ToggleSettings, _: &mut App| {
-            commands
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(CommandId::ToggleSettings);
-        }
-    });
-    cx.on_action({
-        let commands = commands.clone();
-        move |_: &ToggleExplorer, _: &mut App| {
-            commands
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(CommandId::ToggleExplorer);
-        }
-    });
-    cx.on_action({
-        let commands = commands.clone();
-        move |_: &ToggleTerminal, _: &mut App| {
-            commands
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(CommandId::ToggleTerminal);
-        }
-    });
-    cx.on_action({
-        let commands = commands.clone();
-        move |_: &TogglePlugins, _: &mut App| {
-            commands
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(CommandId::TogglePlugins);
-        }
-    });
-    cx.on_action({
-        let commands = commands.clone();
-        move |_: &ToggleSkills, _: &mut App| {
-            commands
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(CommandId::ToggleSkills);
-        }
-    });
-    cx.on_action({
-        let commands = commands.clone();
-        move |_: &ToggleMarketplace, _: &mut App| {
-            commands
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(CommandId::ToggleMarketplace);
-        }
-    });
-    cx.on_action({
-        let commands = commands.clone();
-        move |_: &ToggleGoals, _: &mut App| {
-            commands
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push(CommandId::ToggleGoals);
-        }
-    });
+
+    macro_rules! bind_command {
+        ($bindings:expr, $action:ident, $id:ident) => {{
+            let queue = commands.clone();
+            cx.on_action(move |_: &$action, _: &mut App| {
+                queue
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(CommandId::$id);
+            });
+            if let Some(chord) = preferences.keybindings.chord_for(CommandId::$id) {
+                if let Some(binding) = preference_binding(&chord, $action) {
+                    $bindings.push(binding);
+                }
+            }
+        }};
+    }
 
     let mut bindings = Vec::new();
-    let mut configured = Vec::new();
-    if let Some(binding) = preference_binding(&preferences.keybindings.new_session, NewSession) {
-        configured.push(binding);
-    }
-    if let Some(binding) = preference_binding(&preferences.keybindings.open_settings, ToggleSettings) {
-        configured.push(binding);
-    }
-    if let Some(binding) = preference_binding(&preferences.keybindings.open_marketplace, ToggleMarketplace) {
-        configured.push(binding);
-    }
-    if let Some(binding) = preference_binding(&preferences.keybindings.open_goals, ToggleGoals) {
-        configured.push(binding);
-    }
-    bindings.extend(configured);
-    bindings.push(KeyBinding::new("ctrl-shift-e", ToggleExplorer, None));
-    bindings.push(KeyBinding::new("ctrl-shift-t", ToggleTerminal, None));
-    bindings.push(KeyBinding::new("ctrl-shift-x", TogglePlugins, None));
-    bindings.push(KeyBinding::new("ctrl-shift-k", ToggleSkills, None));
+    bind_command!(bindings, NewSession, NewSession);
+    bind_command!(bindings, ToggleExplorer, ToggleExplorer);
+    bind_command!(bindings, ToggleChanges, ToggleChanges);
+    bind_command!(bindings, ToggleTerminal, ToggleTerminal);
+    bind_command!(bindings, ToggleSettings, ToggleSettings);
+    bind_command!(bindings, TogglePlugins, TogglePlugins);
+    bind_command!(bindings, ToggleSkills, ToggleSkills);
+    bind_command!(bindings, ToggleMarketplace, ToggleMarketplace);
+    bind_command!(bindings, ToggleGoals, ToggleGoals);
+    bind_command!(bindings, OpenFile, OpenFile);
+    bind_command!(bindings, About, About);
+    bind_command!(bindings, ShowPalette, ShowPalette);
+
+    // Escape closes the topmost overlay; the shell root handles the action.
+    bindings.push(KeyBinding::new("escape", Dismiss, None));
+
     cx.bind_keys(bindings);
 }
 

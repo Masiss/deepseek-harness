@@ -30,7 +30,7 @@ pub(crate) struct Theme {
 impl Theme {
     /// Resolves a palette for the active light/dark scheme.
     pub(crate) fn new(preferences: &UiPreferences, dark: bool) -> Self {
-        let palette = ui_preferences::palette(preferences.theme_pack, dark, &preferences.custom_theme);
+        let palette = ui_preferences::palette(preferences.theme_pack, dark, &preferences.custom_theme, preferences.accent_scheme);
         let (background, surface, code_background, text, muted, accent, accent_text, selection, border, warn, error) =
             match palette {
                 Some(palette) => (
