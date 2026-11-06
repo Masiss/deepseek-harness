@@ -266,6 +266,18 @@ Host service backing `ctx.remote.skills` without activating a cold Agent.
  * @throws RemoteError when the Session cannot be inspected or no registry can serve it.
  */
 @Remote async list(request: SkillListRequest, signal: AbortSignal): Promise<SkillListValue>
+
+/**
+ * Replace the disabled skill set for this composition.
+ *
+ * The registry applies the filter before every catalog read, so model
+ * catalogs, `/skill`, and the session command list observe one set. The
+ * response reports whether the Host could persist it.
+ * @param request - the complete disabled name set; empty re-enables all.
+ * @returns the applied set and whether it was persisted.
+ * @throws RemoteError when a name is not a kebab-case skill name.
+ */
+@Remote('setDisabled') async setDisabled(request: SkillSetDisabledRequest): Promise<SkillSetDisabledValue>
 ```
 
 Source: [`packages/api/session-controller/src/skill-catalog.ts`](../../packages/api/session-controller/src/skill-catalog.ts)
@@ -277,6 +289,22 @@ Source: [`packages/api/session-controller/src/skill-catalog.ts`](../../packages/
 Layered registry of skill providers, the host+per-scope shape the tools registry established. A registration files into the layer of its calling context's scope (scopeOf): host rows and repository plugins land in the global layer, while a plugin mounted by an agent preset's standing composition lands in that preset's layer. A read merges the global layer with the viewing scope's chain — the nearest layer's entry wins a duplicate name outright, and the rank order decides duplicates only within one layer. It exposes sorted invocation-neutral summaries and loads full skill bodies on demand.
 
 ```ts cordis-catalog
+/**
+ * Names currently filtered out of every catalog read.
+ * @returns the disabled names, sorted.
+ */
+disabledSkills(): readonly string[]
+
+/**
+ * Replace the disabled set and persist it to this plugin's settings entry
+ * when a settings service and entry id are available. The filter applies to
+ * `list`, `snapshot`, and `get`, so model catalogs and `/skill` invocations
+ * observe the same disabled set.
+ * @param names - skill names to disable; each must be a kebab-case skill name.
+ * @returns the applied set in sorted order and whether the Host persisted it.
+ */
+async setDisabledSkills(names: readonly string[]): Promise<{ disabledSkills: readonly string[]; persisted: boolean }>
+
 /**
  * Register a borrowed same-process provider synchronously during plugin
  * apply, into the calling context's layer: a scoped context (an agent

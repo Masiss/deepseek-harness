@@ -1206,6 +1206,109 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     ],
   },
   {
+    key: 'gitController',
+    summary: 'Host service backing the generated `ctx.remote.git` namespace.',
+    description: 'Host service backing the generated `ctx.remote.git` namespace.',
+    methods: [
+      {
+        signature: '@Remote(\'status\') status(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitStatusValue>',
+        description: 'Read the Session workspace\'s Git status.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the checked-out branch and changed paths.',
+      },
+      {
+        signature: '@Remote(\'branches\') branches(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitBranchesValue>',
+        description: 'List the Session workspace\'s local branches.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'local branches and the current one.',
+      },
+      {
+        signature: '@Remote(\'checkout\') checkout( gitWorkspaceScope: GitWorkspaceScope, request: GitCheckoutRequest, signal: AbortSignal, ): Promise<GitCheckoutValue>',
+        description: 'Check out one existing local branch in the Session workspace.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'branch to check out.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the now checked-out branch.',
+      },
+      {
+        signature: '@Remote(\'diff\') diff( gitWorkspaceScope: GitWorkspaceScope, request: GitDiffRequest, signal: AbortSignal, ): Promise<GitDiffValue>',
+        description: 'Read one changed path\'s unified diff.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'path and staged side.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the patch and its truncation and untracked flags.',
+      },
+      {
+        signature: '@Remote(\'stage\') stage( gitWorkspaceScope: GitWorkspaceScope, request: GitPathRequest, signal: AbortSignal, ): Promise<GitPathValue>',
+        description: 'Stage one changed path.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'path to stage.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the settled path and verb.',
+      },
+      {
+        signature: '@Remote(\'unstage\') unstage( gitWorkspaceScope: GitWorkspaceScope, request: GitPathRequest, signal: AbortSignal, ): Promise<GitPathValue>',
+        description: 'Unstage one path without touching its work-tree content.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'path with a staged change.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the settled path and verb.',
+      },
+      {
+        signature: '@Remote(\'discard\') discard( gitWorkspaceScope: GitWorkspaceScope, request: GitPathRequest, signal: AbortSignal, ): Promise<GitPathValue>',
+        description: 'Discard one tracked path\'s unstaged change.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'path with an unstaged change.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the settled path and verb.',
+      },
+      {
+        signature: '@Remote(\'commit\') commit( gitWorkspaceScope: GitWorkspaceScope, request: GitCommitRequest, signal: AbortSignal, ): Promise<GitCommitValue>',
+        description: 'Commit the staged index.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'non-blank commit message.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the new commit\'s full object id.',
+      },
+      {
+        signature: '@Remote(\'fetch\') fetch(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitRemoteValue>',
+        description: 'Fetch every remote.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'git\'s own summary.',
+      },
+      {
+        signature: '@Remote(\'pull\') pull(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitRemoteValue>',
+        description: 'Fast-forward the current branch from its upstream.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'git\'s own summary.',
+      },
+      {
+        signature: '@Remote(\'push\') push(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitRemoteValue>',
+        description: 'Push the current branch to its upstream.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'git\'s own summary.',
+      },
+      {
+        signature: '@Remote(\'state\') state(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitOperationState>',
+        description: 'Read the repository\'s multi-step operation and conflicts.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the operation kind and conflict paths.',
+      },
+      {
+        signature: '@Remote(\'rebase\') rebase( gitWorkspaceScope: GitWorkspaceScope, request: GitRebaseRequest, signal: AbortSignal, ): Promise<GitOperationValue>',
+        description: 'Rebase the current branch onto one local branch.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'branch to rebase onto.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the resulting operation state.',
+      },
+      {
+        signature: '@Remote(\'cherryPick\') cherryPick( gitWorkspaceScope: GitWorkspaceScope, request: GitCherryPickRequest, signal: AbortSignal, ): Promise<GitOperationValue>',
+        description: 'Cherry-pick one commit onto the current branch.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'commit id.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the resulting operation state.',
+      },
+      {
+        signature: '@Remote(\'continueOperation\') continueOperation(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitOperationValue>',
+        description: 'Continue the in-progress rebase or cherry-pick.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the resulting operation state.',
+      },
+      {
+        signature: '@Remote(\'abortOperation\') abortOperation(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitOperationValue>',
+        description: 'Abort the in-progress rebase or cherry-pick.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the restored operation state.',
+      },
+    ],
+  },
+  {
     key: 'goals',
     summary: 'Goal service (`ctx.goals`) backed exclusively by the owning session log.',
     description: 'Goal service (`ctx.goals`) backed exclusively by the owning session log.',
@@ -2579,6 +2682,13 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'user-invocable skill metadata without loading skill bodies.',
         throws: ['RemoteError when the Session cannot be inspected or no registry can serve it.'],
       },
+      {
+        signature: '@Remote(\'setDisabled\') async setDisabled(request: SkillSetDisabledRequest): Promise<SkillSetDisabledValue>',
+        description: 'Replace the disabled skill set for this composition.\n\nThe registry applies the filter before every catalog read, so model catalogs, `/skill`, and the session command list observe one set. The response reports whether the Host could persist it.',
+        parameters: [{ name: 'request', description: 'the complete disabled name set; empty re-enables all.' }],
+        returns: 'the applied set and whether it was persisted.',
+        throws: ['RemoteError when a name is not a kebab-case skill name.'],
+      },
     ],
   },
   {
@@ -2774,6 +2884,18 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
     summary: 'Layered registry of skill providers, the host+per-scope shape the tools registry established.',
     description: 'Layered registry of skill providers, the host+per-scope shape the tools registry established. A registration files into the layer of its calling context\'s scope (scopeOf): host rows and repository plugins land in the global layer, while a plugin mounted by an agent preset\'s standing composition lands in that preset\'s layer. A read merges the global layer with the viewing scope\'s chain — the nearest layer\'s entry wins a duplicate name outright, and the rank order decides duplicates only within one layer. It exposes sorted invocation-neutral summaries and loads full skill bodies on demand.',
     methods: [
+      {
+        signature: 'disabledSkills(): readonly string[]',
+        description: 'Names currently filtered out of every catalog read.',
+        parameters: [],
+        returns: 'the disabled names, sorted.',
+      },
+      {
+        signature: 'async setDisabledSkills(names: readonly string[]): Promise<{ disabledSkills: readonly string[]; persisted: boolean }>',
+        description: 'Replace the disabled set and persist it to this plugin\'s settings entry when a settings service and entry id are available. The filter applies to `list`, `snapshot`, and `get`, so model catalogs and `/skill` invocations observe the same disabled set.',
+        parameters: [{ name: 'names', description: 'skill names to disable; each must be a kebab-case skill name.' }],
+        returns: 'the applied set in sorted order and whether the Host persisted it.',
+      },
       {
         signature: 'registerProvider(create: (control: SkillProviderControl) => SkillProvider): () => void',
         description: 'Register a borrowed same-process provider synchronously during plugin apply, into the calling context\'s layer: a scoped context (an agent preset\'s standing mount) registers for that scope alone, an unscoped context registers globally. Duplicate names within one layer and reserved names throw; remote initialization belongs in `list()`. Fiber disposal unregisters the provider and invalidates catalog caches.',
@@ -3893,10 +4015,22 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the file\'s absolute path, current version, and byte size.',
       },
       {
+        signature: '@Remote async write( workspaceFileScope: WorkspaceFileScope, path: string, content: string, expectedVersion: string | undefined, signal: AbortSignal, ): Promise<WorkspaceFileWriteResult>',
+        description: 'Create or replace a UTF-8 file\'s content.',
+        parameters: [{ name: 'workspaceFileScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'path', description: 'absolute path or path relative to the workspace root; files outside it are allowed.' }, { name: 'content', description: 'the full new file content.' }, { name: 'expectedVersion', description: 'freshness token from the preceding read/stat; omit for an unconditional write.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the file\'s identity, version, operation, and before/after content.',
+      },
+      {
         signature: '@Remote async list(workspaceFileScope: WorkspaceFileScope, path: string, signal: AbortSignal): Promise<WorkspaceDirectoryListing>',
         description: 'List the direct children of one directory inside the Session\'s workspace.',
         parameters: [{ name: 'workspaceFileScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'path', description: 'workspace path, absolute or relative to the workspace root.' }, { name: 'signal', description: 'caller cancellation.' }],
         returns: 'the directory\'s children in the backend\'s stable name order, bounded by the entry cap.',
+      },
+      {
+        signature: '@Remote async search( workspaceFileScope: WorkspaceFileScope, query: string, options: WorkspaceSearchOptions | undefined, signal: AbortSignal, ): Promise<WorkspaceSearchValue>',
+        description: 'Search workspace text files for a literal query, bounded by caller caps. Symlinks are not followed, binary files (carrying a NUL byte in the first megabyte) and files above that cap are skipped, and at most one `maxFiles` files are scanned in depth-first order.',
+        parameters: [{ name: 'workspaceFileScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'query', description: 'non-empty literal substring to find.' }, { name: 'options', description: 'caller bounds for scanned files and returned matches.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'matching lines plus a truncation flag when any cap dropped content.',
       },
       {
         signature: '@Remote({ mode: \'stream\' }) changes(workspaceFileScope: WorkspaceFileScope, path: string, signal: AbortSignal): AsyncIterable<WorkspaceFileWatchFrame>',
@@ -5115,7 +5249,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ConnectionIndexResponse',
-    declaration: 'export interface ConnectionIndexResponse {\n    writeHead(status: number, headers?: Readonly<Record<string, string>>): unknown;\n    end(body?: string): unknown;\n}',
+    declaration: 'export interface ConnectionIndexResponse {\n    writeHead(status: number, headers?: Readonly<Record<string, string | string[]>>): unknown;\n    end(body?: string): unknown;\n}',
   },
   {
     name: 'ConnectionRequestBodyMode',
@@ -5576,6 +5710,90 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GenericResultView',
     declaration: 'export interface GenericResultView {\n    card: \'generic\';\n    title?: string;\n    content?: ContentBlock[];\n}',
+  },
+  {
+    name: 'GitBranch',
+    declaration: 'export interface GitBranch {\n    readonly name: string;\n    readonly commit: string;\n    readonly current: boolean;\n}',
+  },
+  {
+    name: 'GitBranchesValue',
+    declaration: 'export interface GitBranchesValue {\n    readonly branches: readonly GitBranch[];\n    readonly current: string | null;\n}',
+  },
+  {
+    name: 'GitChangedFile',
+    declaration: 'export interface GitChangedFile {\n    readonly path: string;\n    readonly status: GitChangeStatus;\n    readonly staged: boolean;\n    readonly worktree: boolean;\n}',
+  },
+  {
+    name: 'GitChangeStatus',
+    declaration: 'export type GitChangeStatus = \'modified\' | \'added\' | \'deleted\' | \'renamed\' | \'copied\' | \'typechange\' | \'untracked\' | \'ignored\' | \'conflict\';',
+  },
+  {
+    name: 'GitCheckoutRequest',
+    declaration: 'export interface GitCheckoutRequest {\n    readonly branch: string;\n}',
+  },
+  {
+    name: 'GitCheckoutValue',
+    declaration: 'export interface GitCheckoutValue {\n    readonly branch: string;\n}',
+  },
+  {
+    name: 'GitCherryPickRequest',
+    declaration: 'export interface GitCherryPickRequest {\n    readonly commit: string;\n}',
+  },
+  {
+    name: 'GitCommitRequest',
+    declaration: 'export interface GitCommitRequest {\n    readonly message: string;\n}',
+  },
+  {
+    name: 'GitCommitValue',
+    declaration: 'export interface GitCommitValue {\n    readonly commit: string;\n}',
+  },
+  {
+    name: 'GitDiffRequest',
+    declaration: 'export interface GitDiffRequest extends GitPathRequest {\n    readonly staged: boolean;\n}',
+  },
+  {
+    name: 'GitDiffValue',
+    declaration: 'export interface GitDiffValue {\n    readonly path: string;\n    readonly staged: boolean;\n    readonly patch: string;\n    readonly truncated: boolean;\n    readonly untracked: boolean;\n}',
+  },
+  {
+    name: 'GitOperationKind',
+    declaration: 'export type GitOperationKind = \'none\' | \'merge\' | \'rebase\' | \'cherry-pick\' | \'revert\';',
+  },
+  {
+    name: 'GitOperationState',
+    declaration: 'export interface GitOperationState {\n    readonly operation: GitOperationKind;\n    readonly conflicts: readonly string[];\n}',
+  },
+  {
+    name: 'GitOperationValue',
+    declaration: 'export interface GitOperationValue {\n    readonly state: GitOperationState;\n    readonly output: string;\n}',
+  },
+  {
+    name: 'GitPathRequest',
+    declaration: 'export interface GitPathRequest {\n    readonly path: string;\n}',
+  },
+  {
+    name: 'GitPathValue',
+    declaration: 'export interface GitPathValue {\n    readonly path: string;\n    readonly operation: \'stage\' | \'unstage\' | \'discard\';\n}',
+  },
+  {
+    name: 'GitRebaseRequest',
+    declaration: 'export interface GitRebaseRequest {\n    readonly branch: string;\n}',
+  },
+  {
+    name: 'GitRemoteOperation',
+    declaration: 'export type GitRemoteOperation = \'fetch\' | \'pull\' | \'push\';',
+  },
+  {
+    name: 'GitRemoteValue',
+    declaration: 'export interface GitRemoteValue {\n    readonly operation: GitRemoteOperation;\n    readonly summary: string;\n    readonly truncated: boolean;\n}',
+  },
+  {
+    name: 'GitStatusValue',
+    declaration: 'export interface GitStatusValue {\n    readonly branch: string | null;\n    readonly commit: string | null;\n    readonly detached: boolean;\n    readonly files: readonly GitChangedFile[];\n}',
+  },
+  {
+    name: 'GitWorkspaceScope',
+    declaration: 'export interface GitWorkspaceScope {\n    readonly sessionId: SessionId;\n    readonly workspaceRoot: string;\n}',
   },
   {
     name: 'GoalActivation',
@@ -7171,7 +7389,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SessionFollowRequest',
-    declaration: 'export interface SessionFollowRequest extends Pick<SessionPageRequest, \'maxMessages\' | \'turnWindow\'> {\n    readonly address: SessionAddress;\n    readonly assistantStream?: true;\n}',
+    declaration: 'export interface SessionFollowRequest extends Pick<SessionPageRequest, \'maxMessages\' | \'turnWindow\'> {\n    readonly address: SessionAddress;\n    readonly fromSeq?: number;\n    readonly assistantStream?: true;\n}',
   },
   {
     name: 'SessionForkRequest',
@@ -7651,7 +7869,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SkillEntry',
-    declaration: 'export interface SkillEntry {\n    readonly path?: string;\n    readonly name: string;\n    readonly description: string;\n    readonly whenToUse?: string;\n    readonly modelInvocable: boolean;\n}',
+    declaration: 'export interface SkillEntry {\n    readonly path?: string;\n    readonly name: string;\n    readonly description: string;\n    readonly whenToUse?: string;\n    readonly modelInvocable: boolean;\n    readonly source?: string;\n    readonly provider?: string;\n}',
   },
   {
     name: 'SkillInvocationPolicy',
@@ -7663,7 +7881,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'SkillListValue',
-    declaration: 'export interface SkillListValue {\n    readonly skills: readonly SkillEntry[];\n}',
+    declaration: 'export interface SkillListValue {\n    readonly skills: readonly SkillEntry[];\n    readonly disabledSkills: readonly string[];\n}',
   },
   {
     name: 'SkillLookupOptions',
@@ -7688,6 +7906,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'SkillResourceBase',
     declaration: 'export type SkillResourceBase = {\n    readonly kind: \'directory\';\n    readonly path: string;\n} | {\n    readonly kind: \'url\';\n    readonly url: string;\n} | {\n    readonly kind: \'opaque\';\n    readonly description: string;\n};',
+  },
+  {
+    name: 'SkillSetDisabledRequest',
+    declaration: 'export interface SkillSetDisabledRequest {\n    readonly names: readonly string[];\n}',
+  },
+  {
+    name: 'SkillSetDisabledValue',
+    declaration: 'export interface SkillSetDisabledValue {\n    readonly disabledSkills: readonly string[];\n    readonly persisted: boolean;\n}',
   },
   {
     name: 'SkillSource',
@@ -8822,6 +9048,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export type WorkspaceFileWatchFrame = {\n    readonly kind: \'ready\';\n} | {\n    readonly kind: \'change\';\n    readonly change: WorkspaceFileChange;\n};',
   },
   {
+    name: 'WorkspaceFileWriteResult',
+    declaration: 'export interface WorkspaceFileWriteResult extends WorkspaceFileStat {\n    readonly operation: \'create\' | \'update\';\n    readonly before: string | null;\n    readonly after: string;\n}',
+  },
+  {
     name: 'WorkspaceFollowFrame',
     declaration: 'export type WorkspaceFollowFrame = {\n    readonly type: \'baseline\';\n    readonly value: WorkspaceBaseline;\n} | WorkspaceFollowIncrement;',
   },
@@ -8852,6 +9082,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'WorkspaceRenameRequest',
     declaration: 'export interface WorkspaceRenameRequest {\n    readonly workspaceId: WorkspaceId;\n    readonly title: string;\n}',
+  },
+  {
+    name: 'WorkspaceSearchMatch',
+    declaration: 'export interface WorkspaceSearchMatch {\n    readonly path: string;\n    readonly line: number;\n    readonly text: string;\n}',
+  },
+  {
+    name: 'WorkspaceSearchOptions',
+    declaration: 'export interface WorkspaceSearchOptions {\n    readonly maxResults?: number;\n    readonly maxFiles?: number;\n}',
+  },
+  {
+    name: 'WorkspaceSearchValue',
+    declaration: 'export interface WorkspaceSearchValue {\n    readonly matches: readonly WorkspaceSearchMatch[];\n    readonly scannedFiles: number;\n    readonly truncated: boolean;\n}',
   },
   {
     name: 'WorkspaceUnarchiveSessionRequest',

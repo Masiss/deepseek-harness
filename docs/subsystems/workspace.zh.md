@@ -228,6 +228,152 @@ Host service backing the generated `ctx.remote.directoryPicker` namespace. The s
 
 Source: [`packages/api/workspace-controller/src/directory-picker.ts`](../../packages/api/workspace-controller/src/directory-picker.ts)
 
+<a id="ctxgitcontroller--gitcontroller"></a>
+
+### `ctx.gitController` — `GitController`
+
+Host service backing the generated `ctx.remote.git` namespace.
+
+```ts cordis-catalog
+/**
+ * Read the Session workspace's Git status.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param signal - caller cancellation.
+ * @returns the checked-out branch and changed paths.
+ */
+@Remote('status') status(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitStatusValue>
+
+/**
+ * List the Session workspace's local branches.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param signal - caller cancellation.
+ * @returns local branches and the current one.
+ */
+@Remote('branches') branches(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitBranchesValue>
+
+/**
+ * Check out one existing local branch in the Session workspace.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param request - branch to check out.
+ * @param signal - caller cancellation.
+ * @returns the now checked-out branch.
+ */
+@Remote('checkout') checkout( gitWorkspaceScope: GitWorkspaceScope, request: GitCheckoutRequest, signal: AbortSignal, ): Promise<GitCheckoutValue>
+
+/**
+ * Read one changed path's unified diff.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param request - path and staged side.
+ * @param signal - caller cancellation.
+ * @returns the patch and its truncation and untracked flags.
+ */
+@Remote('diff') diff( gitWorkspaceScope: GitWorkspaceScope, request: GitDiffRequest, signal: AbortSignal, ): Promise<GitDiffValue>
+
+/**
+ * Stage one changed path.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param request - path to stage.
+ * @param signal - caller cancellation.
+ * @returns the settled path and verb.
+ */
+@Remote('stage') stage( gitWorkspaceScope: GitWorkspaceScope, request: GitPathRequest, signal: AbortSignal, ): Promise<GitPathValue>
+
+/**
+ * Unstage one path without touching its work-tree content.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param request - path with a staged change.
+ * @param signal - caller cancellation.
+ * @returns the settled path and verb.
+ */
+@Remote('unstage') unstage( gitWorkspaceScope: GitWorkspaceScope, request: GitPathRequest, signal: AbortSignal, ): Promise<GitPathValue>
+
+/**
+ * Discard one tracked path's unstaged change.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param request - path with an unstaged change.
+ * @param signal - caller cancellation.
+ * @returns the settled path and verb.
+ */
+@Remote('discard') discard( gitWorkspaceScope: GitWorkspaceScope, request: GitPathRequest, signal: AbortSignal, ): Promise<GitPathValue>
+
+/**
+ * Commit the staged index.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param request - non-blank commit message.
+ * @param signal - caller cancellation.
+ * @returns the new commit's full object id.
+ */
+@Remote('commit') commit( gitWorkspaceScope: GitWorkspaceScope, request: GitCommitRequest, signal: AbortSignal, ): Promise<GitCommitValue>
+
+/**
+ * Fetch every remote.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param signal - caller cancellation.
+ * @returns git's own summary.
+ */
+@Remote('fetch') fetch(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitRemoteValue>
+
+/**
+ * Fast-forward the current branch from its upstream.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param signal - caller cancellation.
+ * @returns git's own summary.
+ */
+@Remote('pull') pull(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitRemoteValue>
+
+/**
+ * Push the current branch to its upstream.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param signal - caller cancellation.
+ * @returns git's own summary.
+ */
+@Remote('push') push(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitRemoteValue>
+
+/**
+ * Read the repository's multi-step operation and conflicts.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param signal - caller cancellation.
+ * @returns the operation kind and conflict paths.
+ */
+@Remote('state') state(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitOperationState>
+
+/**
+ * Rebase the current branch onto one local branch.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param request - branch to rebase onto.
+ * @param signal - caller cancellation.
+ * @returns the resulting operation state.
+ */
+@Remote('rebase') rebase( gitWorkspaceScope: GitWorkspaceScope, request: GitRebaseRequest, signal: AbortSignal, ): Promise<GitOperationValue>
+
+/**
+ * Cherry-pick one commit onto the current branch.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param request - commit id.
+ * @param signal - caller cancellation.
+ * @returns the resulting operation state.
+ */
+@Remote('cherryPick') cherryPick( gitWorkspaceScope: GitWorkspaceScope, request: GitCherryPickRequest, signal: AbortSignal, ): Promise<GitOperationValue>
+
+/**
+ * Continue the in-progress rebase or cherry-pick.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param signal - caller cancellation.
+ * @returns the resulting operation state.
+ */
+@Remote('continueOperation') continueOperation(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitOperationValue>
+
+/**
+ * Abort the in-progress rebase or cherry-pick.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param signal - caller cancellation.
+ * @returns the restored operation state.
+ */
+@Remote('abortOperation') abortOperation(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitOperationValue>
+```
+
+Source: [`packages/api/workspace-controller/src/git.ts`](../../packages/api/workspace-controller/src/git.ts)
+
 <a id="ctxterminalcontroller--terminalcontroller"></a>
 
 ### `ctx.terminalController` — `TerminalController`
@@ -439,6 +585,17 @@ Host Remote file reads and workspace directory observations over the composed fi
 @Remote async stat(workspaceFileScope: WorkspaceFileScope, path: string, signal: AbortSignal): Promise<WorkspaceFileStat>
 
 /**
+ * Create or replace a UTF-8 file's content.
+ * @param workspaceFileScope - header-derived workspace root for the Session identity on the wire.
+ * @param path - absolute path or path relative to the workspace root; files outside it are allowed.
+ * @param content - the full new file content.
+ * @param expectedVersion - freshness token from the preceding read/stat; omit for an unconditional write.
+ * @param signal - caller cancellation.
+ * @returns the file's identity, version, operation, and before/after content.
+ */
+@Remote async write( workspaceFileScope: WorkspaceFileScope, path: string, content: string, expectedVersion: string | undefined, signal: AbortSignal, ): Promise<WorkspaceFileWriteResult>
+
+/**
  * List the direct children of one directory inside the Session's workspace.
  * @param workspaceFileScope - header-derived workspace root for the Session identity on the wire.
  * @param path - workspace path, absolute or relative to the workspace root.
@@ -446,6 +603,19 @@ Host Remote file reads and workspace directory observations over the composed fi
  * @returns the directory's children in the backend's stable name order, bounded by the entry cap.
  */
 @Remote async list(workspaceFileScope: WorkspaceFileScope, path: string, signal: AbortSignal): Promise<WorkspaceDirectoryListing>
+
+/**
+ * Search workspace text files for a literal query, bounded by caller caps.
+ * Symlinks are not followed, binary files (carrying a NUL byte in the first
+ * megabyte) and files above that cap are skipped, and at most one
+ * `{@link maxFiles}` files are scanned in depth-first order.
+ * @param workspaceFileScope - header-derived workspace root for the Session identity on the wire.
+ * @param query - non-empty literal substring to find.
+ * @param options - caller bounds for scanned files and returned matches.
+ * @param signal - caller cancellation.
+ * @returns matching lines plus a truncation flag when any cap dropped content.
+ */
+@Remote async search( workspaceFileScope: WorkspaceFileScope, query: string, options: WorkspaceSearchOptions | undefined, signal: AbortSignal, ): Promise<WorkspaceSearchValue>
 
 /**
  * Watch one file or a directory's direct entries in the Session's filesystem.
