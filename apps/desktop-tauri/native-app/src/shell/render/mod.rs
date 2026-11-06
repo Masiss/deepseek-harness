@@ -2384,6 +2384,14 @@ fn command_palette(
                 format!("/{}", command.name),
                 command.description.clone(),
             ),
+            PaletteEntry::File(path) => (
+                crate::session_list::truncate(
+                    path.rsplit('/').next().unwrap_or(path),
+                    48,
+                )
+                .to_owned(),
+                format!("File · {}", crate::session_list::truncate(path, 40)),
+            ),
         };
         let entry = entry.clone();
         list = list.child(

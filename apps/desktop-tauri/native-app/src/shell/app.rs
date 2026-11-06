@@ -450,11 +450,13 @@ fn terminal_input_index(key: &str) -> Option<usize> {
         .position(|candidate| *candidate == key)
 }
 
-/// One palette row: a shell command or a Host-registered human command.
+/// One palette row: a shell command, a Host-registered human command,
+/// or a loaded workspace file for quick-open.
 #[derive(Clone)]
 pub(crate) enum PaletteEntry {
     Shell(CommandId),
     Host(CommandDescriptor),
+    File(String),
 }
 
 pub(crate) struct DesktopApp {
@@ -4252,6 +4254,20 @@ impl DesktopApp {
                 .into_iter()
                 .map(PaletteEntry::Host),
         );
+        if !query.is_empty() {
+            entries.extend(
+                self.explorer
+                    .visible_rows()
+                    .into_iter()
+                    .filter(|row| matches!(row.kind, crate::explorer::ExplorerRowKind::File { .. }))
+                    .filter(|row| {
+                        row.label.to_ascii_lowercase().contains(&query)
+                            || row.path.to_ascii_lowercase().contains(&query)
+                    })
+                    .take(8)
+                    .map(|row| PaletteEntry::File(row.path)),
+            );
+        }
         entries
     }
 
@@ -4276,6 +4292,12 @@ impl DesktopApp {
         match entry {
             PaletteEntry::Shell(command) => self.run_command(command),
             PaletteEntry::Host(command) => self.run_host_command(command),
+            PaletteEntry::File(path) => {
+                self.preview_path = path;
+                self.show_document = true;
+                self.active_view = ActiveView::Document;
+                self.read_document();
+            }
         }
     }
 
