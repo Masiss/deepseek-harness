@@ -30,7 +30,7 @@
 
 Ghi chú transport quan trọng cho §3.3 và §7.3 của spec:
 
-- `session/follow` **không có tham số cursor/sinceSeq**. Mỗi lần follow trả snapshot mới (`max_messages`, `turn_window`). Reconnect = snapshot mới + dedupe theo `seq`, không phải resume từ cursor.
+- `session/follow` có `fromSeq` resume cursor (RPC phase 06/11): snapshot chỉ mang event sau sequence client đã giữ, trong cùng cửa sổ `max_messages`; `hasMore` đánh dấu khoảng trống điền bằng `session/page`. Dedupe theo `seq` vẫn là lưới thứ hai.
 - `session/page` phân trang lịch sử bằng `throughSeq` + `beforeSeq` → đây là đường tải lịch sử cũ.
 - `session/control` là stream projection: frame `baseline` (mọi Session, `asOfSeq`) rồi `projection` delta có `seq` — dùng để resync trạng thái Session, không phải lệnh.
 
@@ -53,14 +53,14 @@ Ghi chú transport quan trọng cho §3.3 và §7.3 của spec:
 
 | Spec ID | Host RPC | Shell gpui | Gaps |
 |---|---|---|---|
-| WS-01 | Không có `workspace/open` hay `workspace/list`; registry là TS `packages/workspace/workspace` (`WorkspaceRegistry`), client chỉ có `workspace/follow` | Không có workspace selector; workspace suy ra từ Session (`cwd`) | Recent workspaces / Open Folder phải thêm RPC hoặc dựng từ Session list |
+| WS-01 | Registry là TS `packages/workspace/workspace` (`WorkspaceRegistry`); client có `workspace/follow` + create/rename/delete/insert/pin/archive mutations | Workspace selector từ `workspace/follow` (lọc inventory theo membership, session mới tạo với `workspace_id` đang chọn); workspace vẫn suy từ Session khi chưa có projection | Open Folder (native picker → Host `/workspace` mới) cần RPC; recent workspaces chưa có |
 | WS-02 | Như trên | Chuyển Session không gọi `session/cancel` nên job cũ không bị hủy ngầm; draft composer được lưu riêng cho từng Session và khôi phục khi quay lại | Chưa giữ luồng live của Session cũ; quay lại tải snapshot runtime |
 | WS-03 | `workspaceFiles/list` trả children trực tiếp + `truncated` | `explorer.rs`: lazy expand, state theo Session (`select_session`) | Không có đệ quy; không phân loại symlink/permission |
 | WS-04 | `workspaceFiles/read` (text + offset/limit/eof), `readBytes`, `stat` | Preview text có phân trang, ảnh, tài liệu Office qua `officeToPdf/render` | Không có "open externally"; binary do client tự đoán |
 | WS-05 | Không có quick-open/search file | Không có; nút "Search" trên top bar chỉ đổi view | Cần thêm RPC hoặc index client-side trên `workspaceFiles/list` |
 | WS-06 | Không có RPC; `ui_preferences.rs` lưu `workspace_panel_width`, `show_workspace_explorer` | Resize/toggle có, lưu file JSON client-local có `schemaVersion` | Chưa có precedence global → workspace của spec |
 | WS-07 | `workspaceFiles/changes` → frame `Ready` hoặc `Change {absolutePath, version, absent}`; watch theo **một target** mỗi stream | `explorer.rs`: mỗi thư mục đang mở và file đang preview có một watch; version lặp bị bỏ, thư mục đổi thì list lại và prune entry đã mất, file đổi thì banner stale, file mất thì banner absent (giữ trang cuối) | Frame chỉ nói target đó đổi, không nói entry con nào và không có rename; watch bị Host từ chối thì báo một lần và chỉ thử lại khi bấm refresh |
-| WS-08 | Không có RPC mutate file | Không có | Host gap (rename/new/delete) |
+| WS-08 | `workspaceFiles/write` (stale-version guard + create-if-absent) | Ghi nội dung qua document editor + Save to Host (cả gpui lẫn egui) | Rename/delete file chưa có RPC |
 | WS-09 | Không có RPC search nội dung | Không có | Host gap |
 | WS-10 | — | — | Ngoài baseline |
 
@@ -71,11 +71,11 @@ Sandbox/permission: `packages/fs/fs-sandbox/src/containment.ts`, `packages/fs/fs
 | Spec ID | Host RPC | Shell gpui | Gaps |
 |---|---|---|---|
 | SES-01 | `session/create` (`workspace_id`, `cwd`, `session_id`, `agent_preset`) | `new_session()` tạo và focus composer | Ổn |
-| SES-02 | `session/list` (cursor), `session/search` (chỉ trả `sessionId` + snippet) | Panel Sessions có search/rename/fork; chấm chạy cập nhật bằng poll 3 giây khi có lượt hoạt động | Không có archive/pin/filter metadata |
+| SES-02 | `session/list` (cursor), `session/search` (chỉ trả `sessionId` + snippet); `workspace/follow` cho workspace + archived/pinned set | Panel Sessions có search/rename/fork/archive/pin; chấm chạy cập nhật bằng poll 3 giây khi có lượt hoạt động; lọc theo workspace đang chọn bằng membership từ Host | Membership/archived/pinned đến từ stream, không qua `session/list` |
 | SES-03 | `session/page` (`throughSeq`, `beforeSeq`, `maxMessages`, `turnWindow`), `session/follow` snapshot | `load_older_session_page()`, scroll anchor client-local; draft theo Session trong `ui_preferences` | Ổn; chưa chứng minh bằng snapshot test cho paging |
 | SES-04 | Không có bản ghi "last session" phía Host | `ui_preferences` lưu `lastSessionId`; **Restore last Session** mở lại khi khởi động, fallback Session mới nhất kèm lý do nếu Session cũ không còn | Chỉ lưu phía client; workspace đi theo `cwd` của Session |
-| SES-05 | `session/follow` snapshot mới sau khi quay lại; `session/cancel` chỉ khi user bấm Stop | Đổi Session không cancel; `send_prompt` mở luồng follow riêng; badge **● Running** đọc `session/list` | Dedupe theo `seq` khi reconnect phải làm ở client; không có cursor resume |
-| SES-06 | `session/rename` có; archive/delete không có trong client | Rename có; fork có | Archive ≠ delete chưa có RPC |
+| SES-05 | `session/follow` resume qua `fromSeq`; `session/cancel` chỉ khi user bấm Stop | Đổi Session không cancel; `send_prompt` mở luồng follow riêng và resume từ `Transcript::last_seq`; badge **● Running** đọc `session/list` | Session đổi đi rồi quay lại (khác session) vẫn snapshot mới vì transcript reset; resume chỉ khi giữ view, nhất là reconnect |
+| SES-06 | `session/rename` có; `workspace/archiveSession` + `unarchiveSession` đã có ở Host | Rename + Archive/Archive&stop/Unarchive + Pin/Unpin (cả gpui lẫn egui, `stopActivity` tách riêng hai nút) | Hard delete chưa có RPC — archive là đường an toàn được hỗ trợ |
 | SES-07 | `session/fork` (`at_seq`, `allow_migration`) | Ô `Fork at seq (blank = latest)` + validate tại client + test; `at_seq` gửi qua RPC (cả gpui lẫn egui) | Chọn checkpoint được; không reset filesystem |
 | SES-08 | `session/search` | Có | Không phân trang/lọc trạng thái |
 | SES-09 | — | — | P2 |
@@ -104,7 +104,7 @@ Sandbox/permission: `packages/fs/fs-sandbox/src/containment.ts`, `packages/fs/fs
 | CMP-06 | `PromptRequest.request_id` (client sinh qua `chat.next_request_id()`) | Sinh id mỗi lần gửi, chặn khi `chat_loading` | Chưa xác nhận Host dedupe theo `request_id` |
 | CMP-07 | `PromptMode::Queue / Steer` | Hai nút Queue/Steer trong composer; `send_prompt`/`queue_prompt` gửi `mode` hiện tại | Đạt; mode agent Ask/Plan/Build vẫn chưa có (Host không expose) |
 | CMP-08 | Không có | `chat_text` là draft theo Session, lưu vào `sessionDrafts` của preferences và xoá khi gửi; lịch sử prompt có nút History/Next | Đạt |
-| EV-01..03 | `session/follow`, `session/control`, `session/page` | `follow.rs` re-open snapshot sau lỗi | Không có cursor; reconnect phải dedupe + refetch page |
+| EV-01..03 | `session/follow` (`fromSeq` resume cursor), `session/control`, `session/page` | Snapshot resume từ `Transcript::last_seq` sau giữ view (reconnect) và lúc submit prompt; dedupe theo `seq` vẫn là lưới thứ hai | Resume có giới hạn bởi cửa sổ `maxMessages` như snapshot thường; khoảng trống giữa được điền bằng `session/page` |
 
 ## 5. Changes, Review & Git
 
@@ -157,14 +157,14 @@ Ranh giới: shell tool của agent (`packages/shell`, `packages/subprocess`) t�
 
 Chặn một UI trung thực theo spec:
 
-1. Không có quick-open và search nội dung → WS-05, WS-08, WS-09; `workspaceFiles/write` đã có ở Host nhưng shell gpui chưa nối UI ghi file (mới có lưu preview ra đường dẫn cục bộ).
+1. Không có quick-open và search nội dung → WS-05, WS-08, WS-09; `workspaceFiles/write` đã nối UI (document editor + Save to Host, version guard) ở cả gpui lẫn egui.
 2. Git P0 đã có `git/status`, `git/diff`, `git/stage`, `git/unstage`, `git/discard`, `git/commit`, `git/branches`, `git/checkout`; GIT-06/07 có fetch/pull/push và state/rebase/cherry-pick/continue/abort. Còn: interactive rebase, merge/revert continue, auto-resolve conflict.
-3. Không có archive/delete Session → SES-06.
+3. Session archive/unarchive + pin đã có (SES-06); hard delete chưa có RPC và cố tình chưa giả lập.
 4. Không có mode agent Ask/Plan/Build → AG-06; `run.status` là suy ra từ `turn/end` (Queue/Steer + queue khi busy đã có) → AG-09, AG-12.
 5. Skill chỉ đọc danh sách → SKL-01/02/03.
 6. Host `TerminalState` chỉ có 3 giá trị `Running/Exited/Failed`; shell tự suy ra `idle/starting/attached/detached/error` từ attachment và lỗi → TER-03.
 7. Last-session restore đã có client-local (PREF-01); layout/theme/keymap vẫn client-local, chưa có override theo workspace → PREF-02, APP, KEY (một phần).
-8. `session/follow` không có cursor → reconnect phải dựa vào snapshot + dedupe `seq`.
+8. `session/follow` đã có cursor `fromSeq`; reconnect giữ view resume từ sequence đã giữ, fallback snapshot mới khi đổi session.
 9. Tool call không mang stdout/stderr/duration/exit code → AG-04.
 10. Approval chỉ có `allowed-once`/`rejected`, không có expiry/scope → AG-08 (một phần).
 
