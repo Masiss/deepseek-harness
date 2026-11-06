@@ -7,8 +7,8 @@
 import type { LocalizedText } from '@deepseek-ai/dsh-package-manifest'
 import semver from 'semver'
 import type {
-  MarketDeclaration, MarketEngines, MarketIndex, MarketIndexMetadata, MarketInstallTarget, MarketPlugin, MarketPluginMetadata,
-  MarketRepository, MarketSortKeyDeclaration, MarketSource, MarketVersion,
+  MarketDeclaration, MarketEngines, MarketIndex, MarketIndexMetadata, MarketInstallTarget, MarketPermission, MarketPlugin,
+  MarketPluginMetadata, MarketRepository, MarketSortKeyDeclaration, MarketSource, MarketVersion,
 } from './types.ts'
 
 export type * from './types.ts'
@@ -35,6 +35,7 @@ const SEMVER = new RegExp(
   `^${NUMERIC}\\.${NUMERIC}\\.${NUMERIC}(?:-${PRERELEASE_PART}(?:\\.${PRERELEASE_PART})*)?(?:\\+[0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*)?$`, 'u',
 )
 const COMMIT = /^[0-9a-f]{40}$/u
+const PERMISSION_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const PATH_SEGMENT = /^[A-Za-z0-9._@+-]+$/u
 const DATA_ICON = /^data:(?:image\/svg\+xml|image\/png|image\/jpeg|image\/webp);base64,([A-Za-z0-9+/]*={0,2})$/u
 const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u
@@ -237,6 +238,28 @@ function icon(value: unknown, path: string, indexUrl: URL): string {
   return resolved.href
 }
 
+/** One declared capability; the id is a stable kebab-case token, not free prose. */
+function permission(value: unknown, path: string): MarketPermission {
+  const object = objectAt(value, path)
+  const id = stringAt(object.id, `${path}.id`)
+  if (!PERMISSION_ID.test(id)) fail(`${path}.id`, 'must be a kebab-case capability id')
+  const description = optional(object, 'description', path, localizedText)
+  return { id, ...description === undefined ? {} : { description } }
+}
+
+/** A plugin's declared capabilities, refusing repeats that would double-count in a confirmation. */
+function permissions(value: unknown, path: string): MarketPermission[] {
+  if (!Array.isArray(value) || value.length === 0) fail(path, 'must be a non-empty array')
+  const seen = new Set<string>()
+  return value.map((member, position) => {
+    const at = `${path}[${String(position)}]`
+    const entry = permission(member, at)
+    if (seen.has(entry.id)) fail(`${at}.id`, `duplicates ${entry.id}`)
+    seen.add(entry.id)
+    return entry
+  })
+}
+
 function marketVersion(value: unknown, path: string): MarketVersion {
   const object = objectAt(value, path)
   const version = stringAt(object.version, `${path}.version`)
@@ -245,10 +268,12 @@ function marketVersion(value: unknown, path: string): MarketVersion {
   if (typeof publishTimestamp !== 'number' || !Number.isInteger(publishTimestamp) || publishTimestamp < 0 || publishTimestamp >= MAX_PUBLISH_TIMESTAMP) {
     fail(`${path}.publishTimestamp`, 'must be an integer number of Unix seconds in [0, 10^11)')
   }
+  const changelog = optional(object, 'changelog', path, localizedText)
   return {
     version, publishTimestamp,
     source: source(object.source, `${path}.source`),
     engines: optional(object, 'engines', path, engines) ?? {},
+    ...changelog === undefined ? {} : { changelog },
   }
 }
 
@@ -275,6 +300,7 @@ function plugin(value: unknown, path: string, index: MarketIndexMetadata, indexU
   const author = optional(object, 'author', path, stringAt)
   const homepage = optional(object, 'homepage', path, homepageUrl)
   const repo = optional(object, 'repository', path, repository)
+  const declared = optional(object, 'permissions', path, permissions)
   return {
     name,
     ...title === undefined ? {} : { title },
@@ -283,6 +309,7 @@ function plugin(value: unknown, path: string, index: MarketIndexMetadata, indexU
     ...author === undefined ? {} : { author },
     ...homepage === undefined ? {} : { homepage },
     ...repo === undefined ? {} : { repository: repo },
+    ...declared === undefined ? {} : { permissions: declared },
     metadata: pluginMetadata(object.metadata, `${path}.metadata`, index),
     versions: versions(object.versions, `${path}.versions`),
   }

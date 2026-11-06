@@ -1013,6 +1013,22 @@ fn skills(
     content.child(list).into_any_element()
 }
 
+/// Reads index text that is either a plain string or a language map.
+///
+/// The shell has no locale switch today, so the English member wins and any
+/// other language acts as a fallback rather than being dropped.
+fn localized_text(value: &serde_json::Value) -> Option<String> {
+    if let Some(text) = value.as_str() {
+        return Some(text.to_owned());
+    }
+    let object = value.as_object()?;
+    object
+        .get("en")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| object.values().find_map(serde_json::Value::as_str))
+        .map(str::to_owned)
+}
+
 fn marketplace(
     app: &mut DesktopApp,
     theme: &Theme,
@@ -1167,8 +1183,48 @@ fn marketplace(
             trust.push("not compatible with this DSH version".to_owned());
         }
         let trust_line = trust.join(" · ");
+        // Declared capabilities travel with the index; an index that declares
+        // none says so instead of implying "no permissions needed".
+        let permissions = entry
+            .get("permissions")
+            .and_then(serde_json::Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter_map(|permission| {
+                        let id = permission.get("id").and_then(serde_json::Value::as_str)?;
+                        Some(match permission.get("description").and_then(localized_text) {
+                            Some(description) => format!("{id} — {description}"),
+                            None => id.to_owned(),
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let permissions_line = if permissions.is_empty() {
+            "The index declares no capabilities for this plugin.".to_owned()
+        } else {
+            format!("Capabilities: {}", permissions.join(" · "))
+        };
+        // The changelog belongs to the version the action would install.
+        let target_version = if default_version.is_empty() {
+            installed_version.as_str()
+        } else {
+            default_version.as_str()
+        };
+        let changelog = entry
+            .get("versions")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|versions| {
+                versions.iter().find(|version| {
+                    version.get("version").and_then(serde_json::Value::as_str)
+                        == Some(target_version)
+                })
+            })
+            .and_then(|version| version.get("changelog"))
+            .and_then(localized_text);
         let update_available = install_status == "update-available";
         let update_spec = spec.clone();
+        let update_version = default_version.clone();
         content = content.child(
             div()
                 .flex()
@@ -1215,7 +1271,7 @@ fn marketplace(
                                                 app.update_market_entry(
                                                     spec.clone(),
                                                     name.clone(),
-                                                    default_version.clone(),
+                                                    update_version.clone(),
                                                 );
                                             }
                                             cx.notify();
@@ -1229,6 +1285,10 @@ fn marketplace(
                 })
                 .when(!description.is_empty(), |element| {
                     element.child(line(theme, description))
+                })
+                .child(line(theme, permissions_line))
+                .when_some(changelog, |element, changelog| {
+                    element.child(line(theme, format!("Changes in v{target_version}: {changelog}")))
                 }),
         );
     }

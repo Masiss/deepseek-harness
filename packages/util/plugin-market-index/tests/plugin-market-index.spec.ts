@@ -247,6 +247,39 @@ describe('parseMarketIndex', () => {
     expect(entryRejection({ metadata: { sortKeys: { downloads: Number.NaN } } })).toBe('$.plugins[0].metadata.sortKeys.downloads must be a finite number')
   })
 
+  it('parses declared permissions and per-version changelogs', () => {
+    const index = parseMarketIndex(document({
+      plugins: [entry({
+        permissions: [
+          { id: 'filesystem-write', description: { en: 'Writes workspace files', zh: '写入工作区文件' } },
+          { id: 'network-egress' },
+        ],
+        versions: [npmVersion({
+          changelog: { en: 'Fixes the parser', zh: '修复解析器' },
+        })],
+      })],
+    }), INDEX_URL)
+    expect(index.plugins[0]?.permissions).toEqual([
+      { id: 'filesystem-write', description: { en: 'Writes workspace files', zh: '写入工作区文件' } },
+      { id: 'network-egress' },
+    ])
+    expect(index.plugins[0]?.versions[0]?.changelog).toEqual({ en: 'Fixes the parser', zh: '修复解析器' })
+  })
+
+  it('rejects malformed permissions and changelogs', () => {
+    expect(entryRejection({ permissions: [] })).toBe('$.plugins[0].permissions must be a non-empty array')
+    expect(entryRejection({ permissions: [{ id: 'Filesystem Write' }] }))
+      .toBe('$.plugins[0].permissions[0].id must be a kebab-case capability id')
+    expect(entryRejection({ permissions: [{ id: 'network-egress' }, { id: 'network-egress' }] }))
+      .toBe('$.plugins[0].permissions[1].id duplicates network-egress')
+    expect(entryRejection({ permissions: [{ id: 'a', description: { zh: '无英文' } }] }))
+      .toBe('$.plugins[0].permissions[0].description must contain en')
+    expect(versionRejection({ changelog: { zh: '无英文' } }))
+      .toBe('$.plugins[0].versions[0].changelog must contain en')
+    expect(versionRejection({ changelog: '' }))
+      .toBe('$.plugins[0].versions[0].changelog must be a string with a non-whitespace character')
+  })
+
   it('refuses a relative index URL with its own error', () => {
     expect(() => parseMarketIndex({}, 'index.json')).toThrow(MarketIndexError)
   })

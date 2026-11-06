@@ -63,6 +63,14 @@ export interface MarketEngines {
   readonly dsh?: string
 }
 
+/** One capability a plugin's code declares it uses, as the index states it. */
+export interface MarketPermission {
+  /** Kebab-case capability id, such as `filesystem-write` or `network-egress`. */
+  readonly id: string
+  /** What the capability lets the plugin do, for the install confirmation. */
+  readonly description?: LocalizedText
+}
+
 /** One installable version of a plugin. */
 export interface MarketVersion {
   /** Exact SemVer version, unique within its plugin. */
@@ -71,6 +79,8 @@ export interface MarketVersion {
   readonly publishTimestamp: number
   readonly source: MarketSource
   readonly engines: MarketEngines
+  /** Release notes for this version, shown before an update installs it. */
+  readonly changelog?: LocalizedText
 }
 
 /** One installable bundle and its listed versions. */
@@ -86,6 +96,8 @@ export interface MarketPlugin {
   readonly homepage?: string
   /** Web page of the plugin's source repository and its package directory; display only. */
   readonly repository?: MarketRepository
+  /** Capabilities the index declares for every version of this plugin. */
+  readonly permissions?: readonly MarketPermission[]
   readonly metadata: MarketPluginMetadata
   /** Non-empty, in descending SemVer precedence. */
   readonly versions: readonly MarketVersion[]

@@ -119,6 +119,7 @@ DSH 只能从用户已知的 spec 安装第三方组合包（bundle）：npm 包
 | `author` | 否 | 至少包含一个非空白字符的字符串。 |
 | `homepage` | 否 | 介绍该插件的页面的绝对 `https:` 或 `http:` URL。 |
 | `repository` | 否 | `{ "url": string, "directory"?: string }`。`url` 是源代码仓库网页的绝对 `https:` 或 `http:` URL，不含凭据、查询或片段；`directory` 是包在仓库中的目录，规则与 Git 来源的 `path` 相同。该字段仅用于展示，从不决定安装来源。 |
+| `permissions` | 否 | 非空数组，元素为 `{ "id": string, "description"?: LocalizedText }`。`id` 是 kebab-case 能力标识，例如 `filesystem-write`；同一插件内不得重复。读取方在安装或更新确认中展示这些条目。条目由索引声明，DSH 不从包内容推断。 |
 | `metadata` | 否 | 包含下列值的对象。 |
 | `metadata.category` | 否 | 一个已声明的分类 id。 |
 | `metadata.labels` | 否 | 由互不相同的已声明标签 id 组成的数组。 |
@@ -138,6 +139,7 @@ DSH 只能从用户已知的 spec 安装第三方组合包（bundle）：npm 包
 | `source` | 是 | `version` 的安装来源；见下文。 |
 | `engines` | 是 | 包含 `dsh` 的对象。 |
 | `engines.dsh` | 是 | 源 manifest 声明的非空白、有效 npm SemVer 范围；原样复制。`*` 显式声明支持任意 DSH 版本。 |
+| `changelog` | 否 | `LocalizedText` 版本发布说明，在更新安装前展示。 |
 
 相对的 `icon` 引用相对于索引 URL 解析，与 HTML 图片引用相对于所在页面解析的方式相同。对于位于 `https://market.example/dsh/index.json` 的索引，`"icon": "icons/foo.svg"` 指向 `https://market.example/dsh/icons/foo.svg`。因此，生成器可以把索引和图标文件作为一个目录发布到任意静态主机，无需知道最终 URL。指向其他源的绝对图标 URL 必须使用 `https:`；同源规则允许位于 loopback 或内网主机上的 `http:` 索引提供自己的图标。读取器在读取索引时解析该引用，因此客户端收到的是绝对 URL。
 

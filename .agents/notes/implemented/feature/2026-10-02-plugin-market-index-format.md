@@ -119,6 +119,7 @@ Category, label, and sort-key ids are non-empty strings. Readers look ids up as 
 | `author` | no | String with at least one non-whitespace character. |
 | `homepage` | no | Absolute `https:` or `http:` URL of a page about the plugin. |
 | `repository` | no | `{ "url": string, "directory"?: string }`. `url` is the absolute `https:` or `http:` URL of the source repository's web page, without credentials, query, or fragment; `directory` is the package directory inside it, with the `path` rule of a Git source. It is for display and never selects an install source. |
+| `permissions` | no | Non-empty array of `{ "id": string, "description"?: LocalizedText }`. `id` is a kebab-case capability token such as `filesystem-write`; ids are unique within the plugin. A reader shows these in the install or update confirmation. The index states them; DSH does not derive them from the package. |
 | `metadata` | no | Object holding the values below. |
 | `metadata.category` | no | One declared category id. |
 | `metadata.labels` | no | Array of distinct declared label ids. |
@@ -138,6 +139,7 @@ Category, label, and sort-key ids are non-empty strings. Readers look ids up as 
 | `source` | yes | Where `version` is installed from; see below. |
 | `engines` | yes | Object containing `dsh`. |
 | `engines.dsh` | yes | Non-blank valid npm SemVer range declared in the source manifest; copied unchanged. `*` explicitly declares support for any DSH version. |
+| `changelog` | no | `LocalizedText` release notes for this version, shown before an update installs it. |
 
 A relative `icon` reference resolves against the index URL, as an HTML image reference resolves against its page. For an index at `https://market.example/dsh/index.json`, `"icon": "icons/foo.svg"` names `https://market.example/dsh/icons/foo.svg`. A generator can therefore publish the index and its icon files as one directory on any static host without knowing the final URL. Absolute icon URLs on other origins must use `https:`; the same-origin allowance lets an `http:` index on a loopback or intranet host serve its own icons. Readers resolve the reference when they read the index, so clients receive absolute URLs.
 

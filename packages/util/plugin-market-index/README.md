@@ -26,7 +26,7 @@ Validator without runtime dependencies for format 1 of the plugin market index, 
 
 It is a library, not a service or plugin: no `ctx`, no registrations, no state, no I/O.
 
-Parse the fetched document as JSON, then pass the value and the URL it was read from to `parseMarketIndex`. The first violated rule throws `MarketIndexError` with the JSON path of the offending value. A successful result drops members the format does not define, fills absent `metadata` groups, `keywords`, `labels`, `sortKeys`, and `engines` with empty values, orders each plugin's `versions` by descending SemVer precedence, and replaces each relative `icon` reference with its absolute URL.
+Parse the fetched document as JSON, then pass the value and the URL it was read from to `parseMarketIndex`. The first violated rule throws `MarketIndexError` with the JSON path of the offending value. A successful result drops members the format does not define, fills absent `metadata` groups, `keywords`, `labels`, `sortKeys`, and `engines` with empty values, orders each plugin's `versions` by descending SemVer precedence, and replaces each relative `icon` reference with its absolute URL. Optional `permissions` on a plugin and `changelog` on a version pass through unchanged: they are the index's declaration of what a plugin does and what changed, which readers show in install and update confirmations.
 
 Install one version with `marketInstallTarget(name, version)`: it returns the exact pnpm spec, `name@version` for npm and a commit-pinned `git+https` URL with an optional `path:` parameter for Git, and the registry to ask first when the version names one.
 
