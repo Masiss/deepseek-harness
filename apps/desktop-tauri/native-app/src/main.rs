@@ -68,7 +68,8 @@ use dsh_client_core::{
     },
     workspace_files::WorkspaceByteReadOptions,
     workspace_files::{
-        WorkspaceByteRange, WorkspaceFileRange, WorkspaceFileScope, WorkspaceFilesClient,
+        WorkspaceByteRange, WorkspaceFileRange, WorkspaceFileScope, WorkspaceFileWriteResult,
+        WorkspaceFilesClient,
     },
     Error,
 };
@@ -1663,6 +1664,9 @@ struct DesktopApp {
     preview_loading: bool,
     preview_error: Option<String>,
     preview_receiver: Option<mpsc::Receiver<Result<PreviewDocument, String>>>,
+    preview_draft: String,
+    preview_save_receiver: Option<mpsc::Receiver<Result<WorkspaceFileWriteResult, Error>>>,
+    preview_save_status: Option<String>,
     show_document: bool,
     show_plugins: bool,
     show_skills: bool,
@@ -1869,6 +1873,9 @@ impl DesktopApp {
             preview_loading: false,
             preview_error: None,
             preview_receiver: None,
+            preview_draft: String::new(),
+            preview_save_receiver: None,
+            preview_save_status: None,
             show_document: false,
             show_plugins: false,
             show_skills: false,
@@ -2630,6 +2637,36 @@ impl DesktopApp {
         self.preview_receiver = Some(receiver);
         self.preview_loading = true;
         self.preview_error = None;
+    }
+
+    fn save_preview_document(&mut self) {
+        if self.preview_save_receiver.is_some() {
+            return;
+        }
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.preview_error = Some("Select a connected session before saving.".into());
+            return;
+        };
+        let Some(document) = self.preview_document.clone() else {
+            self.preview_error = Some("No text document is loaded to save.".into());
+            return;
+        };
+        let content = self.preview_draft.clone();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let client = WorkspaceFilesClient::new(&transport);
+            let result = client.write(
+                WorkspaceFileScope { session_id },
+                document.host_path,
+                content,
+                document.version,
+            );
+            let _ = sender.send(result);
+        });
+        self.preview_save_receiver = Some(receiver);
+        self.preview_save_status = Some("Saving to Host…".to_owned());
     }
 
     fn read_office_document(&mut self) {
@@ -4340,6 +4377,8 @@ impl DesktopApp {
                 Ok(Ok(document)) => {
                     match document {
                         PreviewDocument::Text(document) => {
+                            self.preview_draft = document.text.clone();
+                            self.preview_save_status = None;
                             self.preview_document = Some(document);
                             self.preview_image = None;
                         }
@@ -4361,6 +4400,35 @@ impl DesktopApp {
                     self.preview_loading = false;
                     self.preview_error = Some("Document read worker stopped unexpectedly".into());
                     self.preview_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30));
+                }
+            }
+        }
+        if let Some(receiver) = &self.preview_save_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(result)) => {
+                    self.preview_save_status = Some(format!(
+                        "Saved {} ({})",
+                        result.stat.absolute_path, result.operation
+                    ));
+                    if let Some(document) = self.preview_document.as_mut() {
+                        document.version = Some(result.stat.version);
+                        document.text = self.preview_draft.clone();
+                    }
+                    self.preview_save_receiver = None;
+                    self.preview_error = None;
+                }
+                Ok(Err(error)) => {
+                    self.preview_save_status = None;
+                    self.preview_error = Some(format!("Host save failed: {error}"));
+                    self.preview_save_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.preview_save_status = None;
+                    self.preview_error = Some("Document save worker stopped unexpectedly".into());
+                    self.preview_save_receiver = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     ctx.request_repaint_after(std::time::Duration::from_millis(30));
@@ -6275,7 +6343,7 @@ impl DesktopApp {
                 app_page_header(
                     ui,
                     "Document preview",
-                    "Read-only files scoped to this Session’s workspace.",
+                    "Files scoped to this Session’s workspace; saving writes back to the Host with a version guard.",
                 );
                 ui.horizontal(|ui| {
                     let path = ui.add(
@@ -6319,6 +6387,30 @@ impl DesktopApp {
                         self.preview_loading,
                         self.preview_error.as_deref(),
                     );
+                    if self.preview_document.is_some() {
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(
+                                    self.transport.is_some() && self.preview_save_receiver.is_none(),
+                                    egui::Button::new("Save to Host"),
+                                )
+                                .clicked()
+                            {
+                                self.save_preview_document();
+                            }
+                            if let Some(status) = &self.preview_save_status {
+                                ui.label(status);
+                            }
+                        });
+                        let body = ui.add(
+                            egui::TextEdit::multiline(&mut self.preview_draft)
+                                .hint_text("Document text")
+                                .desired_width(ui.available_width())
+                                .desired_height(320.0),
+                        );
+                        accessible_label(&body, "Document text");
+                    }
                 }
             } else if self.selected_session.is_none() {
                 ui.heading("Welcome");

@@ -68,7 +68,7 @@ fn page_header(
         ),
         ActiveView::Document => (
             "Document preview",
-            "Read-only files scoped to this Session’s workspace.",
+            "Files scoped to this Session’s workspace; text documents can be edited and saved back to the Host.",
         ),
         ActiveView::Sessions | ActiveView::Explorer => ("Workspace", ""),
     };
@@ -1294,6 +1294,10 @@ fn document(
         });
 
     if let Some(text) = text {
+        if let Some(pending) = app.pending_preview_text.take() {
+            app.set_input("document-body", &pending, cx);
+        }
+        let body_input = app.text_field("document-body", "Document text", true, cx);
         content = content
             .child(
                 div()
@@ -1304,16 +1308,43 @@ fn document(
             .child(line(theme, text.host_path.clone()))
             .child(
                 div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(theme.sp(6.))
+                    .child(
+                        widgets::Button::new(theme, "Save to Host")
+                            .enabled(app.transport.is_some() && app.preview_save_receiver.is_none())
+                            .build()
+                            .id("document-save-host")
+                            .on_click(cx.listener(|app, _, _, cx| {
+                                app.save_preview_document();
+                                cx.notify();
+                            })),
+                    )
+                    .when_some(app.preview_save_status.clone(), |element, status| {
+                        element.child(line(theme, status))
+                    }),
+            )
+            .child(
+                div()
                     .id("document-text")
                     .flex()
                     .flex_col()
                     .w_full()
+                    .min_h(theme.sp(200.))
                     .p(theme.sp(8.))
                     .rounded(theme.corner())
+                    .border_1()
+                    .border_color(theme.border)
                     .bg(theme.code_background)
                     .font(theme.mono_font())
-                    .text_size(theme.fs(11.))
-                    .child(text.text.clone()),
+                    .overflow_hidden()
+                    .child(crate::shell::text_input::text_input_element(
+                        &body_input,
+                        theme,
+                        theme.sp(200.),
+                    )),
             );
     } else if let Some(image) = image {
     } else if let Some(image) = image {

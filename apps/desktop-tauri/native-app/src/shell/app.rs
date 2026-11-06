@@ -57,7 +57,7 @@ use dsh_client_core::{
     workspace::{WorkspaceArchiveValue, WorkspaceClient, WorkspacePinValue},
     workspace_files::{
         WorkspaceByteRange, WorkspaceByteReadOptions, WorkspaceFileRange, WorkspaceFileScope,
-        WorkspaceFilesClient,
+        WorkspaceFileWriteResult, WorkspaceFilesClient,
     },
     Error,
 };
@@ -553,6 +553,12 @@ pub(crate) struct DesktopApp {
     pub(crate) preview_loading: bool,
     pub(crate) preview_error: Option<String>,
     pub(crate) preview_receiver: Option<mpsc::Receiver<Result<PreviewDocument, String>>>,
+    /// Editable copy of the loaded text document; saved with its version guard.
+    pub(crate) preview_draft: String,
+    /// Draft text to install into the document editor on the next render.
+    pub(crate) pending_preview_text: Option<String>,
+    pub(crate) preview_save_receiver: Option<mpsc::Receiver<Result<WorkspaceFileWriteResult, Error>>>,
+    pub(crate) preview_save_status: Option<String>,
     pub(crate) show_document: bool,
     pub(crate) show_plugins: bool,
     pub(crate) show_skills: bool,
@@ -882,6 +888,10 @@ impl DesktopApp {
             preview_loading: false,
             preview_error: None,
             preview_receiver: None,
+            preview_draft: String::new(),
+            pending_preview_text: None,
+            preview_save_receiver: None,
+            preview_save_status: None,
             show_document: false,
             show_plugins: false,
             show_skills: false,
@@ -1533,6 +1543,38 @@ impl DesktopApp {
         self.preview_receiver = Some(receiver);
         self.preview_loading = true;
         self.preview_error = None;
+    }
+
+    /// Saves the edited preview draft back to the Host file, guarded by the
+    /// version from the last read. A stale version is reported, never forced.
+    pub(crate) fn save_preview_document(&mut self) {
+        if self.preview_save_receiver.is_some() {
+            return;
+        }
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.preview_error = Some("Select a connected session before saving.".into());
+            return;
+        };
+        let Some(document) = self.preview_document.clone() else {
+            self.preview_error = Some("No text document is loaded to save.".into());
+            return;
+        };
+        let content = self.preview_draft.clone();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let client = WorkspaceFilesClient::new(&transport);
+            let result = client.write(
+                WorkspaceFileScope { session_id },
+                document.host_path,
+                content,
+                document.version,
+            );
+            let _ = sender.send(result);
+        });
+        self.preview_save_receiver = Some(receiver);
+        self.preview_save_status = Some("Saving to Host…".to_owned());
     }
 
     pub(crate) fn read_office_document(&mut self) {
@@ -3630,6 +3672,7 @@ impl DesktopApp {
                 "session-title" => app.session_title = text,
                 "session-fork-seq" => app.fork_seq_text = text,
                 "file-picker-query" => app.file_picker_query = text,
+                "document-body" => app.preview_draft = text,
                 "market-query" => {
                     app.market_query = text;
                     app.search_market();
@@ -3702,6 +3745,7 @@ impl DesktopApp {
             ("palette-query", &mut self.palette_query),
             ("session-fork-seq", &mut self.fork_seq_text),
             ("file-picker-query", &mut self.file_picker_query),
+            ("document-body", &mut self.preview_draft),
         ] {
             if let Some(input) = self.inputs.get(key) {
                 *field = input.read(&*cx).text().to_owned();
@@ -4746,6 +4790,9 @@ impl DesktopApp {
                 Ok(Ok(document)) => {
                     match document {
                         PreviewDocument::Text(document) => {
+                            self.preview_draft = document.text.clone();
+                            self.pending_preview_text = Some(document.text.clone());
+                            self.preview_save_status = None;
                             self.preview_document = Some(document);
                             self.preview_image = None;
                         }
@@ -4767,6 +4814,35 @@ impl DesktopApp {
                     self.preview_loading = false;
                     self.preview_error = Some("Document read worker stopped unexpectedly".into());
                     self.preview_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.repaint_soon = true;
+                }
+            }
+        }
+        if let Some(receiver) = &self.preview_save_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(result)) => {
+                    self.preview_save_status = Some(format!(
+                        "Saved {} ({})",
+                        result.stat.absolute_path, result.operation
+                    ));
+                    if let Some(document) = self.preview_document.as_mut() {
+                        document.version = Some(result.stat.version);
+                        document.text = self.preview_draft.clone();
+                    }
+                    self.preview_save_receiver = None;
+                    self.preview_error = None;
+                }
+                Ok(Err(error)) => {
+                    self.preview_save_status = None;
+                    self.preview_error = Some(format!("Host save failed: {error}"));
+                    self.preview_save_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.preview_save_status = None;
+                    self.preview_error = Some("Document save worker stopped unexpectedly".into());
+                    self.preview_save_receiver = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     self.repaint_soon = true;
