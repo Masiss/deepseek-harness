@@ -430,3 +430,66 @@ Bin `dsh-desktop-egui-legacy`, feature `legacy-egui`, optional `eframe`, `egui_k
 `DSH_DESKTOP_SHELL=native apps/desktop-tauri/scripts/pack-appimage.sh` đóng gói lại `apps/desktop/.desktop-build/targets/linux-x64/appimage/DeepSeek-Harness-native-0.2.1-rc.4-x86_64.AppImage`: **87.181.816 byte** (bản cũ 87.833.080). Binary nhúng giống hệt bản release vừa build (**43.989.408 byte**), `strings` không còn ký hiệu `egui::`/`eframe::`.
 
 Kiểm chứng: `scripts/appimage-probe.sh` pass cả hai chặng (AppRun contract + Host packaged boot/shutdown, `RESULT host=OK`); chạy thật bằng `APPIMAGE_EXTRACT_AND_RUN=1` trên Hyprland với Home/TMPDIR cô lập: `host=ready in 1414ms`, `auth=ok in 1495ms`, `events=ready`, cửa sổ render đủ nav rail, Sessions panel, empty state và bottom bar.
+
+## Bàn giao phiên 2026-11-06 — C/D/E + chốt scope A
+
+Trạng thái nhánh: `chore/web-bun-migration`, **chưa push**, working tree sạch. Tất cả commit dưới đây nằm trên nhánh này.
+
+### Quyết định đã chốt trong phiên
+- **A — `ask_user_question`:** cho **cả hai mode cùng tồn tại**. Mặc định preset vẫn là `legacy` (blocking); `timed` đã implement đầy đủ trong `packages/interaction/tool-ask-user` nhưng phải mount bằng config/overlay. **Chưa** mở đường chọn mode lúc chạy — nếu muốn có journey packaged cho timed thì phải chọn: overlay/profile riêng, hoặc Settings chọn mode (đổi model-visible tool surface ⇒ quyết định sản phẩm).
+- **Verified cho plugin:** tạm hoãn. Không có cơ chế chữ ký/kiểm chứng index; Marketplace chỉ hiện trust facts + `permissions[]` do index khai báo.
+- **Pixel snapshot gpui:** vẫn pending (gpui 0.2.2 không có API rasterize/accessibility tree).
+
+### Đã xong (theo thứ tự commit, `git log --oneline` để lấy hash)
+| Slice | Nội dung |
+|---|---|
+| git merge/revert | `git/merge` + `git/revert`; `continueOperation`/`abortOperation` phủ cả merge/revert; UI Branches có Merge, branch hiện tại có Revert tip. Refusal message nêu đủ 4 operation. |
+| approval requestId | `approval/request` mang `requestId` (= id của `approval/asked`); browser contract + `PendingApproval` + Rust `ApprovalRequest.request_id`; shell bỏ card trùng id sau reconnect. Scope vẫn chỉ `allowed-once`. |
+| search jump-to-line | Click kết quả content search đặt caret đúng dòng; viewport cuộn theo caret; target gắn theo path để mở file khác không dính dòng cũ. |
+| quick-open paths | `workspaceFiles/searchPaths` (bounded, không đọc nội dung) + palette gộp với cây Explorer đã tải ⇒ quick-open phủ workspace chưa mở. Một request in-flight, kết quả cũ bị bỏ và hỏi lại theo query mới. |
+| file rename/delete | fs seam thêm `rename`/`remove` **virtual** (backend không hỗ trợ → `FS_IO_ERROR`, không giả lập read+write); `workspaceFiles/rename|delete` có stale guard, `FS_ALREADY_EXISTS`, từ chối xoá thư mục; sandbox fence cả 2 đầu rename; document page có Rename + Delete 2 bước, Explorer refresh sau mutation; SSH khai báo `FS_ALREADY_EXISTS` nhưng chưa implement move/delete. |
+| divider reset | Double-click vách Explorer/Changes reset width + xoá override workspace (divider tự đo 400 ms vì gpui không có sự kiện double-click). |
+| file drop | Kéo-thả file vào cửa sổ (`on_drop::<ExternalPaths>`), đi qua đường upload sẵn có; drop nhiều file báo rõ chỉ giữ file đầu. |
+| MEMORY | MEMORY.md ghi kết quả + phần chưa làm. |
+| doc debt | E: PARITY.md + capability map bỏ mọi dòng trích gate egui đã xoá (`ui_harness`, `panels`, `update-ui`, PNG) và các gap đã đóng (Changes data thật, workspace override, paging/dedupe test, prompt dedupe, handoff, skill enable/disable). |
+
+### Gate đã chạy (đều xanh ở trạng thái cuối)
+- `apps/desktop-tauri/native-app`: `cargo test` **188 pass / 1 ignored** (ignored = packaged prompt→tool→approval journey).
+- `apps/desktop-tauri/client-core`: `cargo test --locked --offline --manifest-path apps/desktop-tauri/client-core/Cargo.toml` → **103 + 8 + 11 pass** (client-core **không** là workspace member, phải chạy bằng `--manifest-path`).
+- `npx vitest run packages/fs packages/api/workspace-files packages/ssh` → **1077 pass** (63 file).
+- `packages/api/workspace-controller/tests/git.host.spec.ts` **78 pass**; `packages/util/plugin-market-index` **18**; `packages/boot/plugin-market` **102**.
+- `bun run typecheck` **5/5**, `bun run test:docs` **21/21**, `verify-type-equiv` **494**, `verify-cordis-catalog` fresh, `verify-translation-pairing` **1018 pair**.
+
+### Còn mở (đã cân nhắc, không phải bỏ sót)
+1. **C3 — xoá cứng Session.** `packages/session/session-persistence` chỉ có `create/open/flush/stat/list`; provider duy nhất là `session-persistence-jsonl`. Muốn làm phải thêm `delete` vào seam + provider, chặn session đang mở/đang chạy, rồi `session/delete` + UI confirm. Đây là quyết định durability/data-destructive; archive hiện là đường an toàn được hỗ trợ.
+2. **D2 — Diagnostics panel.** Không có nguồn dữ liệu: `packages/lsp/lsp-stdio/src/connection.ts` **chủ động bỏ** notification `publishDiagnostics`, và `packages/lsp` tuyên bố diagnostics ngoài scope. Cần owner state mới (accumulator + freshness/clear rules) trước khi có RPC/UI.
+3. **D3 — nhiều buffer tab Agent**, **D4 — gộp Preferences thành một cửa sổ**: thay đổi layout/state lớn, nên làm PR riêng.
+4. **D5 — terminal policy theo workspace.** Host chỉ có cap theo Session (`maxTerminals` trong `api-terminal-controller`); không có khái niệm workspace ⇒ cần quyết định sản phẩm.
+5. **D7 — test composition IME tự động.** Harness không inject được composition của platform; hiện có test marked-text + bằng chứng tay trên desktop thật (fcitx5 Bamboo).
+6. Việc cũ chưa đóng: production signing/published-feed swap, physical-window pointer + visual review, Marketplace rollback version cũ, T08 discard version/source guard, EXT-04 test lỗi extension, `request_id` phía client không retry tự động.
+
+### File chính của phiên
+- `packages/api/workspace-controller/src/{git,types}.ts`, `tests/git.host.spec.ts`
+- `packages/interaction/user-approval/src/{index,types}.ts`, `packages/client/ui-approval/src/client/{index,contract/slots}.ts`
+- `packages/api/workspace-files/src/{index,types}.ts`, `tests/{mutate,search-paths}.spec.ts`
+- `packages/fs/fs/src/{index,types}.ts`, `packages/fs/fs-local/src/index.ts`, `packages/fs/fs-sandbox/src/index.ts`
+- `apps/desktop-tauri/client-core/src/{git,approvals,workspace_files}.rs`
+- `apps/desktop-tauri/native-app/src/shell/{app,text_input}.rs`, `src/shell/render/{mod,pages,sessions}.rs`, `src/ui_preferences.rs`
+- Docs: `.agents/plan/desktop-tauri/{PARITY,MEMORY}.md`, `apps/desktop-tauri/native-app/DSH_UI_Handoff_v1.0/runtime-capability-map.md`, `docs/subsystems/{filesystem,approval,workspace}.md`
+
+### Bẫy đã gặp trong phiên
+- **gpui 0.2.2 không có**: accessibility tree, pixel rasterize, sự kiện double-click. Double-click phải tự đo thời gian; D1 đã làm theo cách đó.
+- **`cargo test` ở `native-app` không chạy test của `client-core`** — phải chạy riêng bằng `--manifest-path`.
+- **Type mới trong package dùng chung**: client/other package có thể đang đọc `lib/types` cũ ⇒ chạy `npx tsc -b packages/<...>/tsconfig.json` trước khi tin lỗi type.
+- **`gen-cordis-catalog` sẽ fail nếu type mới chưa phân loại** trong `scripts/gen-cordis-catalog.ts` (`linkedTypePages` / `typeLinkExemptions`); sửa xong chạy lại generator rồi `verify-cordis-catalog`.
+- **Sửa prose trong doc có bản dịch** ⇒ `pnpm run verify-translation-pairing --write <file>`, sau đó chạy corpus `pnpm run verify-translation-pairing` không tham số.
+- **`verify-type-equiv`** bắt block `ts type-equiv` trong `docs/subsystems/*.md`; sửa source type phải sửa cả en + zh.
+- **`pnpm-lock.yaml` drift** có thể là nợ thật từ commit trước; kiểm bằng `pnpm install --lockfile-only --frozen-lockfile` trước khi revert.
+- Máy: `/` ~18 GB free; nếu linker `bus-error` thì `rm -rf apps/desktop-tauri/native-app/target/debug/incremental`.
+- Packaged journey chạy bằng: `bash apps/desktop-tauri/scripts/native-journey-probe.sh shell` (cần cây packaged ở `apps/desktop/.desktop-build/targets/linux-x64`, mock model `scripts/mock-model-server.mjs` mode approval).
+
+### Gợi ý thứ tự tiếp theo
+1. C3 nếu owner chấp nhận semantics xoá cứng (viết Agent Note + upgrade guide nếu đổi surface).
+2. D3 (multi-buffer) — tách state tab khỏi transcript hiện tại.
+3. D2 diagnostics — cần package owner + quyết định freshness trước khi làm UI.
+4. A runtime mode cho `ask_user_question` nếu owner muốn timed có journey packaged.
