@@ -9,6 +9,7 @@ import { WorkspaceCommands } from './commands.ts'
 import { DirectoryPickerController } from './directory-picker.ts'
 import { WorkspaceFeed, workspaceView } from './feed.ts'
 import { defaultWorkspaceDirectory, validateDocumentsDirectory } from './default-directory.ts'
+import { GitController } from './git.ts'
 import type {
   WorkspaceArchiveSessionRequest,
   WorkspaceArchiveValue,
@@ -32,6 +33,7 @@ import type {
 
 export type * from './types.ts'
 export { DirectoryPickerController } from './directory-picker.ts'
+export { GitController } from './git.ts'
 
 /** First-use directory policy for the Host account. */
 export interface Config {
@@ -39,10 +41,24 @@ export interface Config {
   documentsDirectory?: string
   /** Maximum duration of the operating system's Documents lookup. */
   documentsLookupTimeoutMs?: number
+  /** Maximum duration of one local Git invocation. */
+  gitTimeoutMs?: number
+  /** Maximum duration of one remote Git invocation. */
+  gitNetworkTimeoutMs?: number
+  /** Largest Git diff patch returned before the tail is dropped and flagged. */
+  gitMaxDiffBytes?: number
+  /** Largest Git remote summary returned before the tail is dropped and flagged. */
+  gitMaxOutputBytes?: number
 }
 
 /** Directory policy after schema defaults have been applied. */
-type ResolvedConfig = Config & { documentsLookupTimeoutMs: number }
+type ResolvedConfig = Config & {
+  documentsLookupTimeoutMs: number
+  gitTimeoutMs: number
+  gitNetworkTimeoutMs: number
+  gitMaxDiffBytes: number
+  gitMaxOutputBytes: number
+}
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -58,6 +74,10 @@ export class WorkspaceController extends TypertRemoteService {
   static Config: z<Config, ResolvedConfig> = z.object({
     documentsDirectory: z.string(),
     documentsLookupTimeoutMs: z.natural().min(1).default(10_000),
+    gitTimeoutMs: z.natural().min(1).default(15_000),
+    gitNetworkTimeoutMs: z.natural().min(1).default(120_000),
+    gitMaxDiffBytes: z.natural().min(1).default(512 * 1024),
+    gitMaxOutputBytes: z.natural().min(1).default(32 * 1024),
   })
 
   private readonly config: ResolvedConfig
@@ -80,6 +100,12 @@ export class WorkspaceController extends TypertRemoteService {
     // stays pending until a picking backend is composed, so a host without one
     // registers no picking namespace instead of answering an unservable verb.
     ctx.plugin(DirectoryPickerController)
+    ctx.plugin(GitController, {
+      timeoutMs: this.config.gitTimeoutMs,
+      networkTimeoutMs: this.config.gitNetworkTimeoutMs,
+      maxDiffBytes: this.config.gitMaxDiffBytes,
+      maxOutputBytes: this.config.gitMaxOutputBytes,
+    })
   }
 
   /**

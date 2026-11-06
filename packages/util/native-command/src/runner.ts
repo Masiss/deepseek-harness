@@ -11,6 +11,7 @@ export type NativeCommandRunner = (
   args: readonly string[],
   signal: AbortSignal,
   window: 'hidden' | 'visible',
+  env?: Readonly<Record<string, string>>,
 ) => Promise<{ stdout: string; stderr: string }>
 
 /**
@@ -20,14 +21,20 @@ export type NativeCommandRunner = (
  * @param signal - caller/connection lifetime; abort terminates the child.
  * @param window - Windows startup visibility: `hidden` for background commands,
  * `visible` for GUI launchers. Ignored on other platforms.
+ * @param env - environment entries laid over the Host's own environment; omitted keeps it unchanged.
  * @returns captured stdout/stderr on exit 0.
  */
-export const runNativeCommand: NativeCommandRunner = (command, args, signal, window) =>
+export const runNativeCommand: NativeCommandRunner = (command, args, signal, window, env) =>
   new Promise((resolve, reject) => {
     execFile(
       command,
       [...args],
-      { encoding: 'utf8', signal, windowsHide: window === 'hidden' },
+      {
+        encoding: 'utf8',
+        signal,
+        windowsHide: window === 'hidden',
+        ...(env === undefined ? {} : { env: { ...process.env, ...env } }),
+      },
       (error, stdout, stderr) => {
         if (error !== null) {
           const failure = Object.assign(new Error(error.message, { cause: error }), {

@@ -12,13 +12,16 @@
     "src/default-workspace.ts",
     "src/directory-picker.ts",
     "src/feed.ts",
-    "src/default-directory.ts"
+    "src/default-directory.ts",
+    "src/git.ts"
   ],
   "references": [
     { "path": "../../../vendor/cordis" },
     { "path": "../../../vendor/schemastery" },
     { "path": "../../core/session" },
     { "path": "../../host/directory-picker" },
+    { "path": "../../sandbox/sandbox-policy" },
+    { "path": "../../session/session-persistence" },
     { "path": "../../storage/storage-domain" },
     { "path": "../../typert/protocol" },
     { "path": "../remote-access/tsconfig.host.json" },

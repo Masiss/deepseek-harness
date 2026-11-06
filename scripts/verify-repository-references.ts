@@ -49,7 +49,10 @@ export function findRepositoryReferences(
     if (organizationUrl.test(canonicalReferenceText(line).replace(kitRepositoryUrl, ''))) {
       references.push({ file, line: index + 1, kind: 'organization-url' })
     }
-    if ([...line.matchAll(commitCandidate)].some(match => commits.has(match[0].toLowerCase()))) {
+    // Lockfiles carry decimal artifact sizes that can accidentally equal a
+    // numeric-only abbreviated Git object name.
+    const referenceText = line.replace(/\bsize\s*=\s*\d+\b/giu, match => ' '.repeat(match.length))
+    if ([...referenceText.matchAll(commitCandidate)].some(match => commits.has(match[0].toLowerCase()))) {
       references.push({ file, line: index + 1, kind: 'commit-hash' })
     }
   }

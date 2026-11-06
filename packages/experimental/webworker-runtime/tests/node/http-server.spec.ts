@@ -41,7 +41,16 @@ describe('request listener capture', () => {
   it('holds the capture across a server created without a listener', () => {
     // The tunnel reads one listener; an unrelated createServer must not blank it.
     createServer()
+    createServer({ maxHeaderSize: 64 * 1024 })
     expect(requestListener()).toBe(listener)
+  })
+
+  it('captures Node’s options-first createServer(options, listener) overload', async () => {
+    const optionsListener: RequestListener = () => {}
+    const server = createServer({ maxHeaderSize: 64 * 1024 }, optionsListener)
+    expect(server.listen(3080)).toBe(server)
+    expect(requestListener()).toBe(optionsListener)
+    expect(await whenRequestListener()).toBe(optionsListener)
   })
 })
 

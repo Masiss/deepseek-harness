@@ -122,17 +122,29 @@ class FakeServer {
 export class ServerResponse {}
 
 /**
- * Create the fake server and retain its request listener for the tunnel.
- * @param listener - the request listener the webserver installs.
+ * Create the fake server and retain its request listener for the tunnel. The
+ * options-first overload mirrors Node's `createServer(options, listener)`;
+ * socket options are accepted but unused because the Worker binds no socket.
+ *
+ * @param optionsOrListener - Node server options, or a request listener.
+ * @param listener - Request listener when the first argument is options.
  * @returns the fake Server.
  */
-export function createServer(listener?: RequestListener): FakeServer {
-  if (listener !== undefined) {
-    captured = listener
-    for (const resolve of waiting) resolve(listener)
+export function createServer(
+  optionsOrListener?: object | RequestListener,
+  listener?: RequestListener,
+): FakeServer {
+  const capturedListener = isRequestListener(optionsOrListener) ? optionsOrListener : listener
+  if (capturedListener !== undefined) {
+    captured = capturedListener
+    for (const resolve of waiting) resolve(capturedListener)
     waiting.clear()
   }
   return new FakeServer()
+}
+
+function isRequestListener(value: object | RequestListener | undefined): value is RequestListener {
+  return typeof value === 'function'
 }
 
 /**

@@ -32,6 +32,15 @@ describe('runNativeCommand', () => {
     expect(failure).toMatchObject({ code: 'ENOENT' })
   })
 
+  it('lays explicit environment entries over the host environment', async () => {
+    const result = await runNativeCommand(
+      node,
+      ['-e', 'process.stdout.write(process.env.DSH_RUNNER_TEST ?? "")'],
+      new AbortController().signal, 'hidden', { DSH_RUNNER_TEST: 'layered' },
+    )
+    expect(result.stdout).toBe('layered')
+  })
+
   it('terminates the child when the signal aborts', async () => {
     const abort = new AbortController()
     const pending = runNativeCommand(node, ['-e', 'setTimeout(() => {}, 60_000)'], abort.signal, 'hidden')

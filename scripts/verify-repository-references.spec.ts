@@ -140,6 +140,18 @@ describe('maintained repository reference policy', () => {
     expect(scanRepositoryReferences(fixture.root)).toEqual([])
   })
 
+  it('does not treat decimal artifact sizes as commit identifiers', () => {
+    const prefix = ['634', '4383'].join('')
+    expect(findRepositoryReferences(
+      'python/sdk/uv.lock',
+      `{ hash = "sha256:e491916b", size = ${prefix}, upload-time = "2026-07-01" }`,
+      new Set([prefix]),
+    )).toEqual([])
+    expect(findRepositoryReferences('source.md', `commit ${prefix}`, new Set([prefix]))).toEqual([
+      { file: 'source.md', line: 1, kind: 'commit-hash' },
+    ])
+  })
+
   it('accepts a prefix that two available commits share and rejects a longer unique prefix', (test) => {
     const fixture = repository(test)
     const [first, second] = collidingCommitBodies(fixture.tree, 7).map(body =>

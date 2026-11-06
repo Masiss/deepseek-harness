@@ -23,7 +23,7 @@ import { posix, win32 } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-fs'
-import type { FsDirEntry, FsInfo, FsPathInfo, FsTarget } from '@deepseek-ai/dsh-fs'
+import type { FsDirEntry, FsInfo, FsPathInfo, FsTarget, FsVersion } from '@deepseek-ai/dsh-fs'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-persistence'
@@ -291,6 +291,67 @@ export class WorkspaceFiles extends TypertRemoteService {
   async stat(workspaceFileScope: WorkspaceFileScope, path: string, signal: AbortSignal): Promise<WorkspaceFileStat> {
     const { target, info } = await this.locateFile(workspaceFileScope, path, signal)
     return this.statOf(target, info)
+  }
+
+  /**
+   * Create or replace a UTF-8 file's content.
+   * @param workspaceFileScope - header-derived workspace root for the Session identity on the wire.
+   * @param path - absolute path or path relative to the workspace root; files outside it are allowed.
+   * @param content - the full new file content.
+   * @param expectedVersion - freshness token from the preceding read/stat; omit for an unconditional write.
+   * @param signal - caller cancellation.
+   * @returns the file's identity, version, operation, and before/after content.
+   */
+  @Remote
+  async write(
+    workspaceFileScope: WorkspaceFileScope,
+    path: string,
+    content: string,
+    expectedVersion: string | undefined,
+    signal: AbortSignal,
+  ): Promise<WorkspaceFileWriteResult> {
+    if (path.length === 0) {
+      throw new RemoteError('gateway/bad-request', 'path is required', {})
+    }
+    const { workspaceRoot } = workspaceFileScope
+    const entry = await this.ctx.fs.lstat(path, { cwd: workspaceRoot }, signal).catch(() => undefined)
+    let target
+    let intent: { kind: 'createIfAbsent' } | { kind: 'replaceIfVersion'; version: FsVersion } | undefined
+    if (entry === undefined) {
+      target = await this.ctx.fs.resolve(path, { cwd: workspaceRoot, signal })
+      intent = { kind: 'createIfAbsent' }
+    } else {
+      if (entry.type !== 'file') {
+        throw new RemoteError('workspace-file/not-regular-file', `"${path}" is a ${entry.type}`, { path, kind: entry.type })
+      }
+      target = await this.ctx.fs.resolve(path, { cwd: workspaceRoot, signal })
+      if (expectedVersion !== undefined) {
+        intent = { kind: 'replaceIfVersion', version: expectedVersion as FsVersion }
+      }
+    }
+    let outcome
+    try {
+      outcome = await this.ctx.fs.writeText(target, content, intent, signal)
+    } catch (error: unknown) {
+      if (typeof error === 'object' && error !== null && 'code' in error) {
+        if (error.code === 'FS_STALE_VERSION') {
+          throw new RemoteError('workspace-file/stale-version', `"${path}" changed since it was read`, { path })
+        }
+        if (error.code === 'FS_NOT_OBSERVED') {
+          throw new RemoteError('workspace-file/not-observed', `"${path}" already exists`, { path })
+        }
+      }
+      throw error
+    }
+    const info = await this.ctx.fs.stat(target, signal).catch(() => undefined)
+    return {
+      absolutePath: this.ctx.fs.processPath(target),
+      version: outcome.version,
+      ...info?.size === undefined ? {} : { bytes: info.size },
+      operation: outcome.operation,
+      before: outcome.before,
+      after: outcome.after,
+    }
   }
 
   /**

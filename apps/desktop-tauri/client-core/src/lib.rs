@@ -66,3 +66,4 @@ impl From<serde_json::Error> for Error {
         Self::InvalidEnvelope("JSON decoding")
     }
 }
+pub mod git;

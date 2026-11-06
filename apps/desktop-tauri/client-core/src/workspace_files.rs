@@ -89,7 +89,16 @@ impl<'de> Deserialize<'de> for WorkspaceFileBytes {
     }
 }
 
-/// One workspace file observation.
+/// Result of one workspace file write.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceFileWriteResult {
+    #[serde(flatten)]
+    pub stat: WorkspaceFileStat,
+    pub operation: String,
+    pub before: Option<String>,
+    pub after: String,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceFileChange {
@@ -171,6 +180,25 @@ impl<'a> WorkspaceFilesClient<'a> {
             "workspaceFiles/stat",
             serde_json::json!({"workspaceFileScopeId":scope.session_id,"path":path.into()}),
         )
+    }
+    /// Writes a UTF-8 file, guarding against a stale version.
+    pub fn write(
+        &self,
+        scope: WorkspaceFileScope,
+        path: impl Into<String>,
+        content: String,
+        expected_version: Option<String>,
+    ) -> Result<WorkspaceFileWriteResult, Error> {
+        let mut payload = serde_json::json!({
+            "workspaceFileScopeId": scope.session_id,
+            "path": path.into(),
+            "content": content,
+            "expectedVersion": expected_version,
+        });
+        if expected_version.is_none() {
+            payload.as_object_mut().unwrap().remove("expectedVersion");
+        }
+        self.call("workspaceFiles/write", payload)
     }
     /// Lists direct workspace directory children.
     pub fn list(

@@ -105,7 +105,15 @@ export interface WorkspaceDirectoryEntry {
   readonly size?: number
 }
 
-/** Direct children of one workspace directory. */
+/** Result of one workspace file write. */
+export interface WorkspaceFileWriteResult extends WorkspaceFileStat {
+  /** Whether the write created a new file or replaced an existing one. */
+  readonly operation: 'create' | 'update'
+  /** File content before the write, or `null` for a create. */
+  readonly before: string | null
+  /** File content after the write. */
+  readonly after: string
+}
 export interface WorkspaceDirectoryListing {
   /**
    * The listed directory as a workspace path, relative to the workspace root
@@ -172,5 +180,9 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
       readonly path: string
       readonly kind: 'file' | 'symlink' | 'other'
     }
+    /** The file changed since it was read; retry with the current version. */
+    'workspace-file/stale-version': { readonly path: string }
+    /** The file did not exist when a create was requested, but now does. */
+    'workspace-file/not-observed': { readonly path: string }
   }
 }
