@@ -553,6 +553,46 @@ describe('SessionHistoryController', () => {
       const iterator = transport.follow({ address, turnWindow }, signal())[Symbol.asyncIterator]()
       await expect(iterator.next()).rejects.toMatchObject({ code: 'gateway/bad-request' })
     }
+    for (const fromSeq of [-2, -0, 0.5]) {
+      const iterator = transport.follow({ address, fromSeq }, signal())[Symbol.asyncIterator]()
+      await expect(iterator.next()).rejects.toMatchObject({ code: 'gateway/bad-request' })
+    }
+  })
+
+  it('resumes a follow after the held sequence without replaying older events', async () => {
+    const { ctx, transport } = await setup()
+    const session = ctx.sessions.create(SessionId('resumed'), { meta: { cwd: '/workspace' } })
+    session.append('turn/start', { turn: 1 })
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    const abort = new AbortController()
+    const iterator = transport.follow(
+      { address: { kind: 'session', sessionId: session.id }, fromSeq: 0 },
+      abort.signal,
+    )[Symbol.asyncIterator]()
+    const snapshot = await iterator.next()
+    expect(snapshot.value).toMatchObject({
+      type: 'snapshot',
+      cursor: 1,
+      hasMore: false,
+      records: [{ event: { type: 'turn/end', seq: 1 } }],
+    })
+    session.append('step/start', { turn: 2, step: 1 })
+    expect(await iterator.next()).toMatchObject({
+      done: false,
+      value: { type: 'event', event: { type: 'step/start', seq: 2 } },
+    })
+    abort.abort()
+    expect(await iterator.next()).toMatchObject({ done: true })
+  })
+
+  it('rejects a resume sequence past the current cursor', async () => {
+    const { ctx, transport } = await setup()
+    const session = ctx.sessions.create(SessionId('ahead'), { meta: { cwd: '/workspace' } })
+    const iterator = transport.follow(
+      { address: { kind: 'session', sessionId: session.id }, fromSeq: 9 },
+      signal(),
+    )[Symbol.asyncIterator]()
+    await expect(iterator.next()).rejects.toMatchObject({ code: 'gateway/bad-request' })
   })
 
   it('reports missing ordinary and subagent sources without fabricating inspection failures', async () => {

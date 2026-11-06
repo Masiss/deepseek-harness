@@ -504,6 +504,14 @@ export interface SessionPageRequest {
 /** One live event request for a durable Session address. */
 export interface SessionFollowRequest extends Pick<SessionPageRequest, 'maxMessages' | 'turnWindow'> {
   readonly address: SessionAddress
+  /**
+   * Last committed sequence the caller already holds; `-1` holds nothing.
+   * The opening snapshot then carries only events after this sequence
+   * (within the same `maxMessages` window), and the live stream continues
+   * from the snapshot cursor with no replay of held events. A sequence
+   * past the current cursor is rejected as `gateway/bad-request`.
+   */
+  readonly fromSeq?: number
   /** Include process-local assistant presentation frames for the Web client. */
   readonly assistantStream?: true
 }

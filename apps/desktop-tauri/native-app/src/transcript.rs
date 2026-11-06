@@ -47,7 +47,7 @@ pub struct TranscriptRow {
 /// History pages and live follow frames project through the same function, so a
 /// Session renders one ordered, deduplicated log regardless of where each event
 /// came from.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Transcript {
     rows: Vec<TranscriptRow>,
     applied: BTreeSet<i64>,
@@ -59,6 +59,23 @@ pub struct Transcript {
     last_turn_end: Option<String>,
     /// Sequence of the newest turn event that set the two fields above.
     state_seq: i64,
+    /// Highest event sequence projected; `-1` when nothing was projected.
+    last_seq: i64,
+}
+
+impl Default for Transcript {
+    fn default() -> Self {
+        Self {
+            rows: Vec::new(),
+            applied: BTreeSet::new(),
+            bytes: 0,
+            has_cjk: false,
+            open_turn: false,
+            last_turn_end: None,
+            state_seq: 0,
+            last_seq: -1,
+        }
+    }
 }
 
 impl Transcript {
@@ -71,6 +88,7 @@ impl Transcript {
         self.open_turn = false;
         self.last_turn_end = None;
         self.state_seq = 0;
+        self.last_seq = -1;
     }
 
     /// Merges durable events in sequence order, ignoring any already projected.
@@ -95,6 +113,7 @@ impl Transcript {
             if !self.applied.insert(event.seq) {
                 continue;
             }
+            self.last_seq = self.last_seq.max(event.seq);
             let at = self.rows.partition_point(|row| row.seq < event.seq);
             // Turn outcome comes from `turn/end.reason.kind`, which the runtime
             // records for every closed turn. A failed tool call is a row above,
@@ -158,6 +177,11 @@ impl Transcript {
                 None => "completed",
             }
         }
+    }
+
+    /// Highest projected sequence, or `-1` before any event.
+    pub fn last_seq(&self) -> i64 {
+        self.last_seq
     }
 
     /// Retained rows, oldest first.
@@ -686,6 +710,18 @@ mod tests {
         let before = transcript.rows().len();
         transcript.merge([&events[0]]);
         assert_eq!(transcript.rows().len(), before);
+    }
+
+    #[test]
+    fn last_seq_tracks_the_highest_projected_event() {
+        let mut transcript = Transcript::default();
+        assert_eq!(transcript.last_seq(), -1);
+        transcript.apply(&event(5, "user/message", serde_json::json!({"content": []})));
+        assert_eq!(transcript.last_seq(), 5);
+        transcript.apply(&event(3, "user/message", serde_json::json!({"content": []})));
+        assert_eq!(transcript.last_seq(), 5);
+        transcript.reset();
+        assert_eq!(transcript.last_seq(), -1);
     }
 
     #[test]

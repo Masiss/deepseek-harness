@@ -2455,6 +2455,7 @@ impl DesktopApp {
             return;
         };
         let (sender, receiver) = mpsc::channel();
+        let from_seq = (self.transcript.last_seq() >= 0).then_some(self.transcript.last_seq());
         std::thread::spawn(move || {
             let result = (|| {
                 let mut stream = follow::follow(
@@ -2465,6 +2466,7 @@ impl DesktopApp {
                             session_id: session_id.clone(),
                         },
                         max_messages: Some(1),
+                        from_seq,
                         turn_window: None,
                         assistant_stream: false,
                     },
@@ -3046,6 +3048,7 @@ impl DesktopApp {
         self.record_prompt_history(&text);
         self.refresh_sessions_quietly();
         let (sender, receiver) = mpsc::channel();
+        let from_seq = (self.transcript.last_seq() >= 0).then_some(self.transcript.last_seq());
         std::thread::spawn(move || {
             let chat = ChatClient::new(&transport);
             let mut content = vec![PromptContentPart::Text { text }];
@@ -3071,6 +3074,7 @@ impl DesktopApp {
                     session_id,
                 },
                 max_messages: Some(200),
+                from_seq,
                 turn_window: None,
                 assistant_stream: true,
             };
@@ -6091,6 +6095,7 @@ fn probe_snapshot(mux: &RemoteStreamMux, session: &str) -> Option<follow::Snapsh
             session_id: session.to_owned(),
         },
         max_messages: Some(200),
+        from_seq: None,
         turn_window: None,
         assistant_stream: false,
     };

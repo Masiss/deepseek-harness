@@ -21,6 +21,10 @@ pub struct FollowRequest {
     pub address: SessionAddress,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_messages: Option<u32>,
+    /// Last committed sequence the caller already holds; `-1` holds nothing.
+    /// The opening snapshot then carries only later events.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_seq: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turn_window: Option<TurnWindow>,
     /// Request process-local assistant frames; the Host accepts only `true`,
@@ -266,6 +270,7 @@ mod tests {
                 session_id: "s".into(),
             },
             max_messages: Some(20),
+            from_seq: Some(7),
             turn_window: Some(TurnWindow {
                 min_messages: 2,
                 min_turns: 1,
@@ -294,7 +299,7 @@ mod tests {
             assert_eq!(
                 open["payload"],
                 serde_json::json!({"args":{"request":{
-                    "address":{"kind":"session","sessionId":"s"},"maxMessages":20,
+                    "address":{"kind":"session","sessionId":"s"},"maxMessages":20,"fromSeq":7,
                     "turnWindow":{"minMessages":2,"minTurns":1},"assistantStream":true
                 }}})
             );

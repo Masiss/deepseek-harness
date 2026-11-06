@@ -8,7 +8,8 @@
  * relative paths, with the sandbox policy root as its no-cwd fallback, not a
  * read-containment restriction. Directory listings and change observations
  * remain workspace-scoped. File-kind checks and configured read caps apply to
- * every preview; this service exposes no mutations.
+ * every preview; writes replace only the observed version or create absent
+ * paths, refusing stale versions instead of overwriting them.
  *
  * A page is cut from `streamText`, which decodes and rejects non-UTF-8 as it
  * goes, so the file is read only up to the first character past the page and
@@ -40,6 +41,7 @@ import type {
   WorkspaceFileStat,
   WorkspaceFileText,
   WorkspaceFileWatchFrame,
+  WorkspaceFileWriteResult,
 } from './types.ts'
 
 export type * from './types.ts'

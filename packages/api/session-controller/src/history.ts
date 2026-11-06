@@ -119,6 +119,12 @@ export class SessionHistoryController {
    */
   async *follow(request: SessionFollowRequest, signal: AbortSignal): AsyncIterable<SessionFollowFrame> {
     validateHistoryWindow(request)
+    if (request.fromSeq !== undefined
+      && (!Number.isSafeInteger(request.fromSeq)
+        || request.fromSeq < -1
+        || Object.is(request.fromSeq, -0))) {
+      throw new RemoteError('gateway/bad-request', 'fromSeq must be an integer greater than or equal to -1', {})
+    }
     const { address } = request
     const target = addressId(address)
     const buffered = new Deque<
@@ -181,7 +187,26 @@ export class SessionHistoryController {
       signal.throwIfAborted()
       const cursor = source.cursor
       snapshotCursor = cursor
+      const fromSeq = request.fromSeq
+      if (fromSeq !== undefined && fromSeq > cursor) {
+        throw new RemoteError('gateway/bad-request', `session follow from seq ${fromSeq} is past cursor ${cursor}`, {})
+      }
       const page = paginate(events, undefined, request.maxMessages ?? DEFAULT_MAX_MESSAGES, cursor, request.turnWindow)
+      // A resume snapshot carries only events after the client's held
+      // sequence, within the same backward window. When the window starts
+      // later, `hasMore` stays true so the client pages the gap between its
+      // held sequence and the window start through `session/page`.
+      const resume = fromSeq === undefined || fromSeq < 0
+        ? page
+        : (() => {
+          const windowStart = page.events.length === 0
+            ? cursor + 1
+            : (page.events[0] as SessionEvent).seq
+          return {
+            events: events.slice(Math.max(fromSeq + 1, windowStart), cursor + 1),
+            hasMore: windowStart > fromSeq + 1,
+          }
+        })()
       const assistantStream = request.assistantStream === true
         ? this.assistantStreams.get(target)?.snapshot() ?? { revision: 0 }
         : undefined
@@ -194,8 +219,8 @@ export class SessionHistoryController {
         type: 'snapshot',
         header: wireHeader(source.header),
         cursor,
-        records: pageRecords(page.events),
-        hasMore: page.hasMore,
+        records: pageRecords(resume.events),
+        hasMore: resume.hasMore,
         projections: source.projections === undefined
           ? { asOfSeq: cursor, values: {} }
           : projectionBlock(source.projections),
