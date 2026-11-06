@@ -58,6 +58,19 @@ if [ "$mode" = shell ]; then
     -type f -name 'dsh_desktop_native_app-*' -executable -printf '%T@ %p\n' \
     | sort -nr | sed -n '1s/^[^ ]* //p')
   [ -x "$test_bin" ] || { echo "native-journey-probe: no native test binary" >&2; exit 1; }
+  # The mock model asks for one escalated bash call, which the shell approves.
+  marker="$work/approval.marker"
+  DSH_APPROVAL_PROBE_MARKER="$marker" "$node" "$mock" > "$work/mock.out" 2> "$work/mock.err" &
+  mock_pid=$!
+  model_url=''
+  for _ in $(seq 1 100); do
+    model_url=$(grep -ho '^MOCK_MODEL_URL=.*' "$work/mock.out" 2>/dev/null | head -1 | cut -d= -f2- || true)
+    [ -n "$model_url" ] && break
+    sleep 0.1
+  done
+  [ -n "$model_url" ] || { echo "RESULT shell=FAIL reason=mock-model"; tail -3 "$work/mock.err"; exit 1; }
+  DSH_APPROVAL_PROBE_MARKER="$marker" \
+  DEEPSEEK_API_KEY=mock DEEPSEEK_BASE_URL="$model_url" \
   DSH_HOME="$work/home/.dsh" \
   DSH_DESKTOP_HOST_BIN="$tree/bin/desktop-host" \
   DSH_DESKTOP_RUNTIME_DIR="$tree/dsh" \
@@ -69,8 +82,14 @@ if [ "$mode" = shell ]; then
   DSH_CLIENT_VERSION="$version" \
   TMPDIR="$work/tmp" XDG_CACHE_HOME="$work/cache" XDG_CONFIG_HOME="$work/config" \
     "$test_bin" --ignored --exact \
-      harness::packaged_shell_connects_and_creates_a_session --nocapture
-  exit $?
+      harness::packaged_shell_runs_a_prompt_through_an_approved_tool --nocapture
+  result=$?
+  [ -n "$mock_pid" ] && kill -TERM "$mock_pid" 2>/dev/null || true
+  if [ "$result" -eq 0 ] && [ ! -e "$marker" ]; then
+    echo "RESULT shell=FAIL reason=approval-marker-missing"
+    exit 1
+  fi
+  exit "$result"
 fi
 
 if [ "$mode" = model-default ]; then

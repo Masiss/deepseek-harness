@@ -312,20 +312,21 @@ mod tests {
     }
 }
 
-/// Packaged-Host journey: the shell connects to a real Desktop Host and creates
-/// a Session through its own RPC path.
+/// Packaged-Host journey: connect, create a Session, run a prompt that requests an
+/// escalated tool call, approve it through the shell, and read the result back.
 ///
-/// Ignored because it needs the packaged tree; `native-journey-probe.sh shell`
-/// supplies the launch variables.
+/// Ignored because it needs the packaged tree and a mock model;
+/// `native-journey-probe.sh shell` supplies both.
 #[test]
-#[ignore = "needs the packaged Host; run scripts/native-journey-probe.sh shell"]
-fn packaged_shell_connects_and_creates_a_session() {
+#[ignore = "needs the packaged Host and mock model; run scripts/native-journey-probe.sh shell"]
+fn packaged_shell_runs_a_prompt_through_an_approved_tool() {
     use std::time::Duration;
 
     assert!(
         std::env::var("DSH_DESKTOP_HOST_BIN").is_ok(),
         "DSH_DESKTOP_HOST_BIN is unset; run scripts/native-journey-probe.sh shell"
     );
+    let marker = std::env::var("DSH_APPROVAL_PROBE_MARKER").unwrap_or_default();
     let mut harness = Harness::open_with_host(1440., 900.);
     assert!(
         harness.pump_until("Host connection", Duration::from_secs(180), |app| {
@@ -333,8 +334,6 @@ fn packaged_shell_connects_and_creates_a_session() {
         }),
         "the shell never connected to the packaged Host"
     );
-    // Let the first Session list settle: a create request is dropped while a
-    // list request is already in flight.
     assert!(
         harness.pump_until("Session list idle", Duration::from_secs(120), |app| {
             !app.sessions_request_pending()
@@ -342,19 +341,12 @@ fn packaged_shell_connects_and_creates_a_session() {
         "the shell never finished its first Session list"
     );
     harness.with(|app, _| app.new_session());
-    let created = harness.pump_until("Session creation", Duration::from_secs(120), |app| {
-        app.selected_session.is_some()
-    });
-    if !created {
-        let (status, error, page_error) = harness.with(|app, _| {
-            (
-                app.sessions_status.clone(),
-                app.sessions_error.clone(),
-                app.page_error.clone(),
-            )
-        });
-        panic!("the shell never selected the created Session: {status} / {error:?} / {page_error:?}");
-    }
+    assert!(
+        harness.pump_until("Session creation", Duration::from_secs(120), |app| {
+            app.selected_session.is_some()
+        }),
+        "the shell never selected the created Session"
+    );
     let session = harness
         .with(|app, _| app.selected_session.clone())
         .expect("selected Session");
@@ -370,7 +362,55 @@ fn packaged_shell_connects_and_creates_a_session() {
         harness.bounds("agent-column").is_some(),
         "the agent column did not render for the packaged Session"
     );
-    println!("RESULT packaged-shell=OK session={session}");
+
+    // Prompt the mock model; its first turn asks for an escalated bash call.
+    harness.with(|app, _| {
+        app.chat_text = "Run the approval probe command.".to_owned();
+        app.send_prompt();
+    });
+    assert!(
+        harness.pump_until("approval request", Duration::from_secs(180), |app| {
+            !app.pending_approvals.is_empty()
+        }),
+        "the Host never asked for approval; the model or sandbox path is not wired"
+    );
+    let tool = harness
+        .with(|app, _| {
+            app.pending_approvals
+                .first()
+                .map(|pending| pending.request.tool_name.clone())
+        })
+        .unwrap_or_default();
+    assert!(
+        tool.contains("bash"),
+        "unexpected approval tool: {tool}"
+    );
+    harness.with(|app, _| app.decide_approval(true));
+    assert!(
+        harness.pump_until("tool result", Duration::from_secs(180), |app| {
+            app.pending_approvals.is_empty()
+                && app
+                    .transcript
+                    .rows()
+                    .iter()
+                    .any(|row| matches!(row.kind, crate::transcript::RowKind::ToolResult))
+        }),
+        "the approved tool never produced a result row"
+    );
+    if !marker.is_empty() {
+        assert!(
+            std::path::Path::new(&marker).exists(),
+            "the approved command did not run: {marker} is missing"
+        );
+    }
+    assert!(
+        harness
+            .with(|app, _| app.transcript.rows().iter().any(|row| {
+                matches!(row.kind, crate::transcript::RowKind::Assistant)
+            })),
+        "the transcript has no assistant turn for the packaged journey"
+    );
+    println!("RESULT packaged-shell=OK session={session} tool={tool}");
 }
 
 #[cfg(test)]
