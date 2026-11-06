@@ -265,6 +265,21 @@ export interface SkillEntry {
 /** Human-invocable skills visible through one Session's composition. */
 export interface SkillListValue {
   readonly skills: readonly SkillEntry[]
+  /** Names the Host filters out of every catalog read for this composition. */
+  readonly disabledSkills: readonly string[]
+}
+
+/** Names to disable or re-enable in one composition. */
+export interface SkillSetDisabledRequest {
+  /** The complete disabled set; an empty array re-enables everything. */
+  readonly names: readonly string[]
+}
+
+/** Applied disabled set and whether the Host persisted it. */
+export interface SkillSetDisabledValue {
+  readonly disabledSkills: readonly string[]
+  /** False when this Host has no settings entry to persist into. */
+  readonly persisted: boolean
 }
 
 /** Session list request. */

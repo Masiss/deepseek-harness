@@ -42,7 +42,7 @@ use dsh_client_core::{
         SessionsClient,
     },
     settings::{SettingsClient, SettingsDescribeValue, SettingsNamespaceView},
-    skills::{SkillListResponse, SkillsClient},
+    skills::{SkillListResponse, SkillSetDisabledResponse, SkillsClient},
     streams::{self, JobFollowFrame, JobView, WorkspaceFollowFrame, WorkspaceView},
     terminal::TerminalFrame,
     transport::HttpTransport,
@@ -608,6 +608,8 @@ pub(crate) struct DesktopApp {
     pub(crate) skills_query: String,
     pub(crate) selected_skill: Option<String>,
     pub(crate) skills_receiver: Option<mpsc::Receiver<Result<SkillListResponse, Error>>>,
+    pub(crate) skills_write_receiver: Option<mpsc::Receiver<Result<SkillSetDisabledResponse, Error>>>,
+    pub(crate) skills_status: Option<String>,
     pub(crate) skills_loading: bool,
     pub(crate) skills_error: Option<String>,
     pub(crate) model_catalog: Option<ModelCatalog>,
@@ -999,6 +1001,8 @@ impl DesktopApp {
             skills_query: String::new(),
             selected_skill: None,
             skills_receiver: None,
+            skills_write_receiver: None,
+            skills_status: None,
             skills_loading: false,
             skills_error: None,
             model_catalog: None,
@@ -1539,6 +1543,38 @@ impl DesktopApp {
         self.skills_receiver = Some(receiver);
         self.skills_loading = true;
         self.skills_error = None;
+    }
+
+    /// Enables or disables one skill through the Host, which enforces the set
+    /// on every catalog read (model catalogs and `/skill` alike).
+    pub(crate) fn set_skill_enabled(&mut self, name: String, enabled: bool) {
+        if self.skills_write_receiver.is_some() {
+            return;
+        }
+        let Some(transport) = self.transport.clone() else {
+            self.skills_status = Some("Connect before changing skill enablement".to_owned());
+            return;
+        };
+        let mut names = self
+            .skills
+            .as_ref()
+            .map(|skills| skills.disabled_skills.clone())
+            .unwrap_or_default();
+        names.retain(|existing| existing != &name);
+        if !enabled {
+            names.push(name.clone());
+        }
+        names.sort();
+        names.dedup();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(SkillsClient::new(&transport).set_disabled(names));
+        });
+        self.skills_write_receiver = Some(receiver);
+        self.skills_status = Some(format!(
+            "{} {name}…",
+            if enabled { "Enabling" } else { "Disabling" }
+        ));
     }
 
     pub(crate) fn refresh_settings(&mut self) {
@@ -5612,6 +5648,30 @@ impl DesktopApp {
                 }
             }
         }
+        if let Some(receiver) = &self.skills_write_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(applied)) => {
+                    self.skills_status = Some(if applied.persisted {
+                        format!("Disabled skills: {}", applied.disabled_skills.join(", "))
+                    } else {
+                        "Applied for this Host process only; no settings entry owns the set".to_owned()
+                    });
+                    self.skills_write_receiver = None;
+                    self.refresh_skills();
+                }
+                Ok(Err(error)) => {
+                    self.skills_status = Some(format!("Skill change refused: {error}"));
+                    self.skills_write_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.skills_status = Some("Skill change worker stopped unexpectedly".into());
+                    self.skills_write_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.repaint_soon = true;
+                }
+            }
+        }
         if let Some(receiver) = &self.chat_receiver {
             match receiver.try_recv() {
                 Ok(Ok(frame)) => match frame {
@@ -5967,6 +6027,7 @@ fn has_pending_workers(app: &DesktopApp) -> bool {
         || app.feedback_put_receiver.is_some()
         || app.market_receiver.is_some()
         || app.skills_receiver.is_some()
+        || app.skills_write_receiver.is_some()
         || app.settings_receiver.is_some()
         || app.settings_update_receiver.is_some()
         || app.update_open_receiver.is_some()

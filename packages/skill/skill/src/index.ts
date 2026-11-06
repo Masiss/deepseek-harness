@@ -12,6 +12,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-llm'
+import type {} from '@deepseek-ai/dsh-settings'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 import { NamedEntries, ScopedLayers, scopeChainOf, scopeOf } from '@deepseek-ai/dsh-scope'
 import type { ScopeKey, ScopeLayer } from '@deepseek-ai/dsh-scope'
@@ -278,6 +279,13 @@ export interface SkillProviderControl {
 export interface Config {
   /** Maximum number of completed cwd/provider catalogs kept in memory. */
   readonly collectCacheMaxEntries?: number
+  /** Skill names disabled for this composition; empty by default. */
+  readonly disabledSkills?: string[]
+  /**
+   * Settings namespace (a plugin entry id) that owns this plugin's persisted
+   * `disabledSkills`. Omit to keep disablement in memory for this process.
+   */
+  readonly settingsNamespace?: string
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -356,9 +364,15 @@ class SkillLayer implements ScopeLayer {
 export class SkillRegistry extends Service {
   static Config: Schema<Config> = z.object({
     collectCacheMaxEntries: z.number().default(DEFAULT_COLLECT_CACHE_ENTRIES),
+    disabledSkills: z.array(z.string()).default([]),
+    settingsNamespace: z.string(),
   })
 
   private readonly collectCacheMaxEntries: number
+  /** Names filtered out of every catalog read, including model-facing ones. */
+  private disabled = new Set<string>()
+  /** Settings entry that durably owns `disabledSkills`, when configured. */
+  private readonly settingsNamespace: string | undefined
   private readonly layers = new ScopedLayers<SkillLayer>(
     scope => new SkillLayer(scope),
     () => { this.invalidateCache() },
@@ -374,6 +388,38 @@ export class SkillRegistry extends Service {
     super(ctx, 'skills')
     this.collectCacheMaxEntries = config.collectCacheMaxEntries ?? DEFAULT_COLLECT_CACHE_ENTRIES
     assertPositiveInteger('collectCacheMaxEntries', this.collectCacheMaxEntries)
+    this.disabled = validatedDisabled(config.disabledSkills ?? [])
+    this.settingsNamespace = config.settingsNamespace
+  }
+
+  /**
+   * Names currently filtered out of every catalog read.
+   * @returns the disabled names, sorted.
+   */
+  disabledSkills(): readonly string[] {
+    return [...this.disabled].sort(compareCodePoints)
+  }
+
+  /**
+   * Replace the disabled set and persist it to this plugin's settings entry
+   * when a settings service and entry id are available. The filter applies to
+   * `list`, `snapshot`, and `get`, so model catalogs and `/skill` invocations
+   * observe the same disabled set.
+   * @param names - skill names to disable; each must be a kebab-case skill name.
+   * @returns the applied set in sorted order and whether the Host persisted it.
+   */
+  async setDisabledSkills(names: readonly string[]): Promise<{ disabledSkills: readonly string[]; persisted: boolean }> {
+    const next = validatedDisabled(names)
+    const settings = this.ctx.get('settings')
+    const namespace = this.settingsNamespace
+    let persisted = false
+    if (settings !== undefined && namespace !== undefined) {
+      await settings.update(namespace, { disabledSkills: [...next] })
+      persisted = true
+    }
+    this.disabled = next
+    this.invalidateCache()
+    return { disabledSkills: this.disabledSkills(), persisted }
   }
 
   /**
@@ -561,6 +607,9 @@ export class SkillRegistry extends Service {
       if (!collected.cacheable) cacheable = false
       for (const entry of collected.entries) merged.set(entry.candidate.name, entry)
     }
+    // Disabled skills leave the catalog here, so every consumer — model
+    // catalogs, `/skill`, and the session command list — reads one set.
+    for (const name of this.disabled) merged.delete(name)
     return { entries: merged, cacheable }
   }
 
@@ -814,6 +863,16 @@ function assertPositiveInteger(name: string, value: number, minimum = 1): void {
   if (!Number.isInteger(value) || value < minimum) {
     throw new Error(`skill: ${name} must be an integer greater than or equal to ${minimum}`)
   }
+}
+
+/** Normalize a disabled-skill list, rejecting names that cannot address a skill. */
+function validatedDisabled(names: readonly string[]): Set<string> {
+  const next = new Set<string>()
+  for (const name of names) {
+    if (!isSkillName(name)) throw new Error(`skill: "${name}" is not a kebab-case skill name`)
+    next.add(name)
+  }
+  return next
 }
 
 function waitWithAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {

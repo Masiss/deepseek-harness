@@ -307,6 +307,10 @@
 
     - id: skill
       name: '@deepseek-ai/dsh-skill'
+      config:
+        # Persists the disabled-skill set through this entry's own config, so
+        # the Host settings surface can toggle skills durably.
+        settingsNamespace: skill
 
     - id: skill-filesystem
       name: '@deepseek-ai/dsh-skill-filesystem'

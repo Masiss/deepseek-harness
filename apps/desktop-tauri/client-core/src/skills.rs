@@ -25,8 +25,20 @@ pub struct SkillEntry {
 
 /// Skill list response.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SkillListResponse {
     pub skills: Vec<SkillEntry>,
+    /// Names the Host filters out of every catalog read.
+    #[serde(default)]
+    pub disabled_skills: Vec<String>,
+}
+
+/// Applied disabled set and whether the Host persisted it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillSetDisabledResponse {
+    pub disabled_skills: Vec<String>,
+    pub persisted: bool,
 }
 
 /// Request for skills visible to one session.
@@ -55,6 +67,18 @@ impl<'a> SkillsClient<'a> {
     /// Lists session-visible skills through the Host skill catalog.
     pub fn session_list(&self, session_id: impl Into<String>) -> Result<SkillListResponse, Error> {
         self.list(session_id)
+    }
+
+    /// Replaces the disabled skill set for this composition.
+    pub fn set_disabled(
+        &self,
+        names: Vec<String>,
+    ) -> Result<SkillSetDisabledResponse, Error> {
+        Ok(serde_json::from_value(self.transport.request(
+            "skills/setDisabled",
+            serde_json::json!({"request": {"names": names}}),
+            &AtomicBool::new(false),
+        )?)?)
     }
 
     fn call(&self, method: &str, session_id: String) -> Result<SkillListResponse, Error> {
@@ -88,10 +112,11 @@ mod tests {
     #[test]
     fn deserializes_response() {
         let response: SkillListResponse = serde_json::from_value(
-            serde_json::json!({"skills":[{"name":"x","description":"X","modelInvocable":false}]}),
+            serde_json::json!({"skills":[{"name":"x","description":"X","modelInvocable":false}],"disabledSkills":["y"]}),
         )
         .unwrap();
         assert_eq!(response.skills[0].name, "x");
         assert_eq!(response.skills[0].source, None);
+        assert_eq!(response.disabled_skills, ["y"]);
     }
 }

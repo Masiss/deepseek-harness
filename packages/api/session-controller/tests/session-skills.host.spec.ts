@@ -72,10 +72,11 @@ describe('SessionSkillCatalog', () => {
         invocation: { modelInvocable: true, userInvocable: false },
       },
     ]))
-    ctx.provide('skills', { list } as never)
+    ctx.provide('skills', { list, disabledSkills: () => [] } as never)
     const catalog = new SessionSkillCatalog(ctx)
 
     await expect(catalog.list({ sessionId }, new AbortController().signal)).resolves.toEqual({
+      disabledSkills: [],
       skills: [{
         name: 'review',
         description: 'Review the current change.',
@@ -110,11 +111,11 @@ describe('SessionSkillCatalog', () => {
         })),
       } as never)
       const list = vi.fn(() => Promise.resolve([]))
-      ctx.provide('skills', { list } as never)
+      ctx.provide('skills', { list, disabledSkills: () => [] } as never)
       const ensure = vi.spyOn(ctx.workingDirectory, 'ensure')
       const resume = vi.spyOn(ctx.agents, 'resume')
       await expect(new SessionSkillCatalog(ctx).list({ sessionId }, new AbortController().signal))
-        .resolves.toEqual({ skills: [] })
+        .resolves.toEqual({ skills: [], disabledSkills: [] })
       expect(list).toHaveBeenCalledWith({ cwd: expected, scope: undefined })
       expect(ensure).not.toHaveBeenCalled()
       expect(resume).not.toHaveBeenCalled()
@@ -140,12 +141,13 @@ describe('SessionSkillCatalog', () => {
     }]))
     const acquireScope = vi.fn()
     ctx.provide('agentPresets', {
-      serviceFor: () => ({ list: scopedList }),
+      serviceFor: () => ({ list: scopedList, disabledSkills: () => [] }),
       acquireScope,
     } as never)
     const catalog = new SessionSkillCatalog(ctx)
 
     await expect(catalog.list({ sessionId }, new AbortController().signal)).resolves.toEqual({
+      disabledSkills: [],
       skills: [{
         name: 'preset-owned',
         description: 'Composed for this Agent.',
@@ -171,10 +173,10 @@ describe('SessionSkillCatalog', () => {
     const acquireScope = vi.fn(() => Promise.resolve({ key: scope, [Symbol.asyncDispose]: async () => {} }))
     ctx.provide('agentPresets', { acquireScope } as never)
     const list = vi.fn(() => Promise.resolve([]))
-    ctx.provide('skills', { list } as never)
+    ctx.provide('skills', { list, disabledSkills: () => [] } as never)
     const catalog = new SessionSkillCatalog(ctx)
 
-    await expect(catalog.list({ sessionId }, new AbortController().signal)).resolves.toEqual({ skills: [] })
+    await expect(catalog.list({ sessionId }, new AbortController().signal)).resolves.toEqual({ skills: [], disabledSkills: [] })
     expect(acquireScope).toHaveBeenCalledWith('minimal')
     expect(list).toHaveBeenCalledWith({ cwd: '/cold/project', scope })
     expect(ctx.agents.list()).toEqual([])
@@ -193,10 +195,10 @@ describe('SessionSkillCatalog', () => {
       acquireScope: () => Promise.reject(new Error('unknown preset')),
     } as never)
     const list = vi.fn(() => Promise.resolve([]))
-    ctx.provide('skills', { list } as never)
+    ctx.provide('skills', { list, disabledSkills: () => [] } as never)
     const catalog = new SessionSkillCatalog(ctx)
 
-    await expect(catalog.list({ sessionId }, new AbortController().signal)).resolves.toEqual({ skills: [] })
+    await expect(catalog.list({ sessionId }, new AbortController().signal)).resolves.toEqual({ skills: [], disabledSkills: [] })
     expect(list).toHaveBeenCalledWith({ cwd: '/cold/project', scope: undefined })
   })
 
@@ -247,14 +249,42 @@ describe('SessionSkillCatalog', () => {
     await expect(unprojected).rejects.toThrow('projected Session observation')
   })
 
-  it('classifies a provider listing failure', async () => {
+  it('applies a disabled set through the registry and reports persistence', async () => {
     const ctx = await context()
+    const setDisabledSkills = vi.fn((names: readonly string[]) =>
+      Promise.resolve({ disabledSkills: [...names].sort(), persisted: true }))
+    ctx.provide('skills', { list: () => Promise.resolve([]), disabledSkills: () => [], setDisabledSkills } as never)
+    const catalog = new SessionSkillCatalog(ctx)
+
+    await expect(catalog.setDisabled({ names: ['b-skill', 'a-skill'] })).resolves.toEqual({
+      disabledSkills: ['a-skill', 'b-skill'],
+      persisted: true,
+    })
+    expect(setDisabledSkills).toHaveBeenCalledWith(['b-skill', 'a-skill'])
+  })
+
+  it('maps an invalid disabled name to a bad request', async () => {
+    const ctx = await context()
+    ctx.provide('skills', {
+      list: () => Promise.resolve([]),
+      disabledSkills: () => [],
+      setDisabledSkills: () => Promise.reject(new Error('skill: "Not A Name" is not a kebab-case skill name')),
+    } as never)
+    const catalog = new SessionSkillCatalog(ctx)
+
+    await expect(catalog.setDisabled({ names: ['Not A Name'] })).rejects.toMatchObject({
+      code: 'gateway/bad-request',
+    })
+  })
+
+  it('classifies a provider listing failure', async () => {    const ctx = await context()
     const sessionId = SessionId('failed-skills')
     ctx.provide('sessionQuery', {
       observeSession: () => Promise.resolve(observation(sessionId, { cwd: '/project' })),
     } as never)
     ctx.provide('skills', {
       list: () => Promise.reject(new Error('catalog offline')),
+      disabledSkills: () => [],
     } as never)
     const catalog = new SessionSkillCatalog(ctx)
 

@@ -298,6 +298,7 @@ mod tests {
             name: "notes.md".into(),
             host_path: "/host/project/notes.md".into(),
             text: "# Literal text <script>not executed</script>".into(),
+            version: Some("v1".into()),
         };
         let original = document.clone();
         let mut preview = DocumentPreview;
@@ -325,6 +326,7 @@ mod tests {
             name: "empty.txt".into(),
             host_path: "remote:/empty.txt".into(),
             text: String::new(),
+            version: None,
         };
         let texts = render(&mut DocumentPreview, Some(&document), false, None, 320.0);
         assert!(texts.iter().any(|text| text == "This document is empty."));
@@ -337,6 +339,7 @@ mod tests {
             name: "文档🦀e\u{301}".repeat(40),
             host_path: format!("/host/{}", "路径🦀".repeat(100)),
             text: format!("{}\n\tالعربية עברית e\u{301} 👩‍💻\0", "界🦀x".repeat(4_000)),
+            version: None,
         };
         let original = document.clone();
         for width in [160.0, 640.0] {

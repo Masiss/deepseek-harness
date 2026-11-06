@@ -57,6 +57,37 @@ function scopedSkills(ctx: Context): SkillRegistry {
   return skills
 }
 
+describe('SkillRegistry disabled skills', () => {
+  it('filters disabled names from list, snapshot, and get', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SkillRegistry)
+    registerProvider(ctx, new MemoryProvider([
+      memorySkill('keep-skill', 'Kept', 10),
+      memorySkill('drop-skill', 'Dropped', 20),
+    ]))
+    expect(ctx.skills.disabledSkills()).toEqual([])
+
+    const applied = await ctx.skills.setDisabledSkills(['drop-skill'])
+    expect(applied).toEqual({ disabledSkills: ['drop-skill'], persisted: false })
+    expect((await ctx.skills.list()).map(skill => skill.name)).toEqual(['keep-skill'])
+    expect((await ctx.skills.snapshot()).skills.map(skill => skill.name)).toEqual(['keep-skill'])
+    expect(await ctx.skills.get('drop-skill')).toBeUndefined()
+    expect((await ctx.skills.get('keep-skill'))?.name).toBe('keep-skill')
+
+    await ctx.skills.setDisabledSkills([])
+    expect((await ctx.skills.list()).map(skill => skill.name)).toEqual(['drop-skill', 'keep-skill'])
+  })
+
+  it('seeds the disabled set from config and rejects names that cannot address a skill', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SkillRegistry, { disabledSkills: ['seeded-skill'] })
+    expect(ctx.skills.disabledSkills()).toEqual(['seeded-skill'])
+    await expect(ctx.skills.setDisabledSkills(['Not A Name']))
+      .rejects.toThrow('is not a kebab-case skill name')
+    expect(ctx.skills.disabledSkills()).toEqual(['seeded-skill'])
+  })
+})
+
 describe('SkillRegistry registry', () => {
   it('registers providers, resolves duplicates first-wins, and disposes providers', async () => {
     const ctx = new Context()

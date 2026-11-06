@@ -54,7 +54,7 @@ use dsh_client_core::{
         SessionsClient,
     },
     settings::{SettingsClient, SettingsDescribeValue, SettingsNamespaceView},
-    skills::{SkillListResponse, SkillsClient},
+    skills::{SkillListResponse, SkillSetDisabledResponse, SkillsClient},
     stream::FrameStream,
     streams::{self, JobFollowFrame, JobView},
     terminal::{
@@ -1701,6 +1701,8 @@ struct DesktopApp {
     skills_query: String,
     selected_skill: Option<String>,
     skills_receiver: Option<mpsc::Receiver<Result<SkillListResponse, Error>>>,
+    skills_write_receiver: Option<mpsc::Receiver<Result<SkillSetDisabledResponse, Error>>>,
+    skills_status: Option<String>,
     skills_loading: bool,
     skills_error: Option<String>,
     model_catalog: Option<ModelCatalog>,
@@ -1919,6 +1921,8 @@ impl DesktopApp {
             skills_query: String::new(),
             selected_skill: None,
             skills_receiver: None,
+            skills_write_receiver: None,
+            skills_status: None,
             skills_loading: false,
             skills_error: None,
             model_catalog: None,
@@ -2691,6 +2695,36 @@ impl DesktopApp {
         self.skills_receiver = Some(receiver);
         self.skills_loading = true;
         self.skills_error = None;
+    }
+
+    fn set_skill_enabled(&mut self, name: String, enabled: bool) {
+        if self.skills_write_receiver.is_some() {
+            return;
+        }
+        let Some(transport) = self.transport.clone() else {
+            self.skills_status = Some("Connect before changing skill enablement".to_owned());
+            return;
+        };
+        let mut names = self
+            .skills
+            .as_ref()
+            .map(|skills| skills.disabled_skills.clone())
+            .unwrap_or_default();
+        names.retain(|existing| existing != &name);
+        if !enabled {
+            names.push(name.clone());
+        }
+        names.sort();
+        names.dedup();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(SkillsClient::new(&transport).set_disabled(names));
+        });
+        self.skills_write_receiver = Some(receiver);
+        self.skills_status = Some(format!(
+            "{} {name}…",
+            if enabled { "Enabling" } else { "Disabling" }
+        ));
     }
 
     fn refresh_settings(&mut self) {
@@ -4995,6 +5029,30 @@ impl DesktopApp {
                 }
             }
         }
+        if let Some(receiver) = &self.skills_write_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(applied)) => {
+                    self.skills_status = Some(if applied.persisted {
+                        format!("Disabled skills: {}", applied.disabled_skills.join(", "))
+                    } else {
+                        "Applied for this Host process only; no settings entry owns the set".to_owned()
+                    });
+                    self.skills_write_receiver = None;
+                    self.refresh_skills();
+                }
+                Ok(Err(error)) => {
+                    self.skills_status = Some(format!("Skill change refused: {error}"));
+                    self.skills_write_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.skills_status = Some("Skill change worker stopped unexpectedly".into());
+                    self.skills_write_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30));
+                }
+            }
+        }
         if let Some(receiver) = &self.skills_receiver {
             match receiver.try_recv() {
                 Ok(Ok(skills)) => {
@@ -5518,7 +5576,7 @@ impl DesktopApp {
                                             if checkpoint.is_empty() || at_seq.is_some() {
                                                 self.request_sessions(SessionOperation::Fork(
                                                     ForkSessionRequest {
-                                                        session_id,
+                                                        session_id: session_id.clone(),
                                                         at_seq,
                                                         allow_migration: None,
                                                     },
@@ -6459,6 +6517,7 @@ impl DesktopApp {
                     ui.label("No market indexes configured.");
                 }
                 let mut install_target = None;
+                let mut update_target: Option<(String, String, String)> = None;
                 if !self.market_results.is_empty() {
                     egui::ScrollArea::vertical()
                         .id_salt("market-results")
@@ -6554,11 +6613,11 @@ impl DesktopApp {
                                                     )
                                                     .clicked()
                                             {
-                                                self.update_market_entry(
-                                                    spec,
-                                                    name.clone(),
+                                                update_target = Some((
+                                                    spec.clone(),
+                                                    name.to_owned(),
                                                     default_version.clone(),
-                                                );
+                                                ));
                                             }
                                         }
                                     }
@@ -6575,6 +6634,9 @@ impl DesktopApp {
                 }
                 if let Some((spec, options)) = install_target {
                     self.install_market_entry(spec, options);
+                }
+                if let Some((spec, name, version)) = update_target {
+                    self.update_market_entry(spec, name, version);
                 }
             } else if self.show_skills {
                 ui.add_space(8.0);
@@ -6611,8 +6673,10 @@ impl DesktopApp {
                 if let Some(error) = &self.skills_error {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }
-                if let Some(skills) = &self.skills {
-                    let skills = skills.skills.clone();
+                let mut skill_toggle: Option<(String, bool)> = None;
+                if let Some(snapshot) = &self.skills {
+                    let skills = snapshot.skills.clone();
+                    let disabled_skills = snapshot.disabled_skills.clone();
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         let filter = ui.add(
@@ -6621,6 +6685,37 @@ impl DesktopApp {
                                 .desired_width(ui.available_width().min(320.0)),
                         );
                         accessible_label(&filter, "Filter skills");
+                    });
+                    if let Some(status) = &self.skills_status {
+                        ui.label(egui::RichText::new(status).size(10.0).weak());
+                    }
+                    ui.small(
+                        "Disabling filters the skill out of every Host catalog read: model skills, /skill, and this list.",
+                    );
+                    ui.horizontal_wrapped(|ui| {
+                        if let Some(name) = self.selected_skill.clone() {
+                            if !disabled_skills.contains(&name)
+                                && ui
+                                    .add_enabled(
+                                        self.skills_write_receiver.is_none(),
+                                        egui::Button::new(format!("Disable {name}")).small(),
+                                    )
+                                    .clicked()
+                            {
+                                skill_toggle = Some((name, false));
+                            }
+                        }
+                        for name in &disabled_skills {
+                            if ui
+                                .add_enabled(
+                                    self.skills_write_receiver.is_none(),
+                                    egui::Button::new(format!("Enable {name}")).small(),
+                                )
+                                .clicked()
+                            {
+                                skill_toggle = Some((name.clone(), true));
+                            }
+                        }
                     });
                     let query = self.skills_query.trim().to_lowercase();
                     let matches: Vec<_> = skills
@@ -6767,6 +6862,9 @@ impl DesktopApp {
                 } else if !self.skills_loading {
                     ui.label("Open this tab with a session selected to load skills.");
                 }
+                if let Some((name, enabled)) = skill_toggle {
+                    self.set_skill_enabled(name, enabled);
+                }
             } else if self.show_document {
                 app_page_header(
                     ui,
@@ -6834,8 +6932,7 @@ impl DesktopApp {
                         let body = ui.add(
                             egui::TextEdit::multiline(&mut self.preview_draft)
                                 .hint_text("Document text")
-                                .desired_width(ui.available_width())
-                                .desired_height(320.0),
+                                .desired_width(ui.available_width()),
                         );
                         accessible_label(&body, "Document text");
                     }
@@ -7219,13 +7316,7 @@ impl DesktopApp {
                 if let Some(error) = &self.attachment_error {
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("Ctrl+Enter · Shift+Enter for a new line")
-                            .size(10.0)
-                            .weak(),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let send = ui.add_enabled(
                         !self.chat_loading
                             && self.transport.is_some()
@@ -7280,7 +7371,16 @@ impl DesktopApp {
                     if let Some(status) = &self.plan_command_status {
                         ui.label(status);
                     }
-                    });
+                    // Added last in a right-to-left layout, so the hint takes
+                    // whatever width the controls leave and truncates inside it.
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new("Ctrl+Enter send")
+                                .size(10.0)
+                                .weak(),
+                        )
+                        .truncate(),
+                    );
                 });
                         });
                 });

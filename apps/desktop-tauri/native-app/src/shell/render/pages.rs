@@ -829,6 +829,8 @@ fn skills(
     let loading = app.skills_loading;
     let error = app.skills_error.clone();
     let skills = app.skills.clone();
+    let skills_busy = app.skills_write_receiver.is_some();
+    let skills_status = app.skills_status.clone();
     let selected = app.selected_skill.clone();
     let has_session = app.selected_session.is_some();
 
@@ -869,6 +871,13 @@ fn skills(
             .child(line(theme, "Skills load when this tab opens with a Session."))
             .into_any_element();
     };
+    if let Some(status) = skills_status {
+        content = content.child(line(theme, status));
+    }
+    content = content.child(line(
+        theme,
+        "Disabling filters the skill out of every Host catalog read: model skills, /skill, and this list.",
+    ));
     let chosen = skills
         .skills
         .iter()
@@ -892,23 +901,77 @@ fn skills(
     }
     for skill in &skills.skills {
         let name = skill.name.clone();
+        let toggle_name = skill.name.clone();
         let current = selected.as_deref() == Some(name.as_str());
         names = names.child(
             div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(4.))
                 .px(theme.sp(8.))
                 .py(theme.sp(5.))
                 .rounded(theme.corner())
                 .cursor_pointer()
                 .when(current, |element| element.bg(theme.selection))
                 .hover(|style| style.bg(theme.surface))
-                .text_size(theme.fs(11.5))
                 .id(gpui::SharedString::from(format!("skill-{name}")))
-                .child(name.clone())
+                .child(
+                    div()
+                        .flex_1()
+                        .text_size(theme.fs(11.5))
+                        .truncate()
+                        .child(name.clone()),
+                )
+                .child(
+                    widgets::Button::new(theme, "Disable")
+                        .enabled(!skills_busy)
+                        .build()
+                        .id(gpui::SharedString::from(format!("skill-disable-{name}")))
+                        .on_click(cx.listener(move |app, _, _, cx| {
+                            app.set_skill_enabled(toggle_name.clone(), false);
+                            cx.notify();
+                        })),
+                )
                 .on_click(cx.listener(move |app, _, _, cx| {
                     app.selected_skill = Some(name.clone());
                     cx.notify();
                 })),
         );
+    }
+    if !skills.disabled_skills.is_empty() {
+        names = names.child(widgets::section_label(theme, "DISABLED"));
+        for disabled in &skills.disabled_skills {
+            let name = disabled.clone();
+            let enable_name = disabled.clone();
+            names = names.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(theme.sp(4.))
+                    .px(theme.sp(8.))
+                    .py(theme.sp(4.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(theme.fs(11.))
+                            .text_color(theme.muted)
+                            .truncate()
+                            .child(name),
+                    )
+                    .child(
+                        widgets::Button::new(theme, "Enable")
+                            .enabled(!skills_busy)
+                            .build()
+                            .id(gpui::SharedString::from(format!("skill-enable-{enable_name}")))
+                            .on_click(cx.listener(move |app, _, _, cx| {
+                                app.set_skill_enabled(enable_name.clone(), true);
+                                cx.notify();
+                            })),
+                    ),
+            );
+        }
     }
     let mut detail = div().flex().flex_col().gap(theme.sp(6.)).flex_1().min_w(px(0.));
     if let Some(skill) = chosen {

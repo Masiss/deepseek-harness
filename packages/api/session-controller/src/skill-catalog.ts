@@ -7,7 +7,12 @@ import { isUserInvocable } from '@deepseek-ai/dsh-skill'
 import type {} from '@deepseek-ai/dsh-working-directory'
 import type { ScopeKey } from '@deepseek-ai/dsh-scope'
 import { Remote, RemoteError, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
-import type { SkillListRequest, SkillListValue } from './types.ts'
+import type {
+  SkillListRequest,
+  SkillListValue,
+  SkillSetDisabledRequest,
+  SkillSetDisabledValue,
+} from './types.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -76,6 +81,7 @@ export class SessionSkillCatalog extends TypertRemoteService {
     const scope = live ?? lease?.key
     try {
       const skills = (await skillRegistry.list({ cwd, scope })).filter(isUserInvocable)
+      const disabled = skillRegistry.disabledSkills()
       return {
         skills: skills.map(skill => ({
           name: skill.name,
@@ -86,9 +92,33 @@ export class SessionSkillCatalog extends TypertRemoteService {
           source: skill.source,
           provider: skill.provider,
         })),
+        disabledSkills: disabled,
       }
     } catch (error: unknown) {
       throw new RemoteError('gateway/internal', `skill listing failed: ${String(error)}`, {})
+    }
+  }
+
+  /**
+   * Replace the disabled skill set for this composition.
+   *
+   * The registry applies the filter before every catalog read, so model
+   * catalogs, `/skill`, and the session command list observe one set. The
+   * response reports whether the Host could persist it.
+   * @param request - the complete disabled name set; empty re-enables all.
+   * @returns the applied set and whether it was persisted.
+   * @throws RemoteError when a name is not a kebab-case skill name.
+   */
+  @Remote('setDisabled')
+  async setDisabled(request: SkillSetDisabledRequest): Promise<SkillSetDisabledValue> {
+    const registry = this.ctx.get('skills')
+    if (registry === undefined) {
+      throw new RemoteError('gateway/internal', 'skill registry is absent from this Host composition', {})
+    }
+    try {
+      return await registry.setDisabledSkills(request.names)
+    } catch (error: unknown) {
+      throw new RemoteError('gateway/bad-request', `skill disablement refused: ${String(error)}`, {})
     }
   }
 

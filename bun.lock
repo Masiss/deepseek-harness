@@ -7840,6 +7840,7 @@
         "@deepseek-ai/cordis": "workspace:~",
         "@deepseek-ai/dsh-llm": "workspace:*",
         "@deepseek-ai/dsh-scope": "workspace:*",
+        "@deepseek-ai/dsh-settings": "workspace:*",
       },
       "peerDependencies": {
         "@deepseek-ai/cordis": "workspace:~",
