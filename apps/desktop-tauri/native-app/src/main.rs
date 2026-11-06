@@ -6,6 +6,7 @@ mod dialog;
 mod document_preview;
 mod explorer;
 mod fonts;
+mod handoff;
 mod host;
 mod layout;
 mod question_card;
@@ -1691,6 +1692,10 @@ struct DesktopApp {
     plan_command_receiver: Option<mpsc::Receiver<Result<Option<CommandExecution>, Error>>>,
     plan_command_loading: bool,
     plan_command_status: Option<String>,
+    handoff_path: String,
+    handoff_preview: Option<String>,
+    handoff_status: Option<String>,
+    handoff_receiver: Option<mpsc::Receiver<Result<String, Error>>>,
     active_view: ActiveView,
     skills: Option<SkillListResponse>,
     skills_query: String,
@@ -1905,6 +1910,10 @@ impl DesktopApp {
             plan_command_receiver: None,
             plan_command_loading: false,
             plan_command_status: None,
+            handoff_path: "HANDOFF.md".to_owned(),
+            handoff_preview: None,
+            handoff_status: None,
+            handoff_receiver: None,
             active_view: ActiveView::Sessions,
             skills: None,
             skills_query: String::new(),
@@ -3160,8 +3169,75 @@ impl DesktopApp {
         self.goal_error = None;
     }
 
-    fn run_plan_command(&mut self, active: bool) {
-        if self.plan_command_loading || self.chat_loading || self.assistant_streaming {
+    fn generate_handoff(&mut self) {
+        let Some(session_id) = self.selected_session.clone() else {
+            self.handoff_status = Some("Select a Session before generating a handoff".to_owned());
+            return;
+        };
+        let markdown = handoff::render_from(
+            &self.transcript,
+            Some(&session_id),
+            &self.session_title,
+            self.goal.as_ref(),
+            self.transcript.run_state(self.assistant_streaming),
+        );
+        self.handoff_preview = Some(markdown);
+        self.handoff_status = Some("Handoff preview generated from the Session log".to_owned());
+    }
+
+    fn write_handoff(&mut self, overwrite: bool) {
+        if self.handoff_receiver.is_some() {
+            return;
+        }
+        let Some(markdown) = self.handoff_preview.clone() else {
+            self.handoff_status = Some("Generate the handoff preview first".to_owned());
+            return;
+        };
+        let Some(session_id) = self.selected_session.clone() else {
+            self.handoff_status = Some("Select a Session before writing a handoff".to_owned());
+            return;
+        };
+        let Some(transport) = self.transport.clone() else {
+            self.handoff_status = Some("Connect before writing a handoff".to_owned());
+            return;
+        };
+        let path = self.handoff_path.trim().to_owned();
+        if path.is_empty() {
+            self.handoff_status = Some("Enter the workspace path for the handoff".to_owned());
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let client = WorkspaceFilesClient::new(&transport);
+            let scope = WorkspaceFileScope {
+                session_id: session_id.clone(),
+            };
+            let result = (|| -> Result<String, Error> {
+                let existing = client.stat(scope.clone(), path.clone());
+                match existing {
+                    Ok(stat) if !overwrite => Err(Error::Remote {
+                        code: "handoff-exists".to_owned(),
+                        message: format!(
+                            "{path} already exists (version {}); confirm overwrite to replace it",
+                            stat.version
+                        ),
+                        details: serde_json::Map::new(),
+                    }),
+                    Ok(stat) => client
+                        .write(scope, path.clone(), markdown, Some(stat.version))
+                        .map(|written| format!("Wrote {path} ({} bytes)", written.after.len())),
+                    Err(_) => client
+                        .write(scope, path.clone(), markdown, None)
+                        .map(|written| format!("Created {path} ({} bytes)", written.after.len())),
+                }
+            })();
+            let _ = sender.send(result);
+        });
+        self.handoff_receiver = Some(receiver);
+        self.handoff_status = Some("Writing handoff to the workspace…".to_owned());
+    }
+
+    fn run_plan_command(&mut self, active: bool) {        if self.plan_command_loading || self.chat_loading || self.assistant_streaming {
             return;
         }
         let Some(agent_id) = self.selected_session.clone() else {
@@ -3402,6 +3478,46 @@ impl DesktopApp {
         });
         if let Some(status) = &self.plan_command_status {
             ui.small(status);
+        }
+        ui.separator();
+        ui.heading("Handoff");
+        ui.small(
+            "Summarizes this Session from its log: last turn state, goal, recent requests, recorded tool failures, and artifacts.",
+        );
+        ui.horizontal(|ui| {
+            let path = ui.add(
+                egui::TextEdit::singleline(&mut self.handoff_path)
+                    .hint_text("HANDOFF.md")
+                    .desired_width(220.0),
+            );
+            accessible_label(&path, "Handoff path");
+            if ui.button("Preview").clicked() {
+                self.generate_handoff();
+            }
+            let ready = self.handoff_preview.is_some() && self.handoff_receiver.is_none();
+            if ui
+                .add_enabled(ready, egui::Button::new("Save"))
+                .clicked()
+            {
+                self.write_handoff(false);
+            }
+            if ui
+                .add_enabled(ready, egui::Button::new("Overwrite"))
+                .clicked()
+            {
+                self.write_handoff(true);
+            }
+        });
+        if let Some(status) = &self.handoff_status {
+            ui.small(status);
+        }
+        if let Some(preview) = &self.handoff_preview {
+            egui::ScrollArea::vertical()
+                .id_salt("handoff-preview")
+                .max_height(220.0)
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new(preview).monospace().size(10.0));
+                });
         }
     }
 
@@ -4432,6 +4548,28 @@ impl DesktopApp {
                 }
                 Err(mpsc::TryRecvError::Empty) => {
                     ctx.request_repaint_after(std::time::Duration::from_millis(30));
+                }
+            }
+        }
+        if let Some(receiver) = &self.handoff_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(message)) => {
+                    self.handoff_status = Some(message);
+                    self.handoff_receiver = None;
+                    if let Some(transport) = self.transport.clone() {
+                        self.explorer.refresh_root(&transport);
+                    }
+                }
+                Ok(Err(error)) => {
+                    self.handoff_status = Some(format!("Handoff write refused: {error}"));
+                    self.handoff_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.handoff_status = Some("Handoff worker stopped unexpectedly".into());
+                    self.handoff_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30))
                 }
             }
         }

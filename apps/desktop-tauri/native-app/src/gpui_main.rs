@@ -15,6 +15,8 @@ mod document_preview;
 mod explorer;
 #[path = "fonts.rs"]
 mod fonts;
+#[path = "handoff.rs"]
+mod handoff;
 #[path = "host.rs"]
 mod host;
 #[path = "layout.rs"]

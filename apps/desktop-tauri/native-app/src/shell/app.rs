@@ -487,6 +487,12 @@ pub(crate) struct DesktopApp {
     pub(crate) file_search_loading: bool,
     pub(crate) file_search_error: Option<String>,
     pub(crate) file_search_receiver: Option<mpsc::Receiver<Result<WorkspaceSearchValue, Error>>>,
+    /// Workspace-relative path the handoff summary is written to.
+    pub(crate) handoff_path: String,
+    /// Last rendered handoff summary, kept for preview and writing.
+    pub(crate) handoff_preview: Option<String>,
+    pub(crate) handoff_status: Option<String>,
+    pub(crate) handoff_receiver: Option<mpsc::Receiver<Result<String, Error>>>,
     pub(crate) session_query: String,
     pub(crate) session_search: Option<SessionSearchResponse>,
     pub(crate) session_title: String,
@@ -888,6 +894,10 @@ impl DesktopApp {
             file_search_loading: false,
             file_search_error: None,
             file_search_receiver: None,
+            handoff_path: "HANDOFF.md".to_owned(),
+            handoff_preview: None,
+            handoff_status: None,
+            handoff_receiver: None,
             session_query: String::new(),
             session_search: None,
             session_title: String::new(),
@@ -3360,6 +3370,76 @@ impl DesktopApp {
         self.file_search_error = None;
     }
 
+    /// Renders the handoff summary from the current Session transcript.
+    pub(crate) fn generate_handoff(&mut self) {
+        let Some(session_id) = self.selected_session.clone() else {
+            self.handoff_status = Some("Select a Session before generating a handoff".to_owned());
+            return;
+        };
+        let markdown = crate::handoff::render_from(
+            &self.transcript,
+            Some(&session_id),
+            &self.session_title,
+            self.goal.as_ref(),
+            self.transcript.run_state(self.assistant_streaming),
+        );
+        self.handoff_preview = Some(markdown);
+        self.handoff_status = Some("Handoff preview generated from the Session log".to_owned());
+    }
+
+    /// Writes the rendered handoff into the workspace through the version-guarded
+    /// file RPC. An existing file is refused unless `overwrite` is set.
+    pub(crate) fn write_handoff(&mut self, overwrite: bool) {
+        if self.handoff_receiver.is_some() {
+            return;
+        }
+        let Some(markdown) = self.handoff_preview.clone() else {
+            self.handoff_status = Some("Generate the handoff preview first".to_owned());
+            return;
+        };
+        let Some(session_id) = self.selected_session.clone() else {
+            self.handoff_status = Some("Select a Session before writing a handoff".to_owned());
+            return;
+        };
+        let Some(transport) = self.transport.clone() else {
+            self.handoff_status = Some("Connect before writing a handoff".to_owned());
+            return;
+        };
+        let path = self.handoff_path.trim().to_owned();
+        if path.is_empty() {
+            self.handoff_status = Some("Enter the workspace path for the handoff".to_owned());
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let client = WorkspaceFilesClient::new(&transport);
+            let scope = WorkspaceFileScope {
+                session_id: session_id.clone(),
+            };
+            let result = (|| -> Result<String, Error> {
+                let existing = client.stat(scope.clone(), path.clone());
+                match existing {
+                    Ok(stat) if !overwrite => Err(Error::Remote {
+                        code: "handoff-exists".to_owned(),
+                        message: format!(
+                            "{path} already exists (version {}); confirm overwrite to replace it",
+                            stat.version
+                        ),
+                        details: serde_json::Map::new(),
+                    }),
+                    Ok(stat) => client
+                        .write(scope, path.clone(), markdown, Some(stat.version))
+                        .map(|written| format!("Wrote {path} ({} bytes)", written.after.len())),
+                    Err(_) => client
+                        .write(scope, path.clone(), markdown, None)
+                        .map(|written| format!("Created {path} ({} bytes)", written.after.len())),                }
+            })();
+            let _ = sender.send(result);
+        });
+        self.handoff_receiver = Some(receiver);
+        self.handoff_status = Some("Writing handoff to the workspace…".to_owned());
+    }
+
     fn write_archive(&mut self, session_id: String, stop_activity: bool, archive: bool) {
         if self.archive_receiver.is_some() {
             return;
@@ -3836,6 +3916,7 @@ impl DesktopApp {
                 "session-fork-seq" => app.fork_seq_text = text,
                 "file-picker-query" => app.file_picker_query = text,
                 "file-search-query" => app.file_search_query = text,
+                "handoff-path" => app.handoff_path = text,
                 "document-body" => app.preview_draft = text,
                 "market-query" => {
                     app.market_query = text;
@@ -3910,6 +3991,7 @@ impl DesktopApp {
             ("session-fork-seq", &mut self.fork_seq_text),
             ("file-picker-query", &mut self.file_picker_query),
             ("file-search-query", &mut self.file_search_query),
+            ("handoff-path", &mut self.handoff_path),
             ("document-body", &mut self.preview_draft),
         ] {
             if let Some(input) = self.inputs.get(key) {
@@ -4895,8 +4977,29 @@ impl DesktopApp {
                 }
             }
         }
-        if let Some(receiver) = &self.workspace_create_receiver {
+        if let Some(receiver) = &self.handoff_receiver {
             match receiver.try_recv() {
+                Ok(Ok(message)) => {
+                    self.handoff_status = Some(message);
+                    self.handoff_receiver = None;
+                    if let Some(transport) = self.transport.clone() {
+                        self.explorer.refresh_root(&transport);
+                    }
+                }
+                Ok(Err(error)) => {
+                    self.handoff_status = Some(format!("Handoff write refused: {error}"));
+                    self.handoff_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.handoff_status = Some("Handoff worker stopped unexpectedly".into());
+                    self.handoff_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.repaint_soon = true;
+                }
+            }
+        }
+        if let Some(receiver) = &self.workspace_create_receiver {            match receiver.try_recv() {
                 Ok(Ok(created)) => {
                     self.workspace_create_receiver = None;
                     self.selected_workspace = Some(created.workspace.workspace_id.clone());
@@ -5875,6 +5978,9 @@ fn has_pending_workers(app: &DesktopApp) -> bool {
         || app.job_receiver.is_some()
         || app.schedules_receiver.is_some()
         || app.schedule_delete_receiver.is_some()
+        || app.handoff_receiver.is_some()
+        || app.file_search_receiver.is_some()
+        || app.workspace_create_receiver.is_some()
         || app.terminal.inventory.is_some()
         || app.terminal.updates.is_some()
         || app.terminal.dirty

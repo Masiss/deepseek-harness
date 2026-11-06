@@ -1188,6 +1188,11 @@ fn goals(
     let status = app.goal_status.clone();
     let error = app.goal_error.clone();
     let plan_status = app.plan_command_status.clone();
+    let handoff_input = app.text_field("handoff-path", "HANDOFF.md", false, cx);
+    let handoff_status = app.handoff_status.clone();
+    let handoff_preview = app.handoff_preview.clone();
+    let handoff_writing = app.handoff_receiver.is_some();
+    let handoff_ready = handoff_preview.is_some();
     let plan_loading = app.plan_command_loading;
     let busy = app.chat_loading || app.assistant_streaming;
     let objective_input = app.text_field("goal-objective", "Goal objective", true, cx);
@@ -1467,6 +1472,81 @@ fn goals(
                 ),
         )
         .when_some(plan_status, |element, status| element.child(line(theme, status)))
+        .child(widgets::separator(theme))
+        .child(section(theme, "HANDOFF"))
+        .child(line(
+            theme,
+            "Summarizes this Session from its log: last turn state, goal, recent requests, recorded tool failures, and artifacts.",
+        ))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(6.))
+                .child(
+                    div()
+                        .w(theme.sp(220.))
+                        .h(theme.control_height())
+                        .px(theme.sp(6.))
+                        .rounded(theme.corner())
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.code_background)
+                        .overflow_hidden()
+                        .child(crate::shell::text_input::text_input_element(
+                            &handoff_input,
+                            theme,
+                            theme.control_height() - px(2.),
+                        )),
+                )
+                .child(
+                    widgets::Button::new(theme, "Preview")
+                        .enabled(!handoff_writing)
+                        .build()
+                        .id("handoff-preview")
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.generate_handoff();
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    widgets::Button::new(theme, "Save")
+                        .primary()
+                        .enabled(!handoff_writing && handoff_ready)
+                        .build()
+                        .id("handoff-save")
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.write_handoff(false);
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    widgets::Button::new(theme, "Overwrite")
+                        .enabled(!handoff_writing && handoff_ready)
+                        .build()
+                        .id("handoff-overwrite")
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.write_handoff(true);
+                            cx.notify();
+                        })),
+                ),
+        )
+        .when_some(handoff_status, |element, status| element.child(line(theme, status)))
+        .when_some(handoff_preview, |element, preview| {
+            element.child(
+                div()
+                    .id("handoff-preview-text")
+                    .max_h(theme.sp(220.))
+                    .overflow_y_scroll()
+                    .p(theme.sp(8.))
+                    .rounded(theme.corner())
+                    .bg(theme.code_background)
+                    .font(theme.mono_font())
+                    .text_size(theme.fs(10.5))
+                    .child(preview),
+            )
+        })
         .into_any_element()
 }
 
