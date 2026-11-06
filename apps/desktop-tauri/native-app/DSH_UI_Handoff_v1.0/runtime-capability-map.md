@@ -147,13 +147,13 @@ Ranh giới: shell tool của agent (`packages/shell`, `packages/subprocess`) t�
 | APP-01..04 | Không có | `ThemeMode` (System/Light/Dark), `ThemePack` (Default/HighContrast/Solarized/Custom), `UiDensity`, `ui_scale`, font UI/mono | Không có bộ Dark/Midnight/Light + accent Blue/Teal/Violet đúng như V2; accent chỉ đổi qua `ThemePack`/custom |
 | APP-05 | Không có | `ThemeMode::System` + chọn font family/syntax | Thiếu syntax theme riêng |
 | KEY-01..04 | **`commands/list` + `commands/execute`** đã tồn tại (Host human-command registry) | `command_registry.rs` 14 id là nguồn duy nhất cho menu, palette và dispatcher; menu dựng từ registry và hiện phím hiện hành; Quick open (Ctrl+P) lọc theo tên/nhóm, `↑/↓` chọn, Enter chạy mục đang chọn; lệnh của Host đã đổ vào palette và slash-command trong composer được route qua Host; Esc đóng lớp phủ trên cùng; `Keybindings` 4 phím tùy chỉnh, validate trùng phím trên toàn bộ id; keymap preset DSH/Zed/VS Code ở cả gpui lẫn egui (`apply_preset`) | Đạt KEY-01/03 và UX-02 |
-| EXT-01..03 | `pluginInventory/list`, `pluginManager/*` (`listPlugins`, `setPluginEnabled`, `setBundleEnabled`, `removeBundle`, `inspect`) | Trang Plugins có danh sách + bật/tắt plugin (`setPluginEnabled`) và bundle (Enable/Disable/Remove qua `setBundleEnabled`/`removeBundle`, cả gpui lẫn egui) | Đạt: bundle toggle + uninstall đã nối; thiếu quyền, health, changelog |
+| EXT-01..03 | `pluginInventory/list`, `pluginManager/*` (`listPlugins`, `setPluginEnabled`, `setBundleEnabled`, `removeBundle`, `inspect`) | Trang Plugins có danh sách + bật/tắt plugin (`setPluginEnabled`), bundle (Enable/Disable/Remove) ở cả hai shell, và mục **HEALTH** đếm fiber active/failed từ `listPlugins` | Đạt health ở mức fiber; quyền/changelog chưa có nguồn dữ liệu |
 | EXT-04 | `ChangeResult {application, stage, restartReason, error, warnings}` | Hiển thị lỗi/restart | Chưa có test cô lập lỗi extension |
-| SKL-01..03 | `skills/list` → `{path?, name, description, whenToUse?, modelInvocable}` cho một Session | Trang Skills đọc danh sách | Không có enable/disable, scope, version, provenance |
+| SKL-01..03 | `skills/list` → `{path?, name, description, whenToUse?, modelInvocable, source?, provider?}` cho một Session | Trang Skills đọc danh sách và hiện scope discovery + provider + invocation | Không có enable/disable bền vững, version, changelog |
 | SKL-04/05 | Không có | `commands/execute` mở đường cho `/skill` nếu Host đăng ký | Chưa nối |
-| MKT-01..05 | `pluginMarket/listIndexes`, `pluginMarket/search`, `pluginManager/*` (`installBundle`, `waitForInstall`, `cancelInstall`) | Trang Marketplace có index/search/install | Chưa có update/uninstall trong UI; không có trường trust/verified trong type; `installed` khác `enabled` |
+| MKT-01..05 | `pluginMarket/listIndexes`, `pluginMarket/search`, `pluginManager/*` (`inspect`, `installBundle`, `waitForInstall`, `cancelInstall`, `removeBundle`, `setBundleEnabled`) | Trang Marketplace có index/search; mỗi dòng hiện trust facts Host trả về (author, host repo, installation status/version, compatibility); Install khi `not-installed`; **Update** = remove → inspect → install → bật lại enablement cũ; Remove ở trang Plugins | Index format không khai báo permissions/verified; không có rollback version cũ nên thất bại giữa chừng chỉ được báo trung thực |
 
-## 8. Tổng hợp khoảng trống P0 (cập nhật 2026-11-05)
+## 8. Tổng hợp khoảng trống (cập nhật 2026-11-06)
 
 Chặn một UI trung thực theo spec:
 
@@ -161,14 +161,14 @@ Chặn một UI trung thực theo spec:
 2. Git P0 đã có `git/status`, `git/diff`, `git/stage`, `git/unstage`, `git/discard`, `git/commit`, `git/branches`, `git/checkout`; GIT-06/07 có fetch/pull/push và state/rebase/cherry-pick/continue/abort. Còn: interactive rebase, merge/revert continue, auto-resolve conflict.
 3. Session archive/unarchive + pin đã có (SES-06); hard delete chưa có RPC và cố tình chưa giả lập.
 4. Không có mode agent Ask/Plan/Build → AG-06; `run.status` là suy ra từ `turn/end` (Queue/Steer + queue khi busy đã có) → AG-09, AG-12.
-5. Skill chỉ đọc danh sách → SKL-01/02/03.
+5. Skill chỉ đọc danh sách, nay kèm scope/provider → SKL-01/02/03 (enable/disable bền vững cần quyết định Host).
 6. Host `TerminalState` chỉ có 3 giá trị `Running/Exited/Failed`; shell tự suy ra `idle/starting/attached/detached/error` từ attachment và lỗi → TER-03.
 7. Last-session restore đã có client-local (PREF-01); layout/theme/keymap vẫn client-local, chưa có override theo workspace → PREF-02, APP, KEY (một phần).
 8. `session/follow` đã có cursor `fromSeq`; reconnect giữ view resume từ sequence đã giữ, fallback snapshot mới khi đổi session.
-9. Tool call không mang stdout/stderr/duration/exit code → AG-04.
+9. Tool result đã tách stdout/stderr + exit code + duration từ log (không thêm RPC) → AG-04.
 10. Approval chỉ có `allowed-once`/`rejected`, không có expiry/scope → AG-08 (một phần).
 
-Nối được ngay, không cần Host mới: đọc file trong workspace (list/stat/read/readBytes/write), watch (`workspaceFiles/changes`, đã nối cho thư mục mở, file đang preview và Git auto-refresh), Session create/list/page/fork/rename/search/cancel/prompt, model catalog/select, attach/upload tệp, approval + câu hỏi, terminal create/list/attach/rename/close/retain/resize, toàn bộ Git namespace, plugin bật/tắt + bundle toggle/uninstall, marketplace install lifecycle, `settings/*` với revision conflict, `commands/list` và `commands/execute`.
+Nối được ngay, không cần Host mới: đọc/ghi file trong workspace (list/stat/read/readBytes/write/search), watch (`workspaceFiles/changes`, đã nối cho thư mục mở, file đang preview và Git auto-refresh), Session create/list/page/fork/rename/search/cancel/prompt, model catalog/select, attach/upload tệp, approval + câu hỏi, terminal create/list/attach/rename/close/retain/resize, toàn bộ Git namespace, workspace create/archive/pin, plugin bật/tắt + bundle toggle/uninstall, marketplace inspect/install/update lifecycle, `settings/*` với revision conflict, `commands/list` và `commands/execute`.
 
 ## 9. Ghi chú
 
