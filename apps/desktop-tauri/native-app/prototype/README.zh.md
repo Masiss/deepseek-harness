@@ -16,6 +16,6 @@
 
 ## 与应用的关系
 
-已发布的应用位于 [`../src/`](../src/)，使用 Rust + gpui（`../src/gpui_main.rs`、`../src/shell/`）；`../src/main.rs` 中的旧 egui shell 已退役，仅在 `legacy-egui` feature 下构建。本原型不会包含在 Cargo 构建或 AppImage 中。原型专属文档保存在本目录；仓库级文档描述已发布产品和 Desktop lane。
+已发布的应用位于 [`../src/`](../src/)，使用 Rust + gpui（`../src/gpui_main.rs`、`../src/shell/`）；旧 egui shell 已于 2026-11-06 删除，`src/main.rs` 不再存在。本原型不会包含在 Cargo 构建或 AppImage 中。原型专属文档保存在本目录；仓库级文档描述已发布产品和 Desktop lane。
 
 gpui 迁移的冻结视觉与行为目标是 [`../DSH_UI_Handoff_v1.0/`](../DSH_UI_Handoff_v1.0/)，其中包含已批准的 HTML 参考、功能规格、runtime capability map 和实现 backlog。本原型仍是探索交互想法的场所；真正约束实现的是 handoff 目录。

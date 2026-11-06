@@ -9,11 +9,11 @@
 
 ### 0.1. Shell nào đang ship
 
-`native-app/Cargo.toml` đặt bin `dsh-desktop` → `src/gpui_main.rs`; `src/main.rs` là bin `dsh-desktop-egui-legacy`, chỉ build khi bật feature `legacy-egui`. Vì vậy:
+`native-app/Cargo.toml` đặt một bin duy nhất `dsh-desktop-native-app` → `src/gpui_main.rs`. Vì vậy:
 
 - **Đang ship:** `src/gpui_main.rs`, `src/shell/{app,mod,theme,widgets,text_input,terminal_state}.rs`, `src/shell/render/{mod,agent,explorer_panel,pages,sessions}.rs`.
 - **Dùng chung, không phải legacy:** `command_registry.rs`, `explorer.rs`, `ui_preferences.rs`, `transcript.rs`, `terminal_ansi.rs`, `terminal_input.rs`, `document_preview.rs`, `question_card.rs`, `session_list.rs`, `host.rs`, `fonts.rs`, `dialog.rs`, `layout.rs`.
-- **Legacy (chỉ egui):** `main.rs`, `settings_panel.rs`, `transcript_view.rs`, `ui_harness.rs` (egui_kittest + `tests/snapshots/*.png`). Đừng dùng các file này làm bằng chứng cho hành vi gpui.
+- **Đã xoá 2026-11-06:** `main.rs`, `settings_panel.rs`, `transcript_view.rs`, `ui_harness*`, `tests/snapshots/*.png` cùng feature `legacy-egui`. Không còn harness UI headless, nên mọi bằng chứng UI phải là kiểm thử gpui hoặc review thị giác.
 
 ### 0.2. RPC method quan sát được trong `client-core/src`
 

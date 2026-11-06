@@ -1,12 +1,14 @@
 # Bàn giao — lane Desktop Tauri (fork `Masiss/deepseek-harness`)
 
-Cập nhật 2026-10-31. Mục đích: session mới đọc file này là biết đang ở đâu, cái gì đã xong, cái gì nên làm tiếp và bẫy nào đã mắc.
+Cập nhật 2026-11-06. Mục đích: session mới đọc file này là biết đang ở đâu, cái gì đã xong, cái gì nên làm tiếp và bẫy nào đã mắc.
+
+> **Đọc theo mốc thời gian.** Các mục ghi ngày ≤ 2026-11-01 mô tả shell **egui** mà ngày 2026-11-06 đã bị xoá (xem mục cuối). Chúng được giữ làm lịch sử quyết định và bẫy, không phải trạng thái hiện tại.
 
 ## Native gpui port — 2026-10-31
 
-Native GUI của lane chuyển từ `eframe`/`egui` sang **`gpui` 0.2.2** (GPU-first renderer qua wgpu). Hai bin song song trong `apps/desktop-tauri/native-app`: `dsh-desktop-native-app` (gpui, default-run) và `dsh-desktop-egui-legacy` (giữ `src/main.rs` + shell egui cho giai đoạn chuyển tiếp). Module chia theo vai đã chuyển (client-core protocol, host, explorer, session_list, question_card, transcript, terminal_ansi, fonts, ui_preferences, layout) giữ nguyên contracts; presentation layer (`shell/`: render modules, theme, text input, widgets, terminal state, app runtime) chuyển sang gpui.
+Native GUI của lane chạy trên **`gpui` 0.2.2** (GPU-first renderer qua wgpu) với **một bin duy nhất**: `dsh-desktop-native-app`. Shell egui cũ (`src/main.rs`, `ui_harness.rs`, `settings_panel.rs`, `transcript_view.rs`, feature `legacy-egui`, `eframe`, snapshot PNG) đã **bị xoá ngày 2026-11-06**; xem mục cuối file. Module chia theo vai (client-core protocol, host, explorer, session_list, question_card, transcript, terminal_ansi, fonts, ui_preferences, layout) giữ nguyên contracts; presentation layer (`shell/`) là gpui.
 
-Cổng build cuối phiên: `cargo check/build/test --bin dsh-desktop-native-app` xanh, `cargo check --features legacy-egui --bin dsh-desktop-egui-legacy` xanh, `cargo test --features legacy-egui --bin dsh-desktop-egui-legacy` = **163 pass / 0 fail** (3 ignored); `cargo test --bin dsh-desktop-native-app` = **126 pass / 0 fail** (đã sửa 4 test `host.rs` đỏ sẵn: gpui kéo `serde_json/preserve_order` vào làm đổi thứ tự key JSON, còn fixture so sánh chuỗi byte; giờ so từng field nên không phụ thuộc thứ tự). 48 test mới phủ preferences chord/parse, auto-connect, office/image path, text-delta budget, model picker/probe/catalog, settings error, theme metrics/blend, terminal log budget, layout bounds, `contains_cjk` và tiến trình khởi động Host.
+Gate hiện tại (sau khi xoá legacy): `cargo test --bin dsh-desktop-native-app` = **179 pass / 0 fail**; `cargo build` xanh (đã sửa 4 test `host.rs` đỏ sẵn: gpui kéo `serde_json/preserve_order` vào làm đổi thứ tự key JSON, còn fixture so sánh chuỗi byte; giờ so từng field nên không phụ thuộc thứ tự). 48 test mới phủ preferences chord/parse, auto-connect, office/image path, text-delta budget, model picker/probe/catalog, settings error, theme metrics/blend, terminal log budget, layout bounds, `contains_cjk` và tiến trình khởi động Host.
 
 Startup đo thật (debug, cây packaged, Home cô lập): **host=ready 2,5–3,7 s**, `auth=ok` thêm **~0,13–0,17 s**; riêng `desktop-host` packaged tới listen **1,2–1,6 s warm**. Shell in `dsh: native host=ready in <ms>` / `auth=ok in <ms>` để đo độ trễ thay vì đoán, và trong lúc chờ Host nó hiện `Starting Host sidecar… <n>s`.
 
@@ -414,6 +416,12 @@ cargo test --locked --offline --manifest-path apps/desktop-tauri/native-app/Carg
 Phần trình bày egui trong các module dùng chung được gate theo feature thay vì bị xoá: `fonts::install`, `terminal_ansi::{format_for, layout}`, `explorer` (ui + render + source preview), `question_card::render`, `session_list::render`, `document_preview` (ImagePreview + DocumentPreview::ui), `ui_preferences` (ThemeMode→ThemePreference, KeyChord::consume, key_by_name, apply/apply_theme_pack/accent_fill, UiPreferencesPanel + editor helpers), `layout` tests. Trạng thái/model/protocol vẫn dùng chung: `KeyChord` giờ là dữ liệu thuần (`ctrl/alt/shift/cmd` + tên phím chuẩn hoá) nên `UiPreferences::validate` kiểm trùng phím cho cả hai bin, còn `KeyChord::consume` chỉ tồn tại ở bản egui. `Palette`/`AnsiStyle` chuyển sang màu 8-bit thuần (`Rgba8`, `AnsiColor`) và chỉ convert sang `Color32` trong code egui.
 
 Hai test terminal trước đây kiểm cả parse lẫn format egui được tách: phần parse ở lại bin gpui, phần format chuyển sang `formatted_spans_swap_foreground_and_background_when_inverse` (legacy). Clippy: **66 warning ở bin gpui** (đều là dead code/visibility có sẵn trong `shell/`, không phải lỗi) và **0 warning code** ở bin legacy.
+
+## Xoá shell egui legacy — 2026-11-06
+
+Bin `dsh-desktop-egui-legacy`, feature `legacy-egui`, optional `eframe`, `egui_kittest` dev-dependency, `src/main.rs`, `src/ui_harness.rs` + `src/ui_harness/audit.rs`, `src/settings_panel.rs`, `src/transcript_view.rs`, `tests/snapshots/*.png` và toàn bộ khối `#[cfg(feature = "legacy-egui")]` trong module dùng chung đã bị xoá. Lý do: chỉ còn một renderer cần bảo trì; hai bản UI song song buộc mọi feature phải làm hai lần và đã phát sinh đúng lỗi đó trong các slice UI V2.
+
+**Mất mát phải bù:** harness `egui_kittest` là nơi duy nhất chạy headless UI (AccessKit + snapshot PNG) và là L2 cho các journey `panels`/`model-default`/`update-ui`. Vì vậy ba probe GUI đó đã bị gỡ khỏi `native-journey-probe.sh`, `office-component-probe.sh`, `model-default-probe.sh`, `update-flow-probe.mjs`; hiện **chưa có harness UI tự động cho gpui**. `native-journey-probe.sh terminal|timed-question|model-default` vẫn chạy qua probe hook env của gpui. Việc dựng lại harness tương đương trên gpui là mục mở, không được tính là đã xong.
 
 ## AppImage native gpui — 2026-11-01
 

@@ -7,7 +7,7 @@
 
 > **Phân biệt rõ:** nội dung chat, file tree, diff, model, terminal, Git, Marketplace trong HTML V2 là **dữ liệu mô phỏng**. Tài liệu dưới đây quy định hành vi mong muốn cho ứng dụng thật; các tên adapter/event minh họa **không phải** tuyên bố rằng API đó đã tồn tại trong DSH.
 >
-> **Đích port:** shell ship thật là Rust + gpui (`apps/desktop-tauri/native-app/src/gpui_main.rs`, `src/shell/`). Shell egui trong `src/main.rs` đã nghỉ, chỉ build với feature `legacy-egui`; không lấy nó làm chuẩn hành vi. Đối chiếu capability từng yêu cầu trong `runtime-capability-map.md`.
+> **Đích port:** shell ship thật là Rust + gpui (`apps/desktop-tauri/native-app/src/gpui_main.rs`, `src/shell/`). Shell egui cũ đã bị xoá ngày 2026-11-06; gpui là renderer duy nhất. Đối chiếu capability từng yêu cầu trong `runtime-capability-map.md`.
 
 ## 0. Design contract và quyết định đã khóa
 
@@ -194,10 +194,10 @@ Cho người dùng thấy **agent đã thay đổi chính xác những gì** tr�
 | CHG-04 | P0 | Review current/all chỉ đánh dấu **đã xem xét** (local/metadata), không phải Accept, Stage hay Commit |
 | CHG-05 | P0 | Khi workspace files đổi trong lúc đang xem: diff invalidated/stale phải refresh, báo nếu line anchoring không còn hợp lệ |
 | CHG-06 | P0 | Discard chỉ tác động đối tượng đã chỉ định, bắt confirm nêu rõ file/hunk và có mất dữ liệu user hay không; nếu không thể hoàn tác, nêu rõ |
-| CHG-07 | P0 | Không được discard changes do user tạo cùng file bằng thao tác “discard agent changes” nếu provenance không chứng minh được; fallback sang diff thủ công |
+| CHG-07 | P0 | Không được discard changes do user tạo cùng file bằng thao tác “discard agent changes” nếu nguồn gốc không chứng minh được; fallback sang diff thủ công |
 | CHG-08 | P1 | Stage/unstage theo file/hunk; commit nằm trong Git workflow, không gộp nút Review |
 | CHG-09 | P1 | Checkpoint/rollback agent edit khi runtime có snapshot đáng tin cậy; review UI không tự coi Git HEAD là checkpoint của run |
-| CHG-10 | P1 | Compare snapshots (before run vs after run) nếu runtime cấp file provenance |
+| CHG-10 | P1 | Compare snapshots (before run vs after run) nếu runtime cấp file kèm nguồn gốc |
 
 ### 4.2. Semantics nút
 
@@ -208,7 +208,7 @@ Cho người dùng thấy **agent đã thay đổi chính xác những gì** tr�
 
 ### 4.3. Data và consistency
 
-`ChangeSet {workspaceId, baseRevision?, headRevision?, sourceRunId?, files[], observedAt}`; `ChangedFile {path, oldPath?, status, isBinary, isConflict, additions, deletions, contentHashBefore?, contentHashAfter?, provenance?, reviewedAt?, reviewHash?}`. Dữ liệu Git/FS live có thể khác patch agent; cần hiển thị nguồn và cảnh báo mismatch, không ghép mù.
+`ChangeSet {workspaceId, baseRevision?, headRevision?, sourceRunId?, files[], observedAt}`; `ChangedFile {path, oldPath?, status, isBinary, isConflict, additions, deletions, contentHashBefore?, contentHashAfter?, origin?, reviewedAt?, reviewHash?}`. Dữ liệu Git/FS live có thể khác patch agent; cần hiển thị nguồn và cảnh báo mismatch, không ghép mù.
 
 **Acceptance criteria**
 
@@ -336,7 +336,7 @@ Persistence nên theo precedence **default → global → workspace override**; 
 |---|---|---|
 | SKL-01 | P0 | List installed: `id, name, description, version, source, scope(global/workspace), enabled, invocationPolicy` |
 | SKL-02 | P0 | Enable/disable và khả năng áp dụng đến session hiện tại/lần chạy tiếp theo; tránh silently re-inject giữa run |
-| SKL-03 | P0 | Xem nội dung/manifest read-only, nơi lưu, provenance; phân biệt skill cục bộ vs marketplace |
+| SKL-03 | P0 | Xem nội dung/manifest read-only, nơi lưu, nguồn gốc; phân biệt skill cục bộ vs marketplace |
 | SKL-04 | P1 | Search/invoke qua composer `/skill` hoặc command palette nếu runtime có cơ chế hỗ trợ |
 | SKL-05 | P1 | Workspace override, conflict giữa skill cùng tên, skill dependencies, version pin |
 
@@ -502,7 +502,7 @@ Các type trên là sketch để mô tả trường dữ liệu, không phải k
 | Session | Browser-local ID/chat HTML | Canonical session store, streamed events, drafts |
 | Agent composer | Chèn message local và notice demo | Send/ack/run streaming/approval/stop |
 | Tool activity | 5 sample rows tĩnh | Tool lifecycle stream và raw logs có kiểm soát |
-| Changes/diff | Diff hard-coded | Workspace/Git/agent provenance, review semantics |
+| Changes/diff | Diff hard-coded | Workspace/Git/agent: nguồn gốc từng file và nghĩa review |
 | Terminal | Help/pwd/ls mock | PTY, lifecycle, attach/detach |
 | Git/status | Nhãn branch/chấm status demo | Git adapter, heartbeat/diagnostics thực |
 | Appearance/keymap | localStorage demo | Versioned persistent settings + command registry |
@@ -538,7 +538,7 @@ Các type trên là sketch để mô tả trường dữ liệu, không phải k
 1. Session store/API hiện tại lưu message history, run IDs, checkpoint/handoff ở đâu? Có cursor event stream chưa?
 2. Host DSH đang có PTY multiplex/detach thật chưa, hay terminal chỉ hoạt động khi cửa sổ còn mở?
 3. Tính năng approve tool/fs/shell hiện tại do component nào sở hữu? Không tạo một policy engine mới trong UI.
-4. Git/Changes hiện tại là Git working tree hay patch do agent tạo? Có source provenance/snapshot không?
+4. Git/Changes hiện tại là Git working tree hay patch do agent tạo? Có nguồn gốc/snapshot của từng file không?
 5. Runtime có mechanism extension, skill và marketplace nào rồi? Phải làm inventory trước khi chốt schema/lifecycle mới.
 6. Cơ chế lưu settings/keymap hiện có là gì? Khả năng merge global/workspace, migration qua phiên bản?
 7. Native app/framework (desktop shell) có đang xử lý titlebar/OS keybindings riêng không? HTML V2 chỉ là reference visual.

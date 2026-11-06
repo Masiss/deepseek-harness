@@ -4,7 +4,7 @@
 
 Ứng dụng cho phép bạn quản lý Sessions, trò chuyện với agent, xem tệp trong workspace và theo dõi các công việc gắn với từng Session thông qua Desktop Host.
 
-Tài liệu này mô tả ứng dụng Rust/gpui trong [`src/`](src/) (`src/gpui_main.rs` và `src/shell/`); shell egui trong `src/main.rs` đã nghỉ, chỉ build với feature `legacy-egui`. Giao diện HTML trong [`prototype/`](prototype/) chỉ là bản mô phỏng, không phải ứng dụng đang chạy.
+Tài liệu này mô tả ứng dụng Rust/gpui trong [`src/`](src/) (`src/gpui_main.rs` và `src/shell/`), là renderer duy nhất của lane. Giao diện HTML trong [`prototype/`](prototype/) chỉ là bản mô phỏng, không phải ứng dụng đang chạy.
 
 Tên menu và nút được giữ bằng tiếng Anh như trong ứng dụng để bạn dễ đối chiếu.
 

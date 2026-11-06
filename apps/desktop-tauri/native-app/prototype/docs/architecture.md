@@ -4,7 +4,7 @@
 
 This project is a standalone browser-based prototype for the native desktop client. It demonstrates a target layout, screen set, and selected user-visible state transitions; it is not the shipped app, an API client, or a product contract.
 
-The shipped app is the Rust + gpui implementation in [`../../src/`](../../src/) (`gpui_main.rs`, `shell/`); the egui shell in `src/main.rs` is retired behind the `legacy-egui` feature. The prototype’s `index.html` is deliberately self-contained and is not compiled, packaged, or loaded by that application.
+The shipped app is the Rust + gpui implementation in [`../../src/`](../../src/) (`gpui_main.rs`, `shell/`); the earlier egui shell was deleted on 2026-11-06, so `src/main.rs` no longer exists. The prototype’s `index.html` is deliberately self-contained and is not compiled, packaged, or loaded by that application.
 
 ## System context
 

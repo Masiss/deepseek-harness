@@ -217,7 +217,7 @@ Lane tập trung **Linux**; **macOS và Windows để pending** cho tới khi c�
 
 ## Goal 3 — Desktop native (gpui), bỏ webview (mở 2026-10-22; ported sang gpui 2026-10-31)
 
-**Quyết định (sau grill với chủ dự án):** bản release webview hiện tại (`0.2.1-rc.4`) là bản cuối của hướng webview; sau đó lane **chuyển hẳn** sang ứng dụng desktop native (Rust + egui) và **giữ nguyên** tính năng gốc của dsh. Sửa đổi âm danh ngày 2026-10-31: UI được viết bằng **Rust + gpui** (`gpui` 0.2.2) thay cho `eframe`/`egui`; hai bin song song trong `apps/desktop-tauri/native-app` — `dsh-desktop-native-app` (gpui, mặc định chạy) và `dsh-desktop-egui-legacy` (giữ `src/main.rs` + shell egui cho giai đoạn chuyển tiếp) — và presentation layer (`shell/`) chuyển cùng module chia theo vai đã chuyển.
+**Quyết định (sau grill với chủ dự án):** bản release webview hiện tại (`0.2.1-rc.4`) là bản cuối của hướng webview; sau đó lane **chuyển hẳn** sang ứng dụng desktop native (Rust + egui) và **giữ nguyên** tính năng gốc của dsh. Sửa đổi âm danh ngày 2026-10-31: UI được viết bằng **Rust + gpui** (`gpui` 0.2.2) thay cho `eframe`/`egui`; presentation layer (`shell/`) chuyển cùng module chia theo vai đã chuyển. **2026-11-06:** bin legacy `dsh-desktop-egui-legacy`, feature `legacy-egui`, `eframe`, harness `egui_kittest` và snapshot PNG đã bị xoá — còn đúng một bin `dsh-desktop-native-app`; đổi lại, lane mất harness UI headless và phải dựng lại trên gpui (mục mở).
 
 **Vì sao (số đo, không phải cảm tính):**
 
@@ -567,7 +567,7 @@ Tốc độ test đến từ kiến trúc client/server, không từ định d�
 
 **Quyết định.** Ứng dụng desktop viết UI bằng **Rust + egui** trên `tao`/`winit`; **Tauri rời khỏi lane** (upstream giữ Electron của họ; lane giữ Electron cầu tạm ở upstream ✓). Host **vẫn là Node sidecar** ✓ — toàn bộ tính năng dsh nằm ở Host ✓ và client native dùng **cùng API** với web client ✓. Profile desktop **không mang** package client-UI ✓ (web profile của upstream vẫn giữ nguyên ✓).
 
-**Sửa đổi âm danh (2026-10-31) — port sang gpui.** UI được viết lại bằng **Rust + gpui** (`gpui` 0.2.2, GPU-first qua wgpu) thay cho `eframe`/`egui`; hai bin song song trong `apps/desktop-tauri/native-app`: `dsh-desktop-native-app` (gpui, mặc định chạy) và `dsh-desktop-egui-legacy` (giữ `src/main.rs` + shell egui cho giai đoạn chuyển tiếp). Presentation layer (`shell/`: render modules, theme, text input, widgets, terminal state, app runtime) chuyển sang gpui; module chia theo vai đã chuyển cùng (`client-core` protocol, `host`, `explorer`, `session_list`, `question_card`, `transcript`, `terminal_ansi`, `fonts`, `ui_preferences`, `layout`) giữ nguyên contracts. ADR-0012 cũ giữ nguyên trong ngữ cảnh quyết định bỏ webview; đổi framework là sửa đổi âm danh của phương án implementation, không phải của nguyên tắc bỏ webview.
+**Sửa đổi âm danh (2026-10-31) — port sang gpui.** UI được viết lại bằng **Rust + gpui** (`gpui` 0.2.2, GPU-first qua wgpu) thay cho `eframe`/`egui`; `apps/desktop-tauri/native-app` chỉ còn bin `dsh-desktop-native-app` sau khi shell egui bị xoá ngày 2026-11-06. Presentation layer (`shell/`: render modules, theme, text input, widgets, terminal state, app runtime) chuyển sang gpui; module chia theo vai đã chuyển cùng (`client-core` protocol, `host`, `explorer`, `session_list`, `question_card`, `transcript`, `terminal_ansi`, `fonts`, `ui_preferences`, `layout`) giữ nguyên contracts. ADR-0012 cũ giữ nguyên trong ngữ cảnh quyết định bỏ webview; đổi framework là sửa đổi âm danh của phương án implementation, không phải của nguyên tắc bỏ webview.
 
 **Hệ quả.**
 

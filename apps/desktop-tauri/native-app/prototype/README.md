@@ -16,6 +16,6 @@ Open `index.html` directly in a browser. The file has no package install or buil
 
 ## Relationship to the application
 
-The shipped application is in [`../src/`](../src/) and uses Rust + gpui (`../src/gpui_main.rs`, `../src/shell/`); the earlier egui shell in `../src/main.rs` is retired behind the `legacy-egui` feature. This prototype is not included in Cargo builds or AppImages. Prototype-specific documentation stays under this directory; repository-wide docs cover the shipped product and Desktop lane.
+The shipped application is in [`../src/`](../src/) and uses Rust + gpui (`../src/gpui_main.rs`, `../src/shell/`); the earlier egui shell was deleted on 2026-11-06. This prototype is not included in Cargo builds or AppImages. Prototype-specific documentation stays under this directory; repository-wide docs cover the shipped product and Desktop lane.
 
 The frozen visual and behavioral target for the gpui port is [`../DSH_UI_Handoff_v1.0/`](../DSH_UI_Handoff_v1.0/), which holds the approved HTML reference, the functional spec, the runtime capability map, and the implementation backlog. This prototype stays the place to explore interaction ideas; the handoff directory is the one that gates implementation.

@@ -1,31 +1,33 @@
 # DSH UI Handoff v1.0
 
-Bộ tài liệu chuyển giao cho giao diện Desktop native: đặc tả hành vi, audit khả năng runtime, backlog triển khai và một bản HTML làm chuẩn thị giác.
+English | [中文](README.zh.md)
 
-## Nội dung
+Handoff set for the native Desktop interface: the behavior spec, the runtime capability map, the implementation backlog, and one HTML file as the visual reference.
 
-| File | Vai trò | Tính chuẩn |
+## Contents
+
+| File | Role | Authority |
 |---|---|---|
-| [`DSH_UI_Functional_Spec_v1.0.md`](DSH_UI_Functional_Spec_v1.0.md) | Hợp đồng hành vi: ID chức năng, acceptance criteria, roadmap R0–R5 | Chuẩn cho *hành vi* mong muốn |
-| [`runtime-capability-map.md`](runtime-capability-map.md) | Đối chiếu từng yêu cầu với Host RPC và shell gpui hiện có | Chuẩn cho *trạng thái triển khai* (có ngày audit) |
-| [`DSH_UI_Implementation_Backlog_v1.0.md`](DSH_UI_Implementation_Backlog_v1.0.md) | Thứ tự thực hiện, gate nghiệm thu, format báo cáo | Chuẩn cho *thứ tự công việc* |
-| [`dsh-ui-prototype-v2.html`](dsh-ui-prototype-v2.html) | Bản HTML tự chứa: layout, token màu, panel, trạng thái | Chuẩn cho *thị giác* |
+| [`DSH_UI_Functional_Spec_v1.0.md`](DSH_UI_Functional_Spec_v1.0.md) | Behavior contract: feature ids, acceptance criteria, roadmap R0–R5 | Authority for intended *behavior* |
+| [`runtime-capability-map.md`](runtime-capability-map.md) | Maps each requirement to the Host RPCs and the gpui shell that exist | Authority for *implementation state* (audited date inside) |
+| [`DSH_UI_Implementation_Backlog_v1.0.md`](DSH_UI_Implementation_Backlog_v1.0.md) | Work order, acceptance gates, report format | Authority for *work order* |
+| [`dsh-ui-prototype-v2.html`](dsh-ui-prototype-v2.html) | Self-contained HTML: layout, color tokens, panels, states | Authority for *visuals* |
 
-## Quan hệ với phần còn lại của `native-app`
+## Relationship to the rest of `native-app`
 
-- `../src/` — ứng dụng ship thật: **Rust + gpui** (`src/gpui_main.rs`, `src/shell/`). `src/main.rs` là shell egui đã nghỉ, chỉ build với feature `legacy-egui`.
-- `../prototype/` — prototype tương tác cũ (`index.html` + `docs/`) mô tả giao diện thời egui; vẫn dùng được để xem luồng, nhưng không phải chuẩn thị giác của bản chuyển giao này.
-- `DSH_UI_Handoff_v1.0/` — chuẩn thị giác và hành vi cho lần port sang gpui.
-- `../USER_GUIDE.md` và `../USER_FLOWS.md` — mô tả ứng dụng đang chạy; khi tài liệu này và ứng dụng lệch nhau, ứng dụng là sự thật và tài liệu này là đích đến.
+- `../src/` — the shipped application: **Rust + gpui** (`src/gpui_main.rs`, `src/shell/`). The egui shell (`src/main.rs`) was deleted on 2026-11-06.
+- `../prototype/` — the older interactive prototype (`index.html` + `docs/`) that describes the egui-era interface; still useful for flows, but not the visual reference for this handoff.
+- `DSH_UI_Handoff_v1.0/` — visual and behavioral reference for the gpui port.
+- `../USER_GUIDE.md` and `../USER_FLOWS.md` — describe the running application; when this set and the application disagree, the application is the truth and this set is the target.
 
-Khi một hành vi trong spec chưa có capability Host, ghi `NOT_SUPPORTED` kèm fallback trung thực. Không dựng handler giả lập trạng thái thành công.
+When a behavior in the spec has no Host capability, record `NOT_SUPPORTED` with an honest fallback. Never build a handler that fakes a successful state.
 
-## Cách dùng
+## How to use it
 
-1. Đọc `runtime-capability-map.md` trước để biết cái gì nối được ngay, cái gì cần bổ sung Host.
-2. Lấy task từ backlog, mỗi lần một lát cắt dọc (T01, T02, …).
-3. Trả báo cáo theo mục 3 của backlog: file đã đổi, capability đã dùng, `NOT_SUPPORTED` còn lại, test đã chạy, rủi ro.
+1. Read `runtime-capability-map.md` first to learn what can be wired today and what needs Host work.
+2. Take a task from the backlog, one vertical slice at a time (T01, T02, …).
+3. Report per backlog section 3: changed files, capabilities used, remaining `NOT_SUPPORTED`, tests run, risks.
 
-## Bảo trì
+## Maintenance
 
-Ngày audit ghi trong `runtime-capability-map.md`; sau khi thay đổi Host RPC hoặc shell gpui, cập nhật lại bảng tương ứng và ngày đó. Bản HTML V2 là bản đóng băng cho visual regression, không chỉnh song song với code.
+The audited date lives in `runtime-capability-map.md`; after a Host RPC or gpui shell change, update the matching table and that date. The V2 HTML is frozen for visual regression, not edited alongside code.

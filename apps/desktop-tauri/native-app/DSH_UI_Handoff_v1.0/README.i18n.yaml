@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for README.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write apps/desktop-tauri/native-app/DSH_UI_Handoff_v1.0/README.md
+/dsh-ui-handoff-v1-0:
+  en: 674ad0a1b480493c
+  zh: deb9c9a554afc04c
+/dsh-ui-handoff-v1-0/contents:
+  en: 5fbd0a7496cab04e
+  zh: e57e02d7244f0261
+/dsh-ui-handoff-v1-0/relationship-to-the-rest-of-native-app:
+  en: 7520c09c03dbdcdb
+  zh: 24e0adcfaf98dbe2
+/dsh-ui-handoff-v1-0/how-to-use-it:
+  en: 6d0bae54b942a761
+  zh: 304fb30b13b62f89
+/dsh-ui-handoff-v1-0/maintenance:
+  en: 5aae05e6e2c799cf
+  zh: 852800ce8a2db335

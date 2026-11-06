@@ -1,0 +1,19 @@
+# Bilingual-pair consistency record for 2026-11-06-delete-retired-egui-desktop-shell.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/simplification/2026-11-06-delete-retired-egui-desktop-shell.md
+/agent-note-delete-the-retired-egui-desktop-shell:
+  en: 09713646c4bc8aa2
+  zh: 2f88a23c4bf54d47
+/agent-note-delete-the-retired-egui-desktop-shell/problem:
+  en: 8761d7b28ce381fb
+  zh: b9f836b40bcbcda7
+/agent-note-delete-the-retired-egui-desktop-shell/decision:
+  en: 21d0f583da728746
+  zh: ba97052e066b5b93
+/agent-note-delete-the-retired-egui-desktop-shell/alternatives-considered:
+  en: 32a2af8e216fb6d3
+  zh: 340851c0962be014
+/agent-note-delete-the-retired-egui-desktop-shell/consequences:
+  en: aadb5f35667a73aa
+  zh: ea89b709493b256e

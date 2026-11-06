@@ -126,7 +126,7 @@ Dừng ngay, không cố, khi gặp:
 ```
 apps/desktop-tauri/          # L1 — native Linux Desktop lane
   client-core/               # Host protocol, HTTP transport, shared mux
-  native-app/                # Rust + gpui shell and Host sidecar (egui giữ làm bin legacy `dsh-desktop-egui-legacy`)
+  native-app/                # Rust + gpui shell and Host sidecar (one bin: `dsh-desktop-native-app`)
   scripts/                   # Linux packaging and packaged probes
 native/dsh-native/           # L1 — crate napi-rs, cfg theo OS
 packages/.../*-native/       # L1 — provider packages

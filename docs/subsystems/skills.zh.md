@@ -221,6 +221,13 @@ interface SkillViewOptions extends SkillLookupOptions {
 interface Config {
   /** Maximum number of completed cwd/provider catalogs kept in memory. */
   readonly collectCacheMaxEntries?: number
+  /** Skill names disabled for this composition; empty by default. */
+  readonly disabledSkills?: string[]
+  /**
+   * Settings namespace (a plugin entry id) that owns this plugin's persisted
+   * `disabledSkills`. Omit to keep disablement in memory for this process.
+   */
+  readonly settingsNamespace?: string
 }
 ```
 
