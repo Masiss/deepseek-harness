@@ -91,7 +91,7 @@ Sandbox/permission: `packages/fs/fs-sandbox/src/containment.ts`, `packages/fs/fs
 | AG-05 | `ToolCallStatus` = `Pending / Succeeded / Failed / Unknown` | Hiển thị theo enum | Thiếu `Running / Cancelled`; client phải đặt `Unknown` khi mất kết nối |
 | AG-06 | `PromptMode` chỉ có `Queue / Steer`; không có mode Ask/Plan/Build | `send_prompt` cố định `PromptMode::Queue` | Không có UI mode; cần xác nhận Host có mode agent hay không |
 | AG-07 | `session/cancel` trả `AcceptedResponse {accepted}` | `cancel_turn()` chờ ack rồi mới đổi trạng thái | Ổn |
-| AG-08 | `approval/request` (`toolName`, `callId?`, `reason?`, `displayReason?`) + `ApprovalDecision` = `allowed-once / rejected` | Hàng đợi approval inline, hiện request đầu + số còn lại | Không có `requestId`/expiry/scope trong payload; chỉ 2 quyết định |
+| AG-08 | `approval/request` (`requestId`, `toolName`, `callId?`, `reason?`, `displayReason?`) + `ApprovalDecision` = `allowed-once / rejected` | Hàng đợi approval inline, hiện request đầu + số còn lại; request trùng `requestId` sau reconnect chỉ tạo một card | Chỉ 2 quyết định và không có expiry/scope: grant `allowed-once` là thiết kế, không phải thiếu sót |
 | AG-09 | Không có `run.status` RPC; trạng thái suy ra từ `turn/end` | `run_state` phân biệt `blocked/partial/interrupted/completed`; Queue/Steer + queue khi busy | Đạt theo `turn/end`; không suy diễn từ lỗi tool |
 | AG-10 | Không có event thinking trong client type | Không render | Đúng hướng: không bịa |
 | AG-11 | `packages/session/session-turn-outline`, `packages/goal` | Goals có UI riêng; handoff dựng Markdown từ log bền vững (`handoff.rs`), Save/Overwrite qua `workspaceFiles/write` | Đạt |
@@ -166,7 +166,7 @@ Chặn một UI trung thực theo spec:
 7. Last-session restore đã có client-local (PREF-01); layout/theme/keymap có override theo workspace từ schema v5 → PREF-02, APP, KEY (một phần: chưa gộp Preferences một cửa sổ).
 8. `session/follow` đã có cursor `fromSeq`; reconnect giữ view resume từ sequence đã giữ, fallback snapshot mới khi đổi session.
 9. Tool result đã tách stdout/stderr + exit code + duration từ log (không thêm RPC) → AG-04.
-10. Approval chỉ có `allowed-once`/`rejected`, không có expiry/scope → AG-08 (một phần).
+10. Approval có `requestId` (trùng id sau reconnect bị bỏ), chỉ `allowed-once`/`rejected`, không có expiry/scope → AG-08 (scope là quyết định thiết kế).
 
 Nối được ngay, không cần Host mới: đọc/ghi file trong workspace (list/stat/read/readBytes/write/search), watch (`workspaceFiles/changes`, đã nối cho thư mục mở, file đang preview và Git auto-refresh), Session create/list/page/fork/rename/search/cancel/prompt, model catalog/select, attach/upload tệp, approval + câu hỏi, terminal create/list/attach/rename/close/retain/resize, toàn bộ Git namespace, workspace create/archive/pin, plugin bật/tắt + bundle toggle/uninstall, marketplace inspect/install/update lifecycle, `settings/*` với revision conflict, `commands/list` và `commands/execute`.
 

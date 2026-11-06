@@ -5718,7 +5718,20 @@ impl DesktopApp {
                 Ok(Ok(RemoteEvent::Waterfall(invocation))) => {
                     if invocation.event == "approval/request" {
                         match PendingApproval::from_invocation(invocation) {
-                            Ok(pending) => self.pending_approvals.push(pending),
+                            Ok(pending) => {
+                                // A reconnect can redeliver the same ask; one card per
+                                // audit id keeps a second Allow from answering nothing.
+                                let duplicate = pending.request.request_id.as_deref().is_some_and(
+                                    |id| {
+                                        self.pending_approvals.iter().any(|queued| {
+                                            queued.request.request_id.as_deref() == Some(id)
+                                        })
+                                    },
+                                );
+                                if !duplicate {
+                                    self.pending_approvals.push(pending);
+                                }
+                            }
                             Err(error) => {
                                 self.page_error = Some(format!("Invalid approval request: {error}"))
                             }

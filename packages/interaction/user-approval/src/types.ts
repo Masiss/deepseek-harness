@@ -63,6 +63,12 @@ declare module '@deepseek-ai/dsh-session/types' {
 export interface ApprovalRequestEvent {
   /** Agent identity projected to the corresponding Client Context in transit. */
   readonly agent: Agent
+  /**
+   * Service-issued identity of this ask, matching its `approval/asked` audit
+   * event. Answerers use it to drop a request they already answered after a
+   * reconnect delivered it twice.
+   */
+  readonly requestId: ApprovalRequestId
   /** Tool whose operation requires a decision. */
   readonly toolName: string
   /** Exact tool call being decided, when available. */

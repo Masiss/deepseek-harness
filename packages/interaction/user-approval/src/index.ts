@@ -49,7 +49,7 @@ import { ApprovalRequestId } from './types.ts'
 import type { ApprovalOutcome, ApprovalRequestEvent } from './types.ts'
 
 export { ApprovalRequestId } from './types.ts'
-export type { ApprovalOutcome } from './types.ts'
+export type { ApprovalOutcome, ApprovalRequestEvent } from './types.ts'
 
 /** Every {@link ApprovalOutcome}, for runtime normalization of answerer returns. */
 const OUTCOMES: readonly ApprovalOutcome[] = ['allowed-once', 'rejected', 'cancelled', 'unavailable']
@@ -108,7 +108,7 @@ export function setApprovalPolicy(session: Session, policy: ApprovalPolicy): voi
  * Readonly same-process permission question. `callId` links to an already
  * presented tool call, so arguments are not duplicated here.
  */
-export interface ApprovalRequest extends ApprovalRequestEvent {
+export interface ApprovalRequest extends Omit<ApprovalRequestEvent, 'requestId'> {
   /**
    * The agent on whose behalf the question is asked. Routes the question (a
    * UI answerer only answers for agents it owns) and receives the audit
@@ -228,7 +228,7 @@ export class ApprovalService extends Service {
       ...req.callId !== undefined ? { callId: req.callId } : {},
       ...req.reason !== undefined ? { reason: req.reason } : {},
     })
-    const outcome = await this.decide(req, session)
+    const outcome = await this.decide(req, session, id)
     session.append('approval/decided', { id, outcome })
     return outcome
   }
@@ -264,7 +264,7 @@ export class ApprovalService extends Service {
    * @param session - the request agent's session used for policy lookup.
    * @returns the normalized closed outcome.
    */
-  private async decide(req: ApprovalRequest, session: Session): Promise<ApprovalOutcome> {
+  private async decide(req: ApprovalRequest, session: Session, requestId: ApprovalRequestId): Promise<ApprovalOutcome> {
     const signal = req.signal
     if (signal?.aborted) return 'cancelled'
     // The 'never' policy is decided HERE, before any dispatch: a listener
@@ -279,7 +279,8 @@ export class ApprovalService extends Service {
     // the containment into the caller.
     const answer: Promise<ApprovalOutcome> = Promise.resolve().then(
       () => this.ctx.waterfall(
-        scopeTarget(req.agent, req.agent), 'approval/request', req,
+        // The dispatched request adds the audit id the asker never supplies.
+        scopeTarget(req.agent, req.agent), 'approval/request', { ...req, requestId },
         () => Promise.resolve<ApprovalOutcome>('unavailable'),
       ),
     ).then(

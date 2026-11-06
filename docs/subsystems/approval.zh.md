@@ -50,14 +50,14 @@ type ApprovalPolicy = 'ask' | 'never'
 
 ## 审批请求
 
-`ApprovalRequest` 以足够精确的方式标识 agent 和工具操作，以便路由和审计该问题。它有意省略工具参数：应答者通过 `callId` 将提示附加到已流式输出的工具调用上，而非渲染另一份可能漂移的副本。可选的 `displayReason` 向界面传递请求方提供的本地化字符串；`reason` 仍是审计文本。
+`ApprovalRequest` 以足够精确的方式标识 agent 和工具操作，以便路由和审计该问题。它有意省略工具参数：应答者通过 `callId` 将提示附加到已流式输出的工具调用上，而非渲染另一份可能漂移的副本。可选的 `displayReason` 向界面传递请求方提供的本地化字符串；`reason` 仍是审计文本。分发的 `ApprovalRequestEvent` 还携带 `requestId`，即其 `approval/asked` 审计事件由服务签发的 id，因此同一请求被重复投递（例如重连重放）时应答者只需回答一次。
 
 ```ts type-equiv
 /**
  * Readonly same-process permission question. `callId` links to an already
  * presented tool call, so arguments are not duplicated here.
  */
-interface ApprovalRequest extends ApprovalRequestEvent {
+interface ApprovalRequest extends Omit<ApprovalRequestEvent, 'requestId'> {
   /**
    * The agent on whose behalf the question is asked. Routes the question (a
    * UI answerer only answers for agents it owns) and receives the audit

@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApprovalRequest {
+    /// Service-issued ask identity, matching the Host's `approval/asked` audit event.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
     pub tool_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub call_id: Option<String>,
@@ -99,13 +102,20 @@ mod tests {
     use super::*;
     #[test]
     fn deserializes_request_fixture() {
-        let request: ApprovalRequest = serde_json::from_str(r#"{"toolName":"bash","callId":"call-1","reason":"run command","displayReason":{"en":"Run command"}}"#).unwrap();
+        let request: ApprovalRequest = serde_json::from_str(r#"{"requestId":"ask-1","toolName":"bash","callId":"call-1","reason":"run command","displayReason":{"en":"Run command"}}"#).unwrap();
+        assert_eq!(request.request_id.as_deref(), Some("ask-1"));
         assert_eq!(request.tool_name, "bash");
         assert_eq!(request.call_id.as_deref(), Some("call-1"));
         assert_eq!(
             request.display_reason.as_ref().map(|v| v.en.as_str()),
             Some("Run command")
         );
+    }
+
+    #[test]
+    fn an_older_host_without_an_ask_id_still_decodes() {
+        let request: ApprovalRequest = serde_json::from_str(r#"{"toolName":"bash"}"#).unwrap();
+        assert!(request.request_id.is_none());
     }
 
     #[test]

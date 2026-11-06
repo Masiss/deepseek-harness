@@ -50,6 +50,8 @@ export interface ApprovalDetailOwnerProps {
 
 /** Client-visible fields of an approval request projected through Remote Events. */
 export interface ApprovalPresentationRequest {
+  /** Service-issued ask identity, matching the Host's `approval/asked` audit event. */
+  readonly requestId: string
   /** Tool requesting the decision. */
   readonly toolName: string
   /** Tool call correlated with the request. */
@@ -76,6 +78,8 @@ export class PendingApproval {
   readonly kind: 'approval'
   /** Opaque render identity and one-shot remount axis. */
   readonly key: string
+  /** Service-issued ask identity; a redelivered request keeps the same value. */
+  readonly requestId: string
   /** Tool requesting the decision. */
   readonly toolName: string
   /** Correlated Tool call, when supplied by the asker. */
@@ -100,6 +104,7 @@ export class PendingApproval {
    */
   constructor(readonly sessionId: SessionId, request: ApprovalPresentationRequest) {
     this.kind = 'approval'
+    this.requestId = request.requestId
     nextApprovalKey += 1
     this.key = `approval:${String(nextApprovalKey)}`
     this.toolName = request.toolName

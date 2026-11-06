@@ -1289,20 +1289,32 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the resulting operation state.',
       },
       {
+        signature: '@Remote(\'merge\') merge( gitWorkspaceScope: GitWorkspaceScope, request: GitMergeRequest, signal: AbortSignal, ): Promise<GitOperationValue>',
+        description: 'Merge one local branch into the current branch.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'branch to merge.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the resulting operation state.',
+      },
+      {
         signature: '@Remote(\'cherryPick\') cherryPick( gitWorkspaceScope: GitWorkspaceScope, request: GitCherryPickRequest, signal: AbortSignal, ): Promise<GitOperationValue>',
         description: 'Cherry-pick one commit onto the current branch.',
         parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'commit id.' }, { name: 'signal', description: 'caller cancellation.' }],
         returns: 'the resulting operation state.',
       },
       {
+        signature: '@Remote(\'revert\') revert( gitWorkspaceScope: GitWorkspaceScope, request: GitRevertRequest, signal: AbortSignal, ): Promise<GitOperationValue>',
+        description: 'Revert one commit on the current branch.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'commit id.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the resulting operation state.',
+      },
+      {
         signature: '@Remote(\'continueOperation\') continueOperation(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitOperationValue>',
-        description: 'Continue the in-progress rebase or cherry-pick.',
+        description: 'Continue the in-progress merge, rebase, cherry-pick, or revert.',
         parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'signal', description: 'caller cancellation.' }],
         returns: 'the resulting operation state.',
       },
       {
         signature: '@Remote(\'abortOperation\') abortOperation(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitOperationValue>',
-        description: 'Abort the in-progress rebase or cherry-pick.',
+        description: 'Abort the in-progress merge, rebase, cherry-pick, or revert.',
         parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'signal', description: 'caller cancellation.' }],
         returns: 'the restored operation state.',
       },
@@ -4937,11 +4949,11 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ApprovalRequest',
-    declaration: 'export interface ApprovalRequest extends ApprovalRequestEvent {\n    readonly agent: Agent;\n    readonly toolName: string;\n    readonly callId?: ToolCallId;\n    readonly reason?: string;\n    readonly signal?: AbortSignal;\n}',
+    declaration: 'export interface ApprovalRequest extends Omit<ApprovalRequestEvent, \'requestId\'> {\n    readonly agent: Agent;\n    readonly toolName: string;\n    readonly callId?: ToolCallId;\n    readonly reason?: string;\n    readonly signal?: AbortSignal;\n}',
   },
   {
     name: 'ApprovalRequestEvent',
-    declaration: 'export interface ApprovalRequestEvent {\n    readonly agent: Agent;\n    readonly toolName: string;\n    readonly callId?: ToolCallId;\n    readonly reason?: string;\n    readonly displayReason?: {\n        readonly en: string;\n        readonly [locale: string]: string;\n    };\n    readonly signal?: AbortSignal;\n}',
+    declaration: 'export interface ApprovalRequestEvent {\n    readonly agent: Agent;\n    readonly requestId: ApprovalRequestId;\n    readonly toolName: string;\n    readonly callId?: ToolCallId;\n    readonly reason?: string;\n    readonly displayReason?: {\n        readonly en: string;\n        readonly [locale: string]: string;\n    };\n    readonly signal?: AbortSignal;\n}',
   },
   {
     name: 'ArchiveSessionOptions',
@@ -5756,6 +5768,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GitDiffValue {\n    readonly path: string;\n    readonly staged: boolean;\n    readonly patch: string;\n    readonly truncated: boolean;\n    readonly untracked: boolean;\n}',
   },
   {
+    name: 'GitMergeRequest',
+    declaration: 'export interface GitMergeRequest {\n    readonly branch: string;\n}',
+  },
+  {
     name: 'GitOperationKind',
     declaration: 'export type GitOperationKind = \'none\' | \'merge\' | \'rebase\' | \'cherry-pick\' | \'revert\';',
   },
@@ -5786,6 +5802,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GitRemoteValue',
     declaration: 'export interface GitRemoteValue {\n    readonly operation: GitRemoteOperation;\n    readonly summary: string;\n    readonly truncated: boolean;\n}',
+  },
+  {
+    name: 'GitRevertRequest',
+    declaration: 'export interface GitRevertRequest {\n    readonly commit: string;\n}',
   },
   {
     name: 'GitStatusValue',
@@ -6292,8 +6312,12 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface MarketListingVersion extends MarketVersion {\n    readonly install: MarketInstallTarget;\n    readonly compatibility: MarketCompatibility;\n}',
   },
   {
+    name: 'MarketPermission',
+    declaration: 'export interface MarketPermission {\n    readonly id: string;\n    readonly description?: LocalizedText;\n}',
+  },
+  {
     name: 'MarketPlugin',
-    declaration: 'export interface MarketPlugin {\n    readonly name: string;\n    readonly title?: LocalizedText;\n    readonly description?: LocalizedText;\n    readonly icon?: string;\n    readonly author?: string;\n    readonly homepage?: string;\n    readonly repository?: MarketRepository;\n    readonly metadata: MarketPluginMetadata;\n    readonly versions: readonly MarketVersion[];\n}',
+    declaration: 'export interface MarketPlugin {\n    readonly name: string;\n    readonly title?: LocalizedText;\n    readonly description?: LocalizedText;\n    readonly icon?: string;\n    readonly author?: string;\n    readonly homepage?: string;\n    readonly repository?: MarketRepository;\n    readonly permissions?: readonly MarketPermission[];\n    readonly metadata: MarketPluginMetadata;\n    readonly versions: readonly MarketVersion[];\n}',
   },
   {
     name: 'MarketPluginMetadata',
@@ -6325,7 +6349,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'MarketVersion',
-    declaration: 'export interface MarketVersion {\n    readonly version: string;\n    readonly publishTimestamp: number;\n    readonly source: MarketSource;\n    readonly engines: MarketEngines;\n}',
+    declaration: 'export interface MarketVersion {\n    readonly version: string;\n    readonly publishTimestamp: number;\n    readonly source: MarketSource;\n    readonly engines: MarketEngines;\n    readonly changelog?: LocalizedText;\n}',
   },
   {
     name: 'MatcherValue',

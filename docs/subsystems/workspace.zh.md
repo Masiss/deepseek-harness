@@ -347,6 +347,15 @@ Host service backing the generated `ctx.remote.git` namespace.
 @Remote('rebase') rebase( gitWorkspaceScope: GitWorkspaceScope, request: GitRebaseRequest, signal: AbortSignal, ): Promise<GitOperationValue>
 
 /**
+ * Merge one local branch into the current branch.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param request - branch to merge.
+ * @param signal - caller cancellation.
+ * @returns the resulting operation state.
+ */
+@Remote('merge') merge( gitWorkspaceScope: GitWorkspaceScope, request: GitMergeRequest, signal: AbortSignal, ): Promise<GitOperationValue>
+
+/**
  * Cherry-pick one commit onto the current branch.
  * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
  * @param request - commit id.
@@ -356,7 +365,16 @@ Host service backing the generated `ctx.remote.git` namespace.
 @Remote('cherryPick') cherryPick( gitWorkspaceScope: GitWorkspaceScope, request: GitCherryPickRequest, signal: AbortSignal, ): Promise<GitOperationValue>
 
 /**
- * Continue the in-progress rebase or cherry-pick.
+ * Revert one commit on the current branch.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param request - commit id.
+ * @param signal - caller cancellation.
+ * @returns the resulting operation state.
+ */
+@Remote('revert') revert( gitWorkspaceScope: GitWorkspaceScope, request: GitRevertRequest, signal: AbortSignal, ): Promise<GitOperationValue>
+
+/**
+ * Continue the in-progress merge, rebase, cherry-pick, or revert.
  * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
  * @param signal - caller cancellation.
  * @returns the resulting operation state.
@@ -364,7 +382,7 @@ Host service backing the generated `ctx.remote.git` namespace.
 @Remote('continueOperation') continueOperation(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitOperationValue>
 
 /**
- * Abort the in-progress rebase or cherry-pick.
+ * Abort the in-progress merge, rebase, cherry-pick, or revert.
  * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
  * @param signal - caller cancellation.
  * @returns the restored operation state.

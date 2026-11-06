@@ -7,7 +7,7 @@ import type { Scope } from '@deepseek-ai/dsh-scope'
 import SessionStore, { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
-import ApprovalService, { ApprovalOutcome, ApprovalRequest, setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
+import ApprovalService, { type ApprovalRequestEvent, ApprovalOutcome, ApprovalRequest, setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
 
 /**
  * A minimal Agent stand-in — the service only reaches `agent.session.append`
@@ -90,7 +90,7 @@ describe('ApprovalService.request', () => {
     const scopeFiber = await ctx.plugin(Object.assign((inner: Context) => {
       scope = createScope(inner, agent)
     }, { inject: ['approval'] }))
-    let received: ApprovalRequest | undefined
+    let received: ApprovalRequestEvent | undefined
     let carrier: unknown
     scope.ctx.on('approval/request', function (req) {
       received = req
@@ -105,7 +105,14 @@ describe('ApprovalService.request', () => {
 
     await expect(ctx.approval.request(request)).resolves.toBe('allowed-once')
     expect(carrier).toBe(agent)
-    expect(received).toBe(request)
+    // Dispatch copies the ask so the answerer also learns the audit id.
+    expect(received).toMatchObject({
+      toolName: 'scoped-tool',
+      callId: 'scoped-call',
+      reason: 'scoped reason',
+    })
+    expect(received?.agent).toBe(agent)
+    expect(received?.requestId).toBe(appended[0]?.data.id)
     expect(appended).toHaveLength(2)
     expect(appended[0]?.data).toMatchObject({
       toolName: 'scoped-tool',

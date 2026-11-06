@@ -124,6 +124,7 @@ describe('PendingApproval', () => {
     const controller = new AbortController()
     const remove = vi.spyOn(controller.signal, 'removeEventListener')
     const pending = new PendingApproval(id('s1'), {
+      requestId: 'ask-1',
       toolName: 'bash',
       callId: 'call-1' as ToolCallId,
       reason: 'needs access',
@@ -149,6 +150,7 @@ describe('PendingApproval', () => {
     controller.abort(reason)
 
     const pending = new PendingApproval(id('s1'), {
+      requestId: 'ask-1',
       toolName: 'read',
       signal: controller.signal,
     })
@@ -164,13 +166,13 @@ describe('PendingApproval', () => {
       removeEventListener: vi.fn(),
     } as unknown as AbortSignal
 
-    const pending = new PendingApproval(id('s1'), { toolName: 'read', signal })
+    const pending = new PendingApproval(id('s1'), { requestId: 'ask-1', toolName: 'read', signal })
 
     await expect(pending.result).rejects.toThrow('approval request was aborted')
   })
 
   it('rejects an unanswered request explicitly without an AbortSignal', async () => {
-    const pending = new PendingApproval(id('s1'), { toolName: 'write' })
+    const pending = new PendingApproval(id('s1'), { requestId: 'ask-1', toolName: 'write' })
     const reason = new Error('scope released')
 
     pending.abort(reason)
@@ -186,7 +188,7 @@ describe('PendingApproval', () => {
       resolve: () => { throw failure },
       reject: completion.reject,
     }))
-    const pending = new PendingApproval(id('s1'), { toolName: 'write' })
+    const pending = new PendingApproval(id('s1'), { requestId: 'ask-1', toolName: 'write' })
     withResolvers.mockRestore()
 
     const settlement = await pending.answer('allowed-once').catch((error: unknown) => error)
@@ -333,7 +335,7 @@ function panelProps(
 
 describe('ApprovalPanel', () => {
   it('renders fallback copy without detail and returns rejection', async () => {
-    const pending = new PendingApproval(id('s1'), { toolName: 'bash' })
+    const pending = new PendingApproval(id('s1'), { requestId: 'ask-1', toolName: 'bash' })
     const props = panelProps(pending)
     render(<ApprovalPanel {...props} />)
 
@@ -351,6 +353,7 @@ describe('ApprovalPanel', () => {
 
   it('renders correlated detail and returns allow-once', async () => {
     const pending = new PendingApproval(id('s1'), {
+      requestId: 'ask-1',
       toolName: 'bash',
       callId: 'call-1' as ToolCallId,
       reason: 'Run this exact command',
@@ -372,6 +375,7 @@ describe('ApprovalPanel', () => {
 
   it('keeps the audit reason intact and follows the UI language for presentation copy', () => {
     const pending = new PendingApproval(id('s1'), {
+      requestId: 'ask-1',
       toolName: 'bash',
       reason: 'audit reason',
       displayReason: { en: 'English explanation', zh: '中文说明' },
@@ -387,7 +391,7 @@ describe('ApprovalPanel', () => {
 
   it.each([['Enter', 'allowed-once'], ['Escape', 'rejected']] as const)(
     'answers the focused container with %s through the pending request', async (key, outcome) => {
-      const pending = new PendingApproval(id('s1'), { toolName: 'bash' })
+      const pending = new PendingApproval(id('s1'), { requestId: 'ask-1', toolName: 'bash' })
       render(<ApprovalPanel {...panelProps(pending)} />)
       const group = screen.getByRole('group', { name: 'Approval details' })
       group.focus()
@@ -403,7 +407,7 @@ describe('ApprovalPanel', () => {
   )
 
   it('leaves button Enter to its native click and rejects from the reject button', async () => {
-    const pending = new PendingApproval(id('s1'), { toolName: 'bash' })
+    const pending = new PendingApproval(id('s1'), { requestId: 'ask-1', toolName: 'bash' })
     render(<ApprovalPanel {...panelProps(pending)} />)
     const reject = screen.getByRole('button', { name: 'Reject' })
     reject.focus()
@@ -415,7 +419,7 @@ describe('ApprovalPanel', () => {
   })
 
   it('ignores unowned input, modified keys, repeats and IME candidate keys', async () => {
-    const pending = new PendingApproval(id('s1'), { toolName: 'bash', callId: 'call-1' as ToolCallId })
+    const pending = new PendingApproval(id('s1'), { requestId: 'ask-1', toolName: 'bash', callId: 'call-1' as ToolCallId })
     const renderSlot = () => <input aria-label="Approval input" />
     render(<ApprovalPanel {...panelProps(pending, renderSlot)} />)
     const group = screen.getByRole('group', { name: 'Approval details' })
@@ -442,7 +446,7 @@ describe('ApprovalPanel', () => {
   })
 
   it('locks keyboard and click submissions synchronously while the answer is pending', async () => {
-    const pending = new PendingApproval(id('s1'), { toolName: 'bash' })
+    const pending = new PendingApproval(id('s1'), { requestId: 'ask-1', toolName: 'bash' })
     const gate = Promise.withResolvers<undefined>()
     const answer = vi.spyOn(pending, 'answer').mockImplementation(() => gate.promise)
     render(<ApprovalPanel {...panelProps(pending)} />)
@@ -458,7 +462,7 @@ describe('ApprovalPanel', () => {
   })
 
   it('does not settle an aborted request or let its late rejection unlock its replacement', async () => {
-    const first = new PendingApproval(id('s1'), { toolName: 'bash' })
+    const first = new PendingApproval(id('s1'), { requestId: 'ask-1', toolName: 'bash' })
     const gate = Promise.withResolvers<undefined>()
     vi.spyOn(first, 'answer').mockImplementation(() => gate.promise)
     const view = render(<ApprovalPanel {...panelProps(first)} />)
@@ -467,7 +471,7 @@ describe('ApprovalPanel', () => {
     fireEvent.keyDown(group, { key: 'Enter', code: 'Enter' })
     first.abort(new Error('request withdrawn'))
     await first.result.catch(() => {})
-    const second = new PendingApproval(id('s1'), { toolName: 'read' })
+    const second = new PendingApproval(id('s1'), { requestId: 'ask-1', toolName: 'read' })
     view.rerender(<ApprovalPanel {...panelProps(second)} />)
     await act(async () => { gate.reject(new Error('late transport failure')); await gate.promise.catch(() => {}) })
     expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Reject' }).disabled).toBe(false)
@@ -482,7 +486,7 @@ describe('ApprovalPanel', () => {
   })
 
   it('re-enables actions when answering fails', async () => {
-    const pending = new PendingApproval(id('s1'), { toolName: 'bash' })
+    const pending = new PendingApproval(id('s1'), { requestId: 'ask-1', toolName: 'bash' })
     vi.spyOn(pending, 'answer').mockRejectedValue(new Error('transport closed'))
     render(<ApprovalPanel {...panelProps(pending)} />)
 

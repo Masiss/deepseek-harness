@@ -50,14 +50,14 @@ Both policies contribute their complete current meaning to the cache-safe runtim
 
 ## Approval request
 
-`ApprovalRequest` identifies the agent and tool action closely enough to route and audit the question. It deliberately omits tool arguments: an answerer attaches the prompt to the already-streamed tool call through `callId` instead of rendering a second copy that could drift. Optional `displayReason` carries requester-owned locale strings to presentation; `reason` remains the audit text.
+`ApprovalRequest` identifies the agent and tool action closely enough to route and audit the question. It deliberately omits tool arguments: an answerer attaches the prompt to the already-streamed tool call through `callId` instead of rendering a second copy that could drift. Optional `displayReason` carries requester-owned locale strings to presentation; `reason` remains the audit text. The dispatched `ApprovalRequestEvent` also carries `requestId`, the service-issued id of its `approval/asked` audit event, so an answerer that receives the same ask twice (a reconnect replay, for example) can answer once.
 
 ```ts type-equiv
 /**
  * Readonly same-process permission question. `callId` links to an already
  * presented tool call, so arguments are not duplicated here.
  */
-interface ApprovalRequest extends ApprovalRequestEvent {
+interface ApprovalRequest extends Omit<ApprovalRequestEvent, 'requestId'> {
   /**
    * The agent on whose behalf the question is asked. Routes the question (a
    * UI answerer only answers for agents it owns) and receives the audit
