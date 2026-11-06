@@ -14,7 +14,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const SCHEMA_VERSION: u32 = 4;
+const SCHEMA_VERSION: u32 = 5;
 /// First on-disk format; its fields are all still read, new ones stay defaulted.
 const SCHEMA_VERSION_V1: u32 = 1;
 /// Largest composer draft persisted for one Session, in bytes.
@@ -651,6 +651,27 @@ pub struct UiPreferences {
     /// Unsent composer text per Session, keyed by Session id.
     #[serde(default)]
     pub session_drafts: BTreeMap<String, String>,
+    /// Appearance overrides applied only while one Host workspace is selected.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub workspace_overrides: BTreeMap<String, WorkspacePrefs>,
+}
+
+/// Per-workspace appearance overrides; `None` inherits the global value.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WorkspacePrefs {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub density: Option<UiDensity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_panel_width: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_workspace_explorer: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_panel_width: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changes_panel_width: Option<f32>,
 }
 
 impl Default for UiPreferences {
@@ -674,6 +695,7 @@ impl Default for UiPreferences {
             restore_last_session: default_restore_last_session(),
             last_session_id: None,
             session_drafts: BTreeMap::new(),
+            workspace_overrides: BTreeMap::new(),
         }
     }
 }
@@ -783,6 +805,37 @@ impl UiPreferences {
                 ));
             }
         }
+        for (workspace_id, prefs) in &self.workspace_overrides {
+            if workspace_id.is_empty() || workspace_id.chars().count() > 256 {
+                return Err(UiPreferencesError::InvalidValue(
+                    "each workspaceOverrides key must be a non-empty workspace id of at most 256 characters",
+                ));
+            }
+            if prefs
+                .session_panel_width
+                .is_some_and(|width| !width.is_finite() || !(SESSION_PANEL_WIDTH_MIN..=SESSION_PANEL_WIDTH_MAX).contains(&width))
+            {
+                return Err(UiPreferencesError::InvalidValue(
+                    "workspaceOverrides sessionPanelWidth must be from 220 to 400",
+                ));
+            }
+            if prefs
+                .workspace_panel_width
+                .is_some_and(|width| !width.is_finite() || !(WORKSPACE_PANEL_WIDTH_MIN..=WORKSPACE_PANEL_WIDTH_MAX).contains(&width))
+            {
+                return Err(UiPreferencesError::InvalidValue(
+                    "workspaceOverrides workspacePanelWidth must be within the Explorer panel range",
+                ));
+            }
+            if prefs
+                .changes_panel_width
+                .is_some_and(|width| !width.is_finite() || !(CHANGES_PANEL_WIDTH_MIN..=CHANGES_PANEL_WIDTH_MAX).contains(&width))
+            {
+                return Err(UiPreferencesError::InvalidValue(
+                    "workspaceOverrides changesPanelWidth must be within the Changes panel range",
+                ));
+            }
+        }
         for (scheme, palette) in [
             ("dark", &self.custom_theme.dark),
             ("light", &self.custom_theme.light),
@@ -817,6 +870,68 @@ impl UiPreferences {
             enabled.push(chord);
         }
         Ok(())
+    }
+
+    /// Resolves display preferences for one selected workspace, applying its
+    /// overrides over the global values. An unset override inherits globally.
+    pub fn workspace_prefs(&self, workspace: Option<&str>) -> WorkspacePrefs {
+        let mut effective = WorkspacePrefs {
+            theme: Some(self.theme),
+            density: Some(self.density),
+            session_panel_width: Some(self.session_panel_width),
+            show_workspace_explorer: Some(self.show_workspace_explorer),
+            workspace_panel_width: Some(self.workspace_panel_width),
+            changes_panel_width: Some(self.changes_panel_width),
+        };
+        if let Some(workspace) = workspace {
+            if let Some(override_) = self.workspace_overrides.get(workspace) {
+                if override_.theme.is_some() {
+                    effective.theme = override_.theme;
+                }
+                if override_.density.is_some() {
+                    effective.density = override_.density;
+                }
+                if override_.session_panel_width.is_some() {
+                    effective.session_panel_width = override_.session_panel_width;
+                }
+                if override_.show_workspace_explorer.is_some() {
+                    effective.show_workspace_explorer = override_.show_workspace_explorer;
+                }
+                if override_.workspace_panel_width.is_some() {
+                    effective.workspace_panel_width = override_.workspace_panel_width;
+                }
+                if override_.changes_panel_width.is_some() {
+                    effective.changes_panel_width = override_.changes_panel_width;
+                }
+            }
+        }
+        effective
+    }
+
+    /// Records a panel width as an override for the selected workspace, or
+    /// updates the global value when no workspace is selected.
+    pub fn set_workspace_panel_width(&mut self, workspace: Option<&str>, width: f32) {
+        if let Some(workspace) = workspace {
+            self.workspace_overrides
+                .entry(workspace.to_owned())
+                .or_default()
+                .workspace_panel_width = Some(width);
+        } else {
+            self.workspace_panel_width = width;
+        }
+    }
+
+    /// Records a Changes width as an override for the selected workspace, or
+    /// updates the global value when no workspace is selected.
+    pub fn set_changes_panel_width(&mut self, workspace: Option<&str>, width: f32) {
+        if let Some(workspace) = workspace {
+            self.workspace_overrides
+                .entry(workspace.to_owned())
+                .or_default()
+                .changes_panel_width = Some(width);
+        } else {
+            self.changes_panel_width = width;
+        }
     }
 
     /// Parses a complete JSON preferences object and validates its values.
@@ -1828,7 +1943,7 @@ mod tests {
     #[test]
     fn rejects_unsupported_versions_invalid_values_and_unknown_fields() {
         for text in [
-            r#"{"schemaVersion":5}"#,
+            r#"{"schemaVersion":6}"#,
             r#"{"uiScale":3.0}"#,
             r#"{"sessionPanelWidth":500.0}"#,
             r#"{"workspacePanelWidth":600.0}"#,
@@ -1838,6 +1953,57 @@ mod tests {
         ] {
             assert!(UiPreferences::parse_json(text).is_err(), "{text}");
         }
+    }
+
+    #[test]
+    fn workspace_overrides_resolve_and_persist() {
+        let directory = TestDirectory::new();
+        let path = directory.file();
+        let mut preferences = UiPreferences::default();
+        preferences.workspace_overrides.insert(
+            "w1".to_owned(),
+            WorkspacePrefs {
+                theme: Some(ThemeMode::Dark),
+                density: Some(UiDensity::Compact),
+                workspace_panel_width: Some(300.0),
+                ..WorkspacePrefs::default()
+            },
+        );
+        preferences.save(&path).unwrap();
+        let loaded = UiPreferences::load(&path).unwrap();
+        assert_eq!(loaded.schema_version, SCHEMA_VERSION);
+        let effective = loaded.workspace_prefs(Some("w1"));
+        assert_eq!(effective.theme, Some(ThemeMode::Dark));
+        assert_eq!(effective.density, Some(UiDensity::Compact));
+        assert_eq!(effective.workspace_panel_width, Some(300.0));
+        // Unrelated workspaces and no selection inherit the global values.
+        let other = loaded.workspace_prefs(Some("w2"));
+        assert_eq!(other.theme, Some(loaded.theme));
+        assert_eq!(other.density, Some(loaded.density));
+        let global = loaded.workspace_prefs(None);
+        assert_eq!(global.theme, Some(loaded.theme));
+        // A panel drag records into the selected workspace's override.
+        let mut dragged = loaded.clone();
+        dragged.set_workspace_panel_width(Some("w1"), 250.0);
+        assert_eq!(
+            dragged.workspace_prefs(Some("w1")).workspace_panel_width,
+            Some(250.0)
+        );
+        dragged.set_changes_panel_width(None, 420.0);
+        assert_eq!(dragged.changes_panel_width, 420.0);
+    }
+
+    #[test]
+    fn rejects_out_of_range_workspace_override_widths() {
+        let mut preferences = UiPreferences::default();
+        preferences.workspace_overrides.insert(
+            "w1".to_owned(),
+            WorkspacePrefs {
+                workspace_panel_width: Some(600.0),
+                ..WorkspacePrefs::default()
+            },
+        );
+        assert!(preferences.validate().is_err());
     }
 
     #[test]

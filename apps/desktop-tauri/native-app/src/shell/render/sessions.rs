@@ -542,7 +542,7 @@ pub(crate) fn panel(
     let mut column = div()
         .flex()
         .flex_col()
-        .w(theme.sp(app.ui_preferences.session_panel_width))
+        .w(theme.sp(app.ui_preferences.workspace_prefs(app.selected_workspace.as_deref()).session_panel_width.unwrap_or(app.ui_preferences.session_panel_width)))
         .min_w(theme.sp(layout::SIDEBAR_MIN))
         .max_w(theme.sp(layout::SIDEBAR_MAX))
         .min_h(px(0.))

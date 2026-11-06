@@ -3922,14 +3922,37 @@ impl DesktopApp {
 
     /// Recomputes the theme after the preferences changed.
     pub(crate) fn refresh_theme(&mut self, window: &Window) {
-        self.theme = Theme::new(&self.ui_preferences, appearance_is_dark(window.appearance()));
+        let mut effective = self.ui_preferences.clone();
+        if let Some(id) = self.selected_workspace.clone() {
+            if let Some(override_) = effective.workspace_overrides.get(&id).cloned() {
+                if let Some(theme) = override_.theme {
+                    effective.theme = theme;
+                }
+                if let Some(density) = override_.density {
+                    effective.density = density;
+                }
+            }
+        }
+        self.theme = Theme::new(&effective, appearance_is_dark(window.appearance()));
     }
 
     /// Starts resizing one docked panel from a pointer position.
     pub(crate) fn begin_panel_drag(&mut self, target: ResizeTarget, start_x: f32) {
         let (start_width, start_secondary) = match target {
-            ResizeTarget::Explorer => (self.ui_preferences.workspace_panel_width, 0.0),
-            ResizeTarget::Changes => (self.ui_preferences.changes_panel_width, 0.0),
+            ResizeTarget::Explorer => (
+                self.ui_preferences
+                    .workspace_prefs(self.selected_workspace.as_deref())
+                    .workspace_panel_width
+                    .unwrap_or(self.ui_preferences.workspace_panel_width),
+                0.0,
+            ),
+            ResizeTarget::Changes => (
+                self.ui_preferences
+                    .workspace_prefs(self.selected_workspace.as_deref())
+                    .changes_panel_width
+                    .unwrap_or(self.ui_preferences.changes_panel_width),
+                0.0,
+            ),
             ResizeTarget::TerminalPane(boundary) => {
                 self.terminal_pane_widths
                     .resize(self.terminal_pane_count(), 1.0);
@@ -3955,14 +3978,18 @@ impl DesktopApp {
         let delta = x - drag.start_x;
         match drag.target {
             ResizeTarget::Explorer => {
-                self.ui_preferences.workspace_panel_width = (drag.start_width + delta).clamp(
+                let width = (drag.start_width + delta).clamp(
                     crate::layout::EXPLORER_MIN,
                     crate::layout::EXPLORER_MAX,
                 );
+                self.ui_preferences
+                    .set_workspace_panel_width(self.selected_workspace.as_deref(), width);
             }
             ResizeTarget::Changes => {
-                self.ui_preferences.changes_panel_width = (drag.start_width - delta)
-                    .clamp(crate::layout::CHANGES_MIN, crate::layout::CHANGES_MAX);
+                let width =
+                    (drag.start_width - delta).clamp(crate::layout::CHANGES_MIN, crate::layout::CHANGES_MAX);
+                self.ui_preferences
+                    .set_changes_panel_width(self.selected_workspace.as_deref(), width);
             }
             ResizeTarget::TerminalPane(boundary) => {
                 let total = drag.start_width + drag.start_secondary;

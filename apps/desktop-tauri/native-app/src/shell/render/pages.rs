@@ -430,6 +430,125 @@ fn settings(
             )
         })
         .child(widgets::separator(theme))
+        .child(section(theme, "Workspace appearance"))
+        .child(line(
+            theme,
+            match app.selected_workspace.as_deref() {
+                Some(id) => format!("Overrides for {id} (empty inherits global)"),
+                None => "Select a workspace in the Sessions panel to set its overrides.".to_owned(),
+            },
+        ))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(6.))
+                .child(line(theme, "Explorer"))
+                .child(
+                    widgets::Button::new(
+                        theme,
+                        if app.show_explorer { "Show" } else { "Hide" },
+                    )
+                    .enabled(app.selected_workspace.is_some())
+                    .build()
+                    .id("pref-workspace-explorer")
+                    .on_click(cx.listener(|app, _, window, cx| {
+                        let workspace = app.selected_workspace.clone();
+                        app.update_preferences(window, |preferences| {
+                            if let Some(id) = workspace {
+                                let next = !preferences
+                                    .workspace_prefs(Some(&id))
+                                    .show_workspace_explorer
+                                    .unwrap_or(preferences.show_workspace_explorer);
+                                preferences
+                                    .workspace_overrides
+                                    .entry(id)
+                                    .or_default()
+                                    .show_workspace_explorer = Some(next);
+                            }
+                        });
+                        let id = app.selected_workspace.clone();
+                        app.show_explorer = app
+                            .ui_preferences
+                            .workspace_prefs(id.as_deref())
+                            .show_workspace_explorer
+                            .unwrap_or(app.ui_preferences.show_workspace_explorer);
+                        cx.notify();
+                    })),
+                )
+                .child(
+                    widgets::Button::new(theme, "Clear override")
+                        .enabled(app.selected_workspace.is_some())
+                        .build()
+                        .id("pref-workspace-clear")
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            let workspace = app.selected_workspace.clone();
+                            app.update_preferences(window, |preferences| {
+                                if let Some(id) = workspace {
+                                    preferences.workspace_overrides.remove(&id);
+                                }
+                            });
+                            cx.notify();
+                        })),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(6.))
+                .child(line(theme, "Density"))
+                .child(
+                    widgets::Button::new(theme, "Compact")
+                        .enabled(app.selected_workspace.is_some() && !compact)
+                        .build()
+                        .id("pref-workspace-compact")
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            let workspace = app.selected_workspace.clone();
+                            app.update_preferences(window, |preferences| {
+                                if let Some(id) = workspace {
+                                    preferences
+                                        .workspace_overrides
+                                        .entry(id)
+                                        .or_default()
+                                        .density = Some(UiDensity::Compact);
+                                }
+                            });
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    widgets::Button::new(theme, "Clear density")
+                        .enabled(app.selected_workspace.is_some())
+                        .build()
+                        .id("pref-workspace-density-clear")
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            let workspace = app.selected_workspace.clone();
+                            app.update_preferences(window, |preferences| {
+                                if let Some(id) = workspace {
+                                    let remove = match preferences.workspace_overrides.get_mut(&id) {
+                                        Some(entry) => {
+                                            entry.density = None;
+                                            entry.theme.is_none()
+                                                && entry.session_panel_width.is_none()
+                                                && entry.show_workspace_explorer.is_none()
+                                                && entry.workspace_panel_width.is_none()
+                                                && entry.changes_panel_width.is_none()
+                                        }
+                                        None => false,
+                                    };
+                                    if remove {
+                                        preferences.workspace_overrides.remove(&id);
+                                    }
+                                }
+                            });
+                            cx.notify();
+                        })),
+                ),
+        )
+        .child(widgets::separator(theme))
         .child(section(theme, "Desktop updates"))
         .child(line(
             theme,
