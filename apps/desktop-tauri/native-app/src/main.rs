@@ -39,6 +39,7 @@ use dsh_client_core::{
         SelectModelResponse,
     },
     office_to_pdf::OfficeToPdfClient,
+    workspace::{WorkspaceArchiveValue, WorkspaceClient, WorkspacePinValue},
     plugins::{BundleInfo, ChangeResult, ManagedPlugin, PluginInventorySnapshot, PluginsClient},
     remote_events::{RemoteEvent, RemoteEventError, RemoteEventOutcome, RemoteEvents},
     remote_stream::RemoteStreamMux,
@@ -1589,6 +1590,11 @@ struct DesktopApp {
     session_search: Option<SessionSearchResponse>,
     session_title: String,
     fork_seq_text: String,
+    archived_session_ids: Vec<String>,
+    pinned_session_ids: Vec<String>,
+    archive_receiver: Option<mpsc::Receiver<Result<WorkspaceArchiveValue, Error>>>,
+    pin_receiver: Option<mpsc::Receiver<Result<WorkspacePinValue, Error>>>,
+    workspace_status: Option<String>,
     sessions_status: String,
     sessions_error: Option<String>,
     sessions_failure_context: &'static str,
@@ -1791,6 +1797,11 @@ impl DesktopApp {
             session_search: None,
             session_title: String::new(),
             fork_seq_text: String::new(),
+            archived_session_ids: Vec::new(),
+            pinned_session_ids: Vec::new(),
+            archive_receiver: None,
+            pin_receiver: None,
+            workspace_status: None,
             sessions_status: String::new(),
             sessions_error: None,
             sessions_failure_context: "",
@@ -2035,6 +2046,64 @@ impl DesktopApp {
 
     fn refresh_sessions(&mut self) {
         self.request_sessions(SessionOperation::List);
+    }
+
+    fn write_archive(&mut self, session_id: String, stop_activity: bool, archive: bool) {
+        if self.archive_receiver.is_some() {
+            return;
+        }
+        let Some(transport) = self.transport.clone() else {
+            self.sessions_error = Some("Connect to change session grouping".to_owned());
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let client = WorkspaceClient::new(&transport);
+            let result = if archive {
+                client.archive_session(&session_id, stop_activity)
+            } else {
+                client.unarchive_session(&session_id)
+            };
+            let _ = sender.send(result);
+        });
+        self.archive_receiver = Some(receiver);
+        self.workspace_status = Some("Updating session grouping…".to_owned());
+    }
+
+    fn archive_selected_session(&mut self, stop_activity: bool) {
+        let Some(session_id) = self.selected_session.clone() else {
+            return;
+        };
+        self.write_archive(session_id, stop_activity, true);
+    }
+
+    fn unarchive_session(&mut self, session_id: String) {
+        self.write_archive(session_id, false, false);
+    }
+
+    fn set_selected_session_pinned(&mut self, pinned: bool) {
+        let Some(session_id) = self.selected_session.clone() else {
+            return;
+        };
+        if self.pin_receiver.is_some() {
+            return;
+        }
+        let Some(transport) = self.transport.clone() else {
+            self.sessions_error = Some("Connect to change session grouping".to_owned());
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let client = WorkspaceClient::new(&transport);
+            let result = if pinned {
+                client.pin_session(&session_id)
+            } else {
+                client.unpin_session(&session_id)
+            };
+            let _ = sender.send(result);
+        });
+        self.pin_receiver = Some(receiver);
+        self.workspace_status = Some("Updating session grouping…".to_owned());
     }
 
     fn request_sessions(&mut self, operation: SessionOperation) {
@@ -4001,6 +4070,53 @@ impl DesktopApp {
                 }
             }
         }
+        if let Some(receiver) = &self.archive_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(value)) => {
+                    self.archived_session_ids = value.archived_session_ids;
+                    self.workspace_status = Some(format!(
+                        "{} archived session(s)",
+                        self.archived_session_ids.len()
+                    ));
+                    self.archive_receiver = None;
+                    self.refresh_sessions();
+                }
+                Ok(Err(error)) => {
+                    self.sessions_error = Some(format!("Archive change failed: {error}"));
+                    self.archive_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.sessions_error = Some("Archive worker stopped unexpectedly".into());
+                    self.archive_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30))
+                }
+            }
+        }
+        if let Some(receiver) = &self.pin_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(value)) => {
+                    self.pinned_session_ids = value.pinned_session_ids;
+                    self.workspace_status = Some(format!(
+                        "{} pinned session(s)",
+                        self.pinned_session_ids.len()
+                    ));
+                    self.pin_receiver = None;
+                }
+                Ok(Err(error)) => {
+                    self.sessions_error = Some(format!("Pin change failed: {error}"));
+                    self.pin_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.sessions_error = Some("Pin worker stopped unexpectedly".into());
+                    self.pin_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(30))
+                }
+            }
+        }
         if let Some(receiver) = &self.page_receiver {
             match receiver.try_recv() {
                 Ok(Ok((through_seq, page, live))) => {
@@ -5007,7 +5123,31 @@ impl DesktopApp {
                                                 ));
                                             }
                                         }
+                                        if ui.button("Archive selected").clicked() {
+                                            self.archive_selected_session(false);
+                                        }
+                                        if ui.button("Archive and stop").clicked() {
+                                            self.archive_selected_session(true);
+                                        }
+                                        let pinned = self
+                                            .pinned_session_ids
+                                            .contains(&session_id);
+                                        if ui.button(if pinned { "Unpin selected" } else { "Pin selected" }).clicked() {
+                                            self.set_selected_session_pinned(!pinned);
+                                        }
                                     });
+                                    if !self.archived_session_ids.is_empty() {
+                                        ui.separator();
+                                        ui.heading("Archived");
+                                        for id in self.archived_session_ids.clone() {
+                                            ui.horizontal(|ui| {
+                                                ui.label(id.clone());
+                                                if ui.button("Unarchive").clicked() {
+                                                    self.unarchive_session(id);
+                                                }
+                                            });
+                                        }
+                                    }
                                 });
                         }
                     });

@@ -185,6 +185,57 @@ pub(crate) fn panel(
                             cx.notify();
                         })),
                 ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .gap(theme.sp(4.))
+                .child(
+                    widgets::Button::new(theme, "Archive")
+                        .enabled(connected)
+                        .build()
+                        .id("session-archive")
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.archive_selected_session(false);
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    widgets::Button::new(theme, "Archive & stop")
+                        .enabled(connected)
+                        .build()
+                        .id("session-archive-stop")
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.archive_selected_session(true);
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    widgets::Button::new(
+                        theme,
+                        if app
+                            .selected_session
+                            .as_deref()
+                            .is_some_and(|id| app.pinned_session_ids.iter().any(|pinned| pinned == id))
+                        {
+                            "Unpin"
+                        } else {
+                            "Pin"
+                        },
+                    )
+                    .enabled(connected)
+                    .build()
+                    .id("session-pin")
+                    .on_click(cx.listener(|app, _, _, cx| {
+                        let pinned = app
+                            .selected_session
+                            .as_deref()
+                            .is_some_and(|id| app.pinned_session_ids.iter().any(|pinned| pinned == id));
+                        app.set_selected_session_pinned(!pinned);
+                        cx.notify();
+                    })),
+                ),
         );
 
     let mut inventory = div()
@@ -378,6 +429,43 @@ pub(crate) fn panel(
                 ),
         );
     }
+    let mut archived_block = div()
+        .flex()
+        .flex_col()
+        .gap(px(2.))
+        .px(theme.sp(8.))
+        .py(theme.sp(4.));
+    if !app.archived_session_ids.is_empty() {
+        archived_block = archived_block.child(widgets::section_label(theme, "ARCHIVED"));
+        for id in app.archived_session_ids.clone() {
+            let id_for_action = id.clone();
+            archived_block = archived_block.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(theme.sp(4.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(theme.fs(10.))
+                            .text_color(theme.muted)
+                            .truncate()
+                            .child(session_list::truncate(&id, 30)),
+                    )
+                    .child(
+                        widgets::Button::new(theme, "Unarchive")
+                            .enabled(connected)
+                            .build()
+                            .id(gpui::SharedString::from(format!("session-unarchive-{id_for_action}")))
+                            .on_click(cx.listener(move |app, _, _, cx| {
+                                app.unarchive_session(id_for_action.clone());
+                                cx.notify();
+                            })),
+                    ),
+            );
+        }
+    }
     column
         .child(
             div()
@@ -386,6 +474,7 @@ pub(crate) fn panel(
                 .px(theme.sp(6.))
                 .child(inventory),
         )
+        .child(archived_block)
         .child(footer)
         .into_any_element()
 }

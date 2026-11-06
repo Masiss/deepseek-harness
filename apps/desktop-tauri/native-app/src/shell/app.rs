@@ -54,6 +54,7 @@ use dsh_client_core::{
     terminal::{
         self, TerminalClient, TerminalCloseRequest, TerminalCreateRequest, TerminalInput,
     },
+    workspace::{WorkspaceArchiveValue, WorkspaceClient, WorkspacePinValue},
     workspace_files::{
         WorkspaceByteRange, WorkspaceByteReadOptions, WorkspaceFileRange, WorkspaceFileScope,
         WorkspaceFilesClient,
@@ -463,6 +464,13 @@ pub(crate) struct DesktopApp {
     pub(crate) started_at: std::time::Instant,
     pub(crate) connect_receiver: Option<mpsc::Receiver<Result<(String, HttpTransport), Error>>>,
     pub(crate) sessions_receiver: Option<mpsc::Receiver<Result<SessionUpdate, Error>>>,
+    /// Archived Session ids as last reported by an archive mutation.
+    pub(crate) archived_session_ids: Vec<String>,
+    /// Pinned Session ids as last reported by a pin mutation.
+    pub(crate) pinned_session_ids: Vec<String>,
+    pub(crate) archive_receiver: Option<mpsc::Receiver<Result<WorkspaceArchiveValue, Error>>>,
+    pub(crate) pin_receiver: Option<mpsc::Receiver<Result<WorkspacePinValue, Error>>>,
+    pub(crate) workspace_status: Option<String>,
     pub(crate) session_query: String,
     pub(crate) session_search: Option<SessionSearchResponse>,
     pub(crate) session_title: String,
@@ -797,6 +805,11 @@ impl DesktopApp {
             started_at: std::time::Instant::now(),
             connect_receiver: None,
             sessions_receiver: None,
+            archived_session_ids: Vec::new(),
+            pinned_session_ids: Vec::new(),
+            archive_receiver: None,
+            pin_receiver: None,
+            workspace_status: None,
             session_query: String::new(),
             session_search: None,
             session_title: String::new(),
@@ -3128,6 +3141,68 @@ impl DesktopApp {
         self.sessions_receiver.is_some()
     }
 
+    /// Archives the selected Session; `stop_activity` also stops its running
+    /// work instead of being refused as `workspace/session-active`.
+    pub(crate) fn archive_selected_session(&mut self, stop_activity: bool) {
+        let Some(session_id) = self.selected_session.clone() else {
+            return;
+        };
+        self.write_archive(session_id, stop_activity, true);
+    }
+
+    /// Restores one archived Session by id.
+    pub(crate) fn unarchive_session(&mut self, session_id: String) {
+        self.write_archive(session_id, false, false);
+    }
+
+    fn write_archive(&mut self, session_id: String, stop_activity: bool, archive: bool) {
+        if self.archive_receiver.is_some() {
+            return;
+        }
+        let Some(transport) = self.transport.clone() else {
+            self.sessions_error = Some("Connect to change session grouping".to_owned());
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let client = WorkspaceClient::new(&transport);
+            let result = if archive {
+                client.archive_session(&session_id, stop_activity)
+            } else {
+                client.unarchive_session(&session_id)
+            };
+            let _ = sender.send(result);
+        });
+        self.archive_receiver = Some(receiver);
+        self.workspace_status = Some("Updating session grouping…".to_owned());
+    }
+
+    /// Pins or unpins the selected Session.
+    pub(crate) fn set_selected_session_pinned(&mut self, pinned: bool) {
+        let Some(session_id) = self.selected_session.clone() else {
+            return;
+        };
+        if self.pin_receiver.is_some() {
+            return;
+        }
+        let Some(transport) = self.transport.clone() else {
+            self.sessions_error = Some("Connect to change session grouping".to_owned());
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let client = WorkspaceClient::new(&transport);
+            let result = if pinned {
+                client.pin_session(&session_id)
+            } else {
+                client.unpin_session(&session_id)
+            };
+            let _ = sender.send(result);
+        });
+        self.pin_receiver = Some(receiver);
+        self.workspace_status = Some("Updating session grouping…".to_owned());
+    }
+
     /// Answers the first pending approval.
     pub(crate) fn decide_approval(&mut self, allow: bool) {
         let Some(pending) = self.pending_approvals.first().cloned() else {
@@ -4398,6 +4473,53 @@ impl DesktopApp {
                 }
             }
         }
+        if let Some(receiver) = &self.archive_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(value)) => {
+                    self.archived_session_ids = value.archived_session_ids;
+                    self.workspace_status = Some(format!(
+                        "{} archived session(s)",
+                        self.archived_session_ids.len()
+                    ));
+                    self.archive_receiver = None;
+                    self.refresh_sessions();
+                }
+                Ok(Err(error)) => {
+                    self.sessions_error = Some(format!("Archive change failed: {error}"));
+                    self.archive_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.sessions_error = Some("Archive worker stopped unexpectedly".into());
+                    self.archive_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.repaint_soon = true;
+                }
+            }
+        }
+        if let Some(receiver) = &self.pin_receiver {
+            match receiver.try_recv() {
+                Ok(Ok(value)) => {
+                    self.pinned_session_ids = value.pinned_session_ids;
+                    self.workspace_status = Some(format!(
+                        "{} pinned session(s)",
+                        self.pinned_session_ids.len()
+                    ));
+                    self.pin_receiver = None;
+                }
+                Ok(Err(error)) => {
+                    self.sessions_error = Some(format!("Pin change failed: {error}"));
+                    self.pin_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.sessions_error = Some("Pin worker stopped unexpectedly".into());
+                    self.pin_receiver = None;
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    self.repaint_soon = true;
+                }
+            }
+        }
         if let Some(receiver) = &self.page_receiver {
             match receiver.try_recv() {
                 Ok(Ok((through_seq, page, live))) => {
@@ -5266,6 +5388,8 @@ fn has_pending_workers(app: &DesktopApp) -> bool {
     app.host_receiver.is_some()
         || app.connect_receiver.is_some()
         || app.sessions_receiver.is_some()
+        || app.archive_receiver.is_some()
+        || app.pin_receiver.is_some()
         || app.page_receiver.is_some()
         || app.chat_receiver.is_some()
         || app.cancel_receiver.is_some()

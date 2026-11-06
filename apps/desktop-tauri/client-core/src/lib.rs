@@ -29,6 +29,7 @@ pub mod terminal;
 pub mod transport;
 pub mod user_questions;
 pub mod upload;
+pub mod workspace;
 pub mod workspace_files;
 
 #[derive(Debug, thiserror::Error)]
