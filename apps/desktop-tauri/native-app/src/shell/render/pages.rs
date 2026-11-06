@@ -1747,6 +1747,11 @@ fn document(
             app.set_input("document-body", &pending, cx);
         }
         let body_input = app.text_field("document-body", "Document text", true, cx);
+        if let Some((target, line)) = app.preview_target_line.take() {
+            if target == app.preview_path {
+                body_input.update(cx, |input, cx| input.reveal_line(line, cx));
+            }
+        }
         content = content
             .child(
                 div()

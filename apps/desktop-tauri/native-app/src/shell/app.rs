@@ -573,6 +573,8 @@ pub(crate) struct DesktopApp {
     pub(crate) preview_receiver: Option<mpsc::Receiver<Result<PreviewDocument, String>>>,
     /// Editable copy of the loaded text document; saved with its version guard.
     pub(crate) preview_draft: String,
+    /// Path and 1-based line the document editor should reveal on the next render.
+    pub(crate) preview_target_line: Option<(String, u64)>,
     /// Draft text to install into the document editor on the next render.
     pub(crate) pending_preview_text: Option<String>,
     pub(crate) preview_save_receiver: Option<mpsc::Receiver<Result<WorkspaceFileWriteResult, Error>>>,
@@ -967,6 +969,7 @@ impl DesktopApp {
             preview_error: None,
             preview_receiver: None,
             preview_draft: String::new(),
+            preview_target_line: None,
             pending_preview_text: None,
             preview_save_receiver: None,
             preview_save_status: None,
@@ -2527,6 +2530,7 @@ impl DesktopApp {
             self.feedback_items.clear();
             self.preview_document = None;
             self.preview_image = None;
+            self.preview_target_line = None;
             self.preview_error = None;
         }
         self.refresh_feedback();

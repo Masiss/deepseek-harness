@@ -509,6 +509,7 @@ pub(crate) fn panel(
         ));
         for found in app.file_search_items.iter().take(12) {
             let path = found.path.clone();
+            let line = found.line;
             search_block = search_block.child(
                 div()
                     .flex()
@@ -530,6 +531,7 @@ pub(crate) fn panel(
                     )
                     .on_click(cx.listener(move |app, _, _, cx| {
                         app.preview_path = path.clone();
+                        app.preview_target_line = Some((path.clone(), line));
                         app.show_document = true;
                         app.active_view = crate::shell::app::ActiveView::Document;
                         app.read_document();

@@ -174,6 +174,17 @@ impl TextInput {
         cx.notify();
     }
 
+    /// Places the caret at the start of one 1-based line.
+    ///
+    /// The viewport follows the caret, so this scrolls an off-screen line into
+    /// view without a separate scroll offset.
+    pub(crate) fn reveal_line(&mut self, line: u64, cx: &mut Context<Self>) {
+        let offset = line_start_offset(&self.content, line);
+        self.selected_range = offset..offset;
+        self.selection_reversed = false;
+        cx.notify();
+    }
+
     /// Places the caret at the end and requests focus.
     pub(crate) fn focus(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
         self.selected_range = self.content.len()..self.content.len();
@@ -997,9 +1008,34 @@ pub(crate) fn text_input_element(
         })
 }
 
+/// Byte offset of the first character of a 1-based line, clamped to the text.
+fn line_start_offset(content: &str, line: u64) -> usize {
+    let mut offset = 0;
+    let mut remaining = line.saturating_sub(1);
+    while remaining > 0 {
+        let Some(next) = content[offset..].find('\n') else {
+            return content.len();
+        };
+        offset += next + 1;
+        remaining -= 1;
+    }
+    offset
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reveal_line_offsets_count_newlines_and_clamp_past_the_end() {
+        let content = "one\ntwo\nthree";
+        assert_eq!(line_start_offset(content, 1), 0);
+        assert_eq!(line_start_offset(content, 2), 4);
+        assert_eq!(line_start_offset(content, 3), 8);
+        assert_eq!(line_start_offset(content, 99), content.len());
+        assert_eq!(line_start_offset("", 3), 0);
+        assert_eq!(line_start_offset("one\n", 2), 4);
+    }
 
     #[test]
     fn unbound_named_keys_cover_page_function_and_insert_keys() {
