@@ -8,6 +8,7 @@ pub mod auth;
 pub mod binary_response;
 pub mod chat;
 pub mod commands;
+pub mod diagnostics;
 pub mod envelope;
 pub mod follow;
 pub mod goals;

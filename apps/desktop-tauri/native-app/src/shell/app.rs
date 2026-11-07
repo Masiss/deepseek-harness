@@ -10,6 +10,7 @@ use crate::explorer::WorkspaceExplorer;
 use crate::host::{self, Host};
 use crate::question_card::QuestionCard;
 use crate::restart;
+use crate::session_list;
 use crate::transcript::{self, RowKind, Transcript};
 use crate::ui_preferences::UiPreferences;
 use dsh_client_core::{
@@ -18,6 +19,7 @@ use dsh_client_core::{
     commands::{
         CommandDescriptor, CommandExecution, CommandResult, CommandSubmitAttachment, CommandsClient,
     },
+    diagnostics::{DiagnoseResponse, DiagnosticItem, DiagnosticsClient, DiagnosticsResponse},
     follow::{self, FollowFrame, FollowRequest},
     git::{
         GitBranches, GitCheckoutResult, GitClient, GitCommitResult, GitDiff, GitFile,
@@ -117,6 +119,7 @@ enum SessionOperation {
     Create(Option<String>),
     Rename(RenameSessionRequest),
     Fork(ForkSessionRequest),
+    Delete(String),
 }
 
 enum SessionUpdate {
@@ -125,6 +128,7 @@ enum SessionUpdate {
     Created(String),
     Renamed(String),
     Forked(String),
+    Deleted(String),
 }
 
 /// What startup does with the last opened Session.
@@ -395,6 +399,7 @@ pub(crate) enum BottomTool {
     Jobs,
     Schedules,
     Deliverables,
+    Diagnostics,
 }
 
 /// Goal lifecycle change requested by the Goals surface.
@@ -422,6 +427,24 @@ type PluginInventoryResult =
 /// Terminal panes one window may show at once, including the primary pane.
 pub(crate) const MAX_TERMINAL_PANES: usize = 4;
 
+/// Most Agent buffers kept open at once. Older non-active buffers are evicted.
+pub(crate) const MAX_AGENT_TABS: usize = 6;
+
+/// Replace one document's diagnostics with a fresh on-demand result. An empty
+/// `uri` means the Host could not resolve a file, so nothing is replaced.
+/// @param items - merged snapshot to update.
+/// @param uri - canonical file URI the result describes.
+/// @param incoming - diagnostics just published for that file.
+pub(crate) fn merge_diagnostics(
+    items: &mut Vec<DiagnosticItem>,
+    uri: &str,
+    incoming: Vec<DiagnosticItem>,
+) {
+    if !uri.is_empty() {
+        items.retain(|item| item.uri != uri);
+    }
+    items.extend(incoming);
+}
 /// Input field keys, one per pane index.
 pub(crate) const TERMINAL_INPUT_KEYS: [&str; MAX_TERMINAL_PANES] = [
     "terminal-input",
@@ -506,6 +529,9 @@ pub(crate) struct DesktopApp {
     pub(crate) streams: Option<RemoteStreamMux>,
     pub(crate) sessions: Vec<SessionSummary>,
     pub(crate) selected_session: Option<String>,
+    /// Session ids open as Agent buffers, in display order; the active buffer
+    /// is {@link selected_session}.
+    pub(crate) agent_tabs: Vec<String>,
     pub(crate) page_has_more: bool,
     pub(crate) page_loading: bool,
     pub(crate) page_before_seq: Option<i64>,
@@ -553,6 +579,16 @@ pub(crate) struct DesktopApp {
     /// Height the question/approval stack used last frame, kept out of the transcript.
     pub(crate) attention_reserved_height: f32,
     pub(crate) deliverables: Vec<DeliverableFile>,
+    /// Diagnostics published by configured language servers for the selected Session.
+    pub(crate) diagnostics: Vec<DiagnosticItem>,
+    /// Workspace root the current diagnostics snapshot describes.
+    pub(crate) diagnostics_workspace: Option<String>,
+    pub(crate) diagnostics_loading: bool,
+    pub(crate) diagnostics_error: Option<String>,
+    pub(crate) diagnostics_receiver:
+        Option<mpsc::Receiver<Result<DiagnosticsResponse, Error>>>,
+    /// On-demand diagnose worker for the document currently being opened.
+    pub(crate) diagnose_receiver: Option<mpsc::Receiver<Result<DiagnoseResponse, Error>>>,
     pub(crate) market_indexes: Vec<serde_json::Value>,
     pub(crate) market_results: Vec<serde_json::Value>,
     pub(crate) market_url: Option<String>,
@@ -590,6 +626,8 @@ pub(crate) struct DesktopApp {
     pub(crate) document_new_path: String,
     /// Whether the Delete button already asked for a second click.
     pub(crate) document_delete_confirm: bool,
+    /// Session id whose permanent deletion is waiting for a second click.
+    pub(crate) session_delete_confirm: Option<String>,
     pub(crate) document_op_status: Option<String>,
     pub(crate) document_op_receiver:
         Option<mpsc::Receiver<Result<DocumentMutation, Error>>>,
@@ -926,6 +964,7 @@ impl DesktopApp {
             streams: None,
             sessions: Vec::new(),
             selected_session: None,
+            agent_tabs: Vec::new(),
             page_has_more: false,
             page_loading: false,
             page_before_seq: None,
@@ -962,6 +1001,12 @@ impl DesktopApp {
             pending_questions: Vec::new(),
             attention_reserved_height: 0.0,
             deliverables: Vec::new(),
+            diagnostics: Vec::new(),
+            diagnostics_workspace: None,
+            diagnostics_loading: false,
+            diagnostics_error: None,
+            diagnostics_receiver: None,
+            diagnose_receiver: None,
             market_indexes: Vec::new(),
             market_results: Vec::new(),
             market_url: None,
@@ -994,6 +1039,7 @@ impl DesktopApp {
             preview_save_status: None,
             document_new_path: String::new(),
             document_delete_confirm: false,
+            session_delete_confirm: None,
             document_op_status: None,
             document_op_receiver: None,
             show_document: false,
@@ -1224,6 +1270,7 @@ impl DesktopApp {
             SessionOperation::Create(_) => "Creating session…",
             SessionOperation::Rename(_) => "Renaming session…",
             SessionOperation::Fork(_) => "Forking session…",
+            SessionOperation::Delete(_) => "Deleting session…",
         }
         .to_owned();
         self.sessions_failure_context = match &operation {
@@ -1232,6 +1279,7 @@ impl DesktopApp {
             SessionOperation::Create(_) => "Create outcome unknown; refresh/search to confirm remote state before retrying",
             SessionOperation::Rename(_) => "Rename outcome unknown; reload the selected session to confirm its title before retrying",
             SessionOperation::Fork(_) => "Fork outcome unknown; refresh/search to confirm remote state before retrying",
+            SessionOperation::Delete(_) => "Delete outcome unknown; refresh the list before retrying",
         };
         self.sessions_error = None;
         let (sender, receiver) = mpsc::channel();
@@ -1256,6 +1304,9 @@ impl DesktopApp {
                 SessionOperation::Fork(request) => client
                     .fork(request)
                     .map(|response| SessionUpdate::Forked(response.session_id)),
+                SessionOperation::Delete(session_id) => client
+                    .delete(session_id)
+                    .map(|response| SessionUpdate::Deleted(response.session_id)),
             };
             let _ = sender.send(result);
         });
@@ -1645,6 +1696,9 @@ impl DesktopApp {
         }
         let (sender, receiver) = mpsc::channel();
         let image_path = is_image_path(&path);
+        if !image_path && !Self::is_office_path_now(&path) {
+            self.diagnose_file(path.clone());
+        }
         std::thread::spawn(move || {
             let client = WorkspaceFilesClient::new(&transport);
             let scope = WorkspaceFileScope { session_id };
@@ -2139,12 +2193,12 @@ impl DesktopApp {
 
     /// Stages one changed path.
     pub(crate) fn stage_git_path(&mut self, path: String) {
-        self.mutate_git_path(path, GitPathVerb::Stage);
+        self.mutate_git_path(path, GitPathVerb::Stage, None);
     }
 
     /// Unstages one changed path.
     pub(crate) fn unstage_git_path(&mut self, path: String) {
-        self.mutate_git_path(path, GitPathVerb::Unstage);
+        self.mutate_git_path(path, GitPathVerb::Unstage, None);
     }
 
     /// Opens a confirmation before discarding one path's unstaged change.
@@ -2205,7 +2259,7 @@ impl DesktopApp {
                     self.refresh_git();
                     return;
                 }
-                self.mutate_git_path(path, GitPathVerb::Discard);
+                self.mutate_git_path(path, GitPathVerb::Discard, Some(status));
             }
             GitConfirmation::Checkout {
                 session_id,
@@ -2238,7 +2292,7 @@ impl DesktopApp {
         }
     }
 
-    fn mutate_git_path(&mut self, path: String, verb: GitPathVerb) {
+    fn mutate_git_path(&mut self, path: String, verb: GitPathVerb, expected_status: Option<String>) {
         let (Some(session_id), Some(transport)) =
             (self.selected_session.clone(), self.transport.clone())
         else {
@@ -2254,7 +2308,7 @@ impl DesktopApp {
             let result = match verb {
                 GitPathVerb::Stage => client.stage(session_id, path),
                 GitPathVerb::Unstage => client.unstage(session_id, path),
-                GitPathVerb::Discard => client.discard(session_id, path),
+                GitPathVerb::Discard => client.discard(session_id, path, expected_status),
             };
             let _ = sender.send(GitUpdate::Path(result));
         });
@@ -2527,6 +2581,72 @@ impl DesktopApp {
         self.load_session_with_policy(session_id, false);
     }
 
+    /// Adds one Session to the Agent tab strip, keeping the active buffer.
+    ///
+    /// Opening a buffer that is already present only makes it active through
+    /// the caller's Session switch; the existing order is preserved.
+    /// @param session_id - Session to show as an Agent buffer.
+    pub(crate) fn open_agent_tab(&mut self, session_id: &str) {
+        if self.agent_tabs.iter().any(|id| id == session_id) {
+            return;
+        }
+        self.agent_tabs.push(session_id.to_owned());
+        while self.agent_tabs.len() > MAX_AGENT_TABS {
+            let active = self.selected_session.clone();
+            let Some(index) = self
+                .agent_tabs
+                .iter()
+                .position(|id| Some(id) != active.as_ref())
+            else {
+                break;
+            };
+            self.agent_tabs.remove(index);
+        }
+    }
+
+    /// Closes one Agent buffer. Closing the active buffer activates its right
+    /// neighbour, then its left one, or clears the conversation when none
+    /// remain.
+    /// @param session_id - Buffer to close.
+    pub(crate) fn close_agent_tab(&mut self, session_id: &str) {
+        let Some(index) = self.agent_tabs.iter().position(|id| id == session_id) else {
+            return;
+        };
+        self.agent_tabs.remove(index);
+        if self.selected_session.as_deref() != Some(session_id) {
+            return;
+        }
+        let next = self
+            .agent_tabs
+            .get(index)
+            .or_else(|| index.checked_sub(1).and_then(|left| self.agent_tabs.get(left)))
+            .cloned();
+        match next {
+            Some(next) => self.load_session(next),
+            None => {
+                self.selected_session = None;
+                self.session_title.clear();
+                self.chat_text.clear();
+                self.transcript.reset();
+            }
+        }
+    }
+
+    /// The buffer tab's label: the live title for the active buffer, otherwise
+    /// the Session list's projected label or a short identity.
+    /// @param session_id - Buffer whose label is requested.
+    /// @returns Display text for the tab.
+    pub(crate) fn agent_tab_label(&self, session_id: &str) -> String {
+        if self.selected_session.as_deref() == Some(session_id) && !self.session_title.is_empty() {
+            return self.session_title.clone();
+        }
+        self.sessions
+            .iter()
+            .find(|summary| summary.session_id == session_id)
+            .map(session_list::session_label)
+            .unwrap_or_else(|| session_list::truncate(session_id, 18))
+    }
+
     fn reload_session_after_reconnect(&mut self, session_id: String) {
         self.load_session_with_policy(session_id, true);
     }
@@ -2563,6 +2683,7 @@ impl DesktopApp {
             self.selected_skill = None;
         }
         self.selected_session = Some(session_id.clone());
+        self.open_agent_tab(&session_id);
         self.ui_preferences.last_session_id = Some(session_id.clone());
         self.mark_session_state_dirty();
         if !retain_loaded_view {
@@ -3050,6 +3171,100 @@ impl DesktopApp {
         }
     }
 
+    /// Requests diagnostics for the selected Session's workspace from the
+    /// configured language servers. Servers that have not run yet publish
+    /// nothing, so an empty snapshot is a normal result.
+    pub(crate) fn refresh_diagnostics(&mut self) {
+        let (Some(session), Some(transport)) = (self.selected_session.clone(), self.transport.clone())
+        else {
+            return;
+        };
+        if self.diagnostics_receiver.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(DiagnosticsClient::new(&transport).list(session));
+        });
+        self.diagnostics_receiver = Some(receiver);
+        self.diagnostics_loading = true;
+        self.diagnostics_error = None;
+    }
+
+    /// Reads the diagnostics worker's result into shell state.
+    /// @returns whether the shell should repaint.
+    fn poll_diagnostics(&mut self) -> bool {
+        let Some(receiver) = &self.diagnostics_receiver else {
+            return false;
+        };
+        match receiver.try_recv() {
+            Ok(Ok(response)) => {
+                self.diagnostics = response.items;
+                self.diagnostics_workspace = Some(response.workspace_root);
+                self.diagnostics_loading = false;
+                self.diagnostics_receiver = None;
+                true
+            }
+            Ok(Err(error)) => {
+                self.diagnostics_error = Some(error.to_string());
+                self.diagnostics_loading = false;
+                self.diagnostics_receiver = None;
+                true
+            }
+            Err(mpsc::TryRecvError::Empty) => true,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.diagnostics_error = Some("Diagnostics request ended unexpectedly".to_owned());
+                self.diagnostics_loading = false;
+                self.diagnostics_receiver = None;
+                true
+            }
+        }
+    }
+
+    /// Opens one file in its configured language server so the Diagnostics
+    /// panel has data without waiting for an agent LSP query.
+    /// @param path - workspace-relative or absolute file to diagnose.
+    pub(crate) fn diagnose_file(&mut self, path: String) {
+        let (Some(session), Some(transport)) = (self.selected_session.clone(), self.transport.clone())
+        else {
+            return;
+        };
+        // A newer document supersedes an older diagnose result.
+        self.diagnose_receiver = None;
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(DiagnosticsClient::new(&transport).diagnose(session, path));
+        });
+        self.diagnose_receiver = Some(receiver);
+    }
+
+    /// Merges one on-demand diagnose result into the diagnostics snapshot.
+    /// @returns whether the shell should repaint.
+    fn poll_diagnose(&mut self) -> bool {
+        let Some(receiver) = &self.diagnose_receiver else {
+            return false;
+        };
+        match receiver.try_recv() {
+            Ok(Ok(response)) => {
+                merge_diagnostics(&mut self.diagnostics, &response.uri, response.items);
+                self.diagnostics_workspace = Some(response.workspace_root);
+                self.diagnostics_error = None;
+                self.diagnose_receiver = None;
+                true
+            }
+            Ok(Err(error)) => {
+                self.diagnostics_error = Some(error.to_string());
+                self.diagnose_receiver = None;
+                true
+            }
+            Err(mpsc::TryRecvError::Empty) => true,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.diagnose_receiver = None;
+                true
+            }
+        }
+    }
+
     pub(crate) fn start_job_list(&mut self) {
         let (Some(session), Some(mux)) = (self.selected_session.clone(), self.streams.clone())
         else {
@@ -3496,6 +3711,28 @@ impl DesktopApp {
     /// Restores one archived Session by id.
     pub(crate) fn unarchive_session(&mut self, session_id: String) {
         self.write_archive(session_id, false, false);
+    }
+
+    /// Permanently deletes the selected Session after a second click on the
+    /// same selection; deletion is irreversible and the Host refuses a
+    /// running or still-attached Session.
+    pub(crate) fn delete_selected_session(&mut self) {
+        let Some(session_id) = self.selected_session.clone() else {
+            return;
+        };
+        if self.session_delete_confirm.as_deref() != Some(session_id.as_str()) {
+            self.session_delete_confirm = Some(session_id);
+            self.sessions_status = "Delete is irreversible; click Delete again to confirm".to_owned();
+            return;
+        }
+        self.session_delete_confirm = None;
+        self.request_sessions(SessionOperation::Delete(session_id));
+    }
+
+    /// Whether the selected Session's Delete button is waiting for confirmation.
+    pub(crate) fn session_delete_armed(&self) -> bool {
+        self.session_delete_confirm.is_some()
+            && self.session_delete_confirm == self.selected_session
     }
 
     /// Runs the bounded workspace content search for the current query.
@@ -4860,6 +5097,12 @@ impl DesktopApp {
         }
         self.poll_jobs();
         self.poll_schedules();
+        if self.poll_diagnostics() {
+            self.repaint_soon = true;
+        }
+        if self.poll_diagnose() {
+            self.repaint_soon = true;
+        }
         if self.poll_git() {
             self.repaint_soon = true;
         }
@@ -4871,6 +5114,8 @@ impl DesktopApp {
             || self.job_receiver.is_some()
             || self.schedules_receiver.is_some()
             || self.schedule_delete_receiver.is_some()
+            || self.diagnostics_receiver.is_some()
+            || self.diagnose_receiver.is_some()
         {
             self.repaint_soon = true;
         }
@@ -5115,6 +5360,16 @@ impl DesktopApp {
                             self.session_search = None;
                             self.refresh_sessions();
                             self.sessions_status = format!("Renamed to {title}; refreshing list…");
+                        }
+                        SessionUpdate::Deleted(id) => {
+                            self.agent_tabs.retain(|tab| tab != &id);
+                            if self.selected_session.as_deref() == Some(id.as_str()) {
+                                self.selected_session = None;
+                            }
+                            self.session_query.clear();
+                            self.session_search = None;
+                            self.refresh_sessions();
+                            self.sessions_status = format!("Deleted Session {id}; refreshing list…");
                         }
                     }
                 }
@@ -7108,6 +7363,32 @@ impl gpui::Render for DesktopApp {
 mod tests {
     use super::*;
     use dsh_client_core::models::ModelProviderGroup;
+
+    #[test]
+    fn on_demand_diagnostics_replace_only_the_same_file() {
+        use dsh_client_core::diagnostics::{DiagnosticItem, DiagnosticPosition, DiagnosticRange};
+        let item = |uri: &str, message: &str| DiagnosticItem {
+            uri: uri.to_owned(),
+            range: DiagnosticRange {
+                start: DiagnosticPosition { line: 0, character: 0 },
+                end: DiagnosticPosition { line: 0, character: 1 },
+            },
+            severity: "error".to_owned(),
+            message: message.to_owned(),
+            source: None,
+            code: None,
+        };
+        let mut items = vec![item("file:///w/a.ts", "stale-a"), item("file:///w/b.ts", "keep-b")];
+        merge_diagnostics(&mut items, "file:///w/a.ts", vec![item("file:///w/a.ts", "fresh-a")]);
+        assert_eq!(items.len(), 2);
+        assert!(items.iter().any(|entry| entry.message == "fresh-a"));
+        assert!(!items.iter().any(|entry| entry.message == "stale-a"));
+        assert!(items.iter().any(|entry| entry.message == "keep-b"));
+
+        // An unresolved URI must not clear unrelated diagnostics.
+        merge_diagnostics(&mut items, "", Vec::new());
+        assert_eq!(items.len(), 2);
+    }
 
     #[test]
     fn workspace_frames_upsert_remove_order_and_clear_selection() {

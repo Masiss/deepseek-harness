@@ -168,8 +168,26 @@ impl<'a> GitClient<'a> {
     }
 
     /// Discards one tracked path's unstaged change.
-    pub fn discard(&self, session_id: impl Into<String>, path: impl Into<String>) -> Result<GitPathResult, Error> {
-        self.path_verb("git/discard", session_id, path)
+    ///
+    /// `expected_status` carries the status the caller displayed; the Host
+    /// refuses when the path's current status differs.
+    pub fn discard(
+        &self,
+        session_id: impl Into<String>,
+        path: impl Into<String>,
+        expected_status: Option<String>,
+    ) -> Result<GitPathResult, Error> {
+        let mut request = serde_json::json!({ "path": path.into() });
+        if let Some(expected_status) = expected_status {
+            request["expectedStatus"] = serde_json::Value::String(expected_status);
+        }
+        self.call(
+            "git/discard",
+            serde_json::json!({
+                "gitWorkspaceScopeId": session_id.into(),
+                "request": request,
+            }),
+        )
     }
 
     /// Commits the staged index.

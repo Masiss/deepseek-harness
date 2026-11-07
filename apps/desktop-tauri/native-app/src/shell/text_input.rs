@@ -174,6 +174,71 @@ impl TextInput {
         cx.notify();
     }
 
+    /// Drops the IME marked range without changing the value.
+    pub(crate) fn unmark_composition(&mut self) {
+        self.marked_range = None;
+    }
+
+    /// Replaces the active composition or selection with committed text and
+    /// clears the marked range. This is the state change behind
+    /// `replace_text_in_range`; the caller owns change notification.
+    /// @param range_utf16 - IME range in UTF-16, or `None` for the active
+    ///   composition then the selection.
+    /// @param new_text - committed text.
+    pub(crate) fn commit_composition(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        new_text: &str,
+    ) {
+        let range = range_utf16
+            .as_ref()
+            .map(|range_utf16| self.range_from_utf16(range_utf16))
+            .or_else(|| self.marked_range.clone())
+            .unwrap_or_else(|| self.selected_range.clone());
+        self.push_undo();
+        self.content =
+            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
+                .into();
+        self.selected_range = range.start + new_text.len()..range.start + new_text.len();
+        self.marked_range = None;
+    }
+
+    /// Applies one IME composition update, keeping the new slice marked.
+    /// This is the state change behind `replace_and_mark_text_in_range`; the
+    /// caller owns change notification.
+    /// @param range_utf16 - IME range in UTF-16, or `None` for the active
+    ///   composition then the selection.
+    /// @param new_text - composed text; empty ends the composition.
+    /// @param new_selected_range_utf16 - optional selection relative to `new_text`.
+    pub(crate) fn compose_composition(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        new_text: &str,
+        new_selected_range_utf16: Option<Range<usize>>,
+    ) {
+        let range = range_utf16
+            .as_ref()
+            .map(|range_utf16| self.range_from_utf16(range_utf16))
+            .or_else(|| self.marked_range.clone())
+            .unwrap_or_else(|| self.selected_range.clone());
+        if self.marked_range.is_none() {
+            self.push_undo();
+        }
+        self.content =
+            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
+                .into();
+        self.marked_range = if new_text.is_empty() {
+            None
+        } else {
+            Some(range.start..range.start + new_text.len())
+        };
+        self.selected_range = new_selected_range_utf16
+            .as_ref()
+            .map(|range_utf16| self.range_from_utf16(range_utf16))
+            .map(|new_range| new_range.start + range.start..new_range.end + range.start)
+            .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
+    }
+
     /// Places the caret at the start of one 1-based line.
     ///
     /// The viewport follows the caret, so this scrolls an off-screen line into
@@ -621,7 +686,7 @@ impl EntityInputHandler for TextInput {
     }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
-        self.marked_range = None;
+        self.unmark_composition();
     }
 
     fn replace_text_in_range(
@@ -631,17 +696,7 @@ impl EntityInputHandler for TextInput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let range = range_utf16
-            .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .or_else(|| self.marked_range.clone())
-            .unwrap_or_else(|| self.selected_range.clone());
-        self.push_undo();
-        self.content =
-            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
-                .into();
-        self.selected_range = range.start + new_text.len()..range.start + new_text.len();
-        self.marked_range.take();
+        self.commit_composition(range_utf16, new_text);
         self.emit_changed(cx);
         cx.notify();
         window.invalidate_character_coordinates();
@@ -655,27 +710,7 @@ impl EntityInputHandler for TextInput {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let range = range_utf16
-            .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .or_else(|| self.marked_range.clone())
-            .unwrap_or_else(|| self.selected_range.clone());
-        if self.marked_range.is_none() {
-            self.push_undo();
-        }
-        self.content =
-            (self.content[0..range.start].to_owned() + new_text + &self.content[range.end..])
-                .into();
-        self.marked_range = if new_text.is_empty() {
-            None
-        } else {
-            Some(range.start..range.start + new_text.len())
-        };
-        self.selected_range = new_selected_range_utf16
-            .as_ref()
-            .map(|range_utf16| self.range_from_utf16(range_utf16))
-            .map(|new_range| new_range.start + range.start..new_range.end + range.start)
-            .unwrap_or_else(|| range.start + new_text.len()..range.start + new_text.len());
+        self.compose_composition(range_utf16, new_text, new_selected_range_utf16);
         if self.marked_range.is_none() {
             self.emit_changed(cx);
         }
@@ -1057,6 +1092,39 @@ mod tests {
             weight: FontWeight::NORMAL,
             style: gpui::FontStyle::Normal,
         }
+    }
+
+    #[test]
+    fn ime_composition_marks_updates_commits_and_cancels() {
+        let mut cx = gpui::TestAppContext::single();
+        let entity = cx.new(|cx| TextInput::state("", true, cx));
+        entity.update(&mut cx, |input, _cx| {
+            input.content = "go ".into();
+            input.selected_range = 3..3;
+
+            // First composition update marks the inserted slice.
+            input.compose_composition(None, "v", None);
+            assert_eq!(input.text(), "go v");
+            assert_eq!(input.marked_range, Some(3..4));
+
+            // Later updates replace the marked slice instead of appending.
+            input.compose_composition(None, "vie", None);
+            assert_eq!(input.text(), "go vie");
+            assert_eq!(input.marked_range, Some(3..6));
+
+            // Commit replaces the marked slice and clears the mark.
+            input.commit_composition(None, "việt");
+            assert_eq!(input.text(), "go việt");
+            assert_eq!(input.marked_range, None);
+            assert_eq!(input.selected_range, "go việt".len().."go việt".len());
+
+            // Cancelling an active composition removes only the marked text.
+            input.compose_composition(None, "x", None);
+            assert_eq!(input.text(), "go việtx");
+            input.compose_composition(None, "", None);
+            assert_eq!(input.text(), "go việt");
+            assert_eq!(input.marked_range, None);
+        });
     }
 
     #[test]

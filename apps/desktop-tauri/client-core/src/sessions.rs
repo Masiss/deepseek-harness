@@ -45,6 +45,16 @@ pub struct Session {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DeleteSessionRequest {
+    pub session_id: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteSessionResponse {
+    pub session_id: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RenameSessionRequest {
     pub session_id: String,
     pub title: String,
@@ -97,6 +107,16 @@ impl<'a> SessionsClient<'a> {
     pub fn fork(&self, request: ForkSessionRequest) -> Result<ForkSessionResponse, Error> {
         self.call("session/fork", serde_json::to_value(request)?)
     }
+
+    /// Permanently removes one stored Session after the Host refuses an attached or running one.
+    pub fn delete(&self, session_id: impl Into<String>) -> Result<DeleteSessionResponse, Error> {
+        self.call(
+            "session/delete",
+            serde_json::to_value(DeleteSessionRequest {
+                session_id: session_id.into(),
+            })?,
+        )
+    }
     fn call<T: for<'de> Deserialize<'de>>(
         &self,
         method: &str,
@@ -135,6 +155,16 @@ mod tests {
             })
             .unwrap(),
             serde_json::json!({"sessionId":"s","title":"T"})
+        );
+    }
+    #[test]
+    fn serializes_delete() {
+        assert_eq!(
+            serde_json::to_value(DeleteSessionRequest {
+                session_id: "s".into()
+            })
+            .unwrap(),
+            serde_json::json!({"sessionId":"s"})
         );
     }
 }

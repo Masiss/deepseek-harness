@@ -227,6 +227,48 @@ impl Harness {
         self.visual.run_until_parked();
         true
     }
+
+    /// Applies one IME composition update to a named text input, as the
+    /// platform input method would through gpui's `InputHandler`.
+    ///
+    /// @param key - Stable input key such as `"composer"`.
+    /// @param text - Composed text; empty cancels the active composition.
+    /// @returns Whether the input entity exists.
+    pub fn compose_input(&mut self, key: &'static str, text: &str) -> bool {
+        let Some(entity) = self.with(|app, _| app.inputs.get(key).cloned()) else {
+            return false;
+        };
+        entity.update(&mut self.visual, |input, _cx| {
+            input.compose_composition(None, text, None);
+        });
+        self.visual.run_until_parked();
+        true
+    }
+
+    /// Commits the active IME composition to a named text input.
+    ///
+    /// @param key - Stable input key such as `"composer"`.
+    /// @param text - Text the platform commits.
+    /// @returns Whether the input entity exists.
+    pub fn commit_input(&mut self, key: &'static str, text: &str) -> bool {
+        let Some(entity) = self.with(|app, _| app.inputs.get(key).cloned()) else {
+            return false;
+        };
+        entity.update(&mut self.visual, |input, _cx| {
+            input.commit_composition(None, text);
+        });
+        self.visual.run_until_parked();
+        true
+    }
+
+    /// Current text of a named input.
+    ///
+    /// @param key - Stable input key such as `"composer"`.
+    /// @returns The input value, or `None` when the entity does not exist.
+    pub fn input_text(&mut self, key: &'static str) -> Option<String> {
+        let entity = self.with(|app, _| app.inputs.get(key).cloned())?;
+        Some(entity.read_with(&self.visual, |input, _| input.text().to_owned()))
+    }
 }
 
 impl Drop for Harness {
@@ -433,8 +475,87 @@ mod surface_tests {
     }
 
     #[test]
-    fn command_palette_keeps_the_shell_laid_out_and_closes_on_dismiss() {
+    fn composer_accepts_ime_composition_and_commit_without_platform_injection() {
         let mut harness = Harness::open_with(1440., 900., |app| {
+            app.selected_session = Some("ime-session".to_owned());
+        });
+        assert!(harness.compose_input("composer", "vie"));
+        assert_eq!(harness.input_text("composer").as_deref(), Some("vie"));
+        assert!(harness.compose_input("composer", "việt"));
+        assert_eq!(harness.input_text("composer").as_deref(), Some("việt"));
+        assert!(harness.commit_input("composer", "việt"));
+        assert_eq!(harness.input_text("composer").as_deref(), Some("việt"));
+        // A fresh composition cancelled before commit leaves no residue.
+        assert!(harness.compose_input("composer", "x"));
+        assert!(harness.compose_input("composer", ""));
+        assert_eq!(harness.input_text("composer").as_deref(), Some("việt"));
+    }
+
+    #[test]
+    fn agent_buffers_open_switch_close_and_keep_the_active_buffer() {
+        let mut harness = Harness::open_with(1440., 900., |app| {
+            app.load_session("buf-a".to_owned());
+            app.load_session("buf-b".to_owned());
+        });
+        assert_eq!(
+            harness.with(|app, _| app.agent_tabs.clone()),
+            ["buf-a", "buf-b"]
+        );
+        assert!(harness.bounds("agent-tab-strip").is_some());
+        assert!(harness.bounds("agent-tab-active").is_some());
+
+        harness.with(|app, _| app.load_session("buf-a".to_owned()));
+        assert_eq!(
+            harness.with(|app, _| app.selected_session.clone()).as_deref(),
+            Some("buf-a")
+        );
+        harness.with(|app, _| app.close_agent_tab("buf-a"));
+        assert_eq!(
+            harness.with(|app, _| app.selected_session.clone()).as_deref(),
+            Some("buf-b")
+        );
+        harness.with(|app, _| app.close_agent_tab("buf-b"));
+        assert!(harness.with(|app, _| app.selected_session.is_none()));
+
+        harness.with(|app, _| {
+            for index in 0..8 {
+                app.load_session(format!("cap-{index}"));
+            }
+        });
+        let tabs = harness.with(|app, _| app.agent_tabs.clone());
+        assert_eq!(tabs.len(), crate::shell::MAX_AGENT_TABS);
+        assert_eq!(tabs.last().map(String::as_str), Some("cap-7"));
+    }
+
+    #[test]
+    fn diagnostics_panel_renders_configured_server_items() {
+        use dsh_client_core::diagnostics::{DiagnosticItem, DiagnosticPosition, DiagnosticRange};
+        let mut harness = Harness::open_with(1440., 900., |app| {
+            app.selected_session = Some("diag-session".to_owned());
+            app.bottom_tool = Some(crate::shell::BottomTool::Diagnostics);
+            app.diagnostics_workspace = Some("/work".to_owned());
+            app.diagnostics = vec![DiagnosticItem {
+                uri: "file:///work/src/a.ts".to_owned(),
+                range: DiagnosticRange {
+                    start: DiagnosticPosition { line: 2, character: 4 },
+                    end: DiagnosticPosition { line: 2, character: 9 },
+                },
+                severity: "error".to_owned(),
+                message: "unused variable".to_owned(),
+                source: Some("ts".to_owned()),
+                code: Some("6133".to_owned()),
+            }];
+        });
+        assert!(harness.bounds("diagnostics-refresh").is_some());
+        assert!(harness.bounds("diagnostics-body").is_some());
+        assert_eq!(
+            harness.with(|app, _| app.diagnostics.len()),
+            1
+        );
+    }
+
+    #[test]
+    fn command_palette_keeps_the_shell_laid_out_and_closes_on_dismiss() {        let mut harness = Harness::open_with(1440., 900., |app| {
             app.run_command(CommandId::ShowPalette)
         });
         assert!(harness.with(|app, _| app.palette_open));

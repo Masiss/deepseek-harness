@@ -172,6 +172,64 @@ fn agent_column(
         app.session_title.clone()
     };
     let running = app.selected_session_running();
+    let tab_ids = app.agent_tabs.clone();
+    let mut tabs = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .h_full()
+        .min_w(px(0.))
+        .overflow_hidden();
+    for tab_id in tab_ids {
+        let active = app.selected_session.as_deref() == Some(tab_id.as_str());
+        let label = app.agent_tab_label(&tab_id);
+        let switch_id = tab_id.clone();
+        let close_id = tab_id.clone();
+        tabs = tabs.child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .h_full()
+                .border_b_1()
+                .border_color(if active { theme.accent } else { theme.border })
+                .bg(if active { theme.background } else { theme.surface })
+                .when(active, |element| {
+                    element.debug_selector(|| "agent-tab-active".to_owned())
+                })
+                .child(
+                    div()
+                        .id(gpui::SharedString::from(format!("agent-tab-label-{tab_id}")))
+                        .flex()
+                        .items_center()
+                        .h_full()
+                        .px(theme.sp(8.))
+                        .text_size(theme.fs(10.5))
+                        .text_color(if active { theme.text } else { theme.muted })
+                        .truncate()
+                        .child(label)
+                        .on_click(cx.listener(move |app, _, _, cx| {
+                            app.load_session(switch_id.clone());
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    div()
+                        .id(gpui::SharedString::from(format!("agent-tab-close-{tab_id}")))
+                        .flex()
+                        .items_center()
+                        .h_full()
+                        .px(theme.sp(5.))
+                        .text_size(theme.fs(10.))
+                        .text_color(theme.muted)
+                        .child("×")
+                        .on_click(cx.listener(move |app, _, _, cx| {
+                            app.close_agent_tab(&close_id);
+                            cx.notify();
+                        })),
+                ),
+        );
+    }
     let strip = div()
         .flex()
         .flex_row()
@@ -184,20 +242,14 @@ fn agent_column(
         .bg(theme.surface)
         .child(
             div()
+                .debug_selector(|| "agent-tab-strip".to_owned())
                 .flex()
                 .flex_row()
                 .items_center()
                 .h_full()
-                .px(theme.sp(10.))
-                .border_b_1()
-                .border_color(theme.accent)
-                .child(
-                    div()
-                        .text_size(theme.fs(11.))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(theme.text)
-                        .child("Agent"),
-                ),
+                .min_w(px(0.))
+                .overflow_hidden()
+                .child(tabs),
         )
         .child(
             div()
@@ -368,7 +420,23 @@ fn workspace_name(cwd: Option<&str>) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::{can_discard, change_badge, git_diff_is_binary, short_commit, workspace_name};
+    use super::{can_discard, change_badge, diagnostic_paths, git_diff_is_binary, short_commit, workspace_name};
+
+    #[test]
+    fn diagnostic_uris_map_to_workspace_relative_paths() {
+        assert_eq!(
+            diagnostic_paths("file:///work/src/a.ts", "/work"),
+            ("src/a.ts".to_owned(), Some("src/a.ts".to_owned()))
+        );
+        assert_eq!(
+            diagnostic_paths("file:///work/a%20b.ts", "/work"),
+            ("a b.ts".to_owned(), Some("a b.ts".to_owned()))
+        );
+        assert_eq!(
+            diagnostic_paths("file:///elsewhere/a.ts", "/work"),
+            ("/elsewhere/a.ts".to_owned(), Some("/elsewhere/a.ts".to_owned()))
+        );
+    }
 
     #[test]
     fn change_badges_name_each_change_kind() {
@@ -527,6 +595,7 @@ fn utility_panel(
         BottomTool::Jobs => ("Jobs", app.jobs.len()),
         BottomTool::Schedules => ("Schedules", app.schedules.len()),
         BottomTool::Deliverables => ("Deliverables", app.deliverables.len()),
+        BottomTool::Diagnostics => ("Diagnostics", app.diagnostics.len()),
     };
     let header = div()
         .flex()
@@ -575,6 +644,7 @@ fn utility_panel(
         BottomTool::Jobs => jobs_panel(app, theme, cx),
         BottomTool::Schedules => schedules_panel(app, theme, cx),
         BottomTool::Deliverables => deliverables_panel(app, theme, cx),
+        BottomTool::Diagnostics => diagnostics_panel(app, theme, cx),
         BottomTool::Terminal => terminal_panel(app, theme, cx),
     };
 
@@ -936,6 +1006,221 @@ fn deliverables_panel(
         .flex_1()
         .min_h(px(0.))
         .id("utility-scroll").overflow_y_scroll()
+        .child(list)
+        .into_any_element()
+}
+
+/// Decode a `file:` URI into a host path, tolerating percent escapes.
+fn file_uri_path(uri: &str) -> Option<String> {
+    let rest = uri.strip_prefix("file://")?;
+    let bytes = rest.as_bytes();
+    let mut decoded = String::with_capacity(rest.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).ok()?;
+            let value = u8::from_str_radix(hex, 16).ok()?;
+            decoded.push(char::from(value));
+            index += 3;
+        } else {
+            decoded.push(char::from(bytes[index]));
+            index += 1;
+        }
+    }
+    Some(decoded)
+}
+
+/// Workspace-relative display and open path for one diagnostic URI.
+fn diagnostic_paths(uri: &str, workspace: &str) -> (String, Option<String>) {
+    let Some(path) = file_uri_path(uri) else {
+        return (uri.to_owned(), None);
+    };
+    if workspace.is_empty() {
+        return (path.clone(), Some(path));
+    }
+    let prefix = format!("{}/", workspace.trim_end_matches('/'));
+    match path.strip_prefix(&prefix) {
+        Some(relative) => (relative.to_owned(), Some(relative.to_owned())),
+        None => (path.clone(), Some(path)),
+    }
+}
+
+struct DiagnosticRow {
+    display: String,
+    open_path: Option<String>,
+    line: u32,
+    character: u32,
+    severity: String,
+    message: String,
+    source: String,
+}
+
+fn diagnostics_panel(
+    app: &mut DesktopApp,
+    theme: &Theme,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
+    let workspace = app.diagnostics_workspace.clone().unwrap_or_default();
+    let items: Vec<DiagnosticRow> = app
+        .diagnostics
+        .iter()
+        .map(|item| {
+            let (display, open_path) = diagnostic_paths(&item.uri, &workspace);
+            DiagnosticRow {
+                display,
+                open_path,
+                line: item.range.start.line,
+                character: item.range.start.character,
+                severity: item.severity.clone(),
+                message: item.message.clone(),
+                source: item
+                    .source
+                    .clone()
+                    .or_else(|| item.code.clone())
+                    .unwrap_or_default(),
+            }
+        })
+        .collect();
+    let mut list = div().flex().flex_col().gap(px(2.)).w_full().px(theme.sp(8.)).py(theme.sp(4.));
+    list = list.child(
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .text_size(theme.fs(9.5))
+                    .text_color(theme.muted)
+                    .child(if app.diagnostics_loading {
+                        "Reading diagnostics…".to_owned()
+                    } else if workspace.is_empty() {
+                        "No workspace directory for this Session.".to_owned()
+                    } else {
+                        format!("Workspace {workspace}")
+                    }),
+            )
+            .child(
+                div()
+                    .id("diagnostics-refresh")
+                    .debug_selector(|| "diagnostics-refresh".to_owned())
+                    .cursor_pointer()
+                    .px(theme.sp(5.))
+                    .rounded(theme.corner())
+                    .hover(|style| style.bg(theme.surface_raised))
+                    .child("Refresh")
+                    .on_click(cx.listener(|app, _, _, cx| {
+                        app.refresh_diagnostics();
+                        cx.notify();
+                    })),
+            ),
+    );
+    if let Some(error) = app.diagnostics_error.clone() {
+        list = list.child(
+            div()
+                .text_size(theme.fs(10.))
+                .text_color(theme.error)
+                .child(error),
+        );
+    }
+    if items.is_empty() && !app.diagnostics_loading && app.diagnostics_error.is_none() {
+        list = list.child(
+            div()
+                .text_size(theme.fs(10.))
+                .text_color(theme.muted)
+                .child("No diagnostics. Configured language servers publish after they open a file."),
+        );
+    }
+    for row in items {
+        let color = match row.severity.as_str() {
+            "error" => theme.error,
+            "warning" => theme.warn,
+            "information" => theme.accent,
+            _ => theme.muted,
+        };
+        let glyph = match row.severity.as_str() {
+            "error" => "●",
+            "warning" => "▲",
+            "information" => "ℹ",
+            _ => "·",
+        };
+        let open_path = row.open_path.clone();
+        let line = row.line;
+        list = list.child(
+            div()
+                .flex()
+                .flex_row()
+                .items_start()
+                .gap(theme.sp(6.))
+                .w_full()
+                .px(theme.sp(2.))
+                .py(px(2.))
+                .rounded(theme.corner())
+                .id(gpui::SharedString::from(format!(
+                    "diagnostic-{}:{}:{}",
+                    row.display, row.line, row.character
+                )))
+                .hover(|style| style.bg(theme.surface_raised))
+                .child(
+                    div()
+                        .text_size(theme.fs(9.5))
+                        .text_color(color)
+                        .child(glyph),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .gap(theme.sp(6.))
+                                .font(theme.mono_font())
+                                .text_size(theme.fs(9.5))
+                                .text_color(theme.accent)
+                                .child(format!(
+                                    "{}:{}:{}",
+                                    row.display,
+                                    row.line + 1,
+                                    row.character + 1
+                                ))
+                                .child(
+                                    div()
+                                        .text_size(theme.fs(9.))
+                                        .text_color(theme.muted)
+                                        .child(row.source),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_size(theme.fs(10.))
+                                .text_color(theme.text)
+                                .child(row.message),
+                        ),
+                )
+                .on_click(cx.listener(move |app, _, _, cx| {
+                    let Some(open_path) = open_path.clone() else {
+                        return;
+                    };
+                    app.preview_path = open_path.clone();
+                    app.preview_target_line = Some((open_path, u64::from(line) + 1));
+                    app.switch_view(ActiveView::Document);
+                    app.read_document();
+                    cx.notify();
+                })),
+        );
+    }
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h(px(0.))
+        .id("utility-scroll")
+        .debug_selector(|| "diagnostics-body".to_owned())
+        .overflow_y_scroll()
         .child(list)
         .into_any_element()
 }
@@ -1430,6 +1715,7 @@ fn bottom_bar(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>)
         (BottomTool::Jobs, "Jobs", "◷"),
         (BottomTool::Schedules, "Schedules", "◔"),
         (BottomTool::Deliverables, "Deliverables", "▣"),
+        (BottomTool::Diagnostics, "Diagnostics", "⚠"),
         (BottomTool::Terminal, "Terminal", "▭"),
     ];
 
@@ -1529,6 +1815,9 @@ fn bottom_bar(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>)
                             } else {
                                 Some(tool)
                             };
+                            if app.bottom_tool == Some(BottomTool::Diagnostics) {
+                                app.refresh_diagnostics();
+                            }
                             cx.notify();
                         }))
                 }))

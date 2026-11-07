@@ -214,6 +214,24 @@ pub(crate) fn panel(
                 .child(
                     widgets::Button::new(
                         theme,
+                        if app.session_delete_armed() {
+                            "Confirm delete"
+                        } else {
+                            "Delete"
+                        },
+                    )
+                    .danger()
+                    .enabled(connected)
+                    .build()
+                    .id("session-delete")
+                    .on_click(cx.listener(|app, _, _, cx| {
+                        app.delete_selected_session();
+                        cx.notify();
+                    })),
+                )
+                .child(
+                    widgets::Button::new(
+                        theme,
                         if app
                             .selected_session
                             .as_deref()

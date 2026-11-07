@@ -5,6 +5,8 @@ mod render;
 
 #[cfg(test)]
 pub(crate) use app::DesktopApp as HarnessApp;
+pub(crate) use app::MAX_AGENT_TABS;
+pub(crate) use app::BottomTool;
 mod terminal_state;
 mod theme;
 mod text_input;
