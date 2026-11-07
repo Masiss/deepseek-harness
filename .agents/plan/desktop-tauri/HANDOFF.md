@@ -1,18 +1,28 @@
 # Bàn giao — lane Desktop Tauri (fork `Masiss/deepseek-harness`)
 
-Cập nhật 2026-11-06. Mục đích: session mới đọc file này là biết đang ở đâu, cái gì đã xong, cái gì nên làm tiếp và bẫy nào đã mắc.
+Cập nhật 2026-11-07. Mục đích: session mới đọc file này là biết đang ở đâu, cái gì đã xong, cái gì nên làm tiếp và bẫy nào đã mắc.
 
 > **Đọc theo mốc thời gian.** Các mục ghi ngày ≤ 2026-11-01 mô tả shell **egui** mà ngày 2026-11-06 đã bị xoá (xem mục cuối). Chúng được giữ làm lịch sử quyết định và bẫy, không phải trạng thái hiện tại.
+
+## Trạng thái hiện tại — 2026-11-07
+
+Khối này là nguồn sự thật cho session mới; mọi mục bên dưới là lịch sử theo ngày.
+
+- Nhánh `chore/web-bun-migration`, working tree sạch, local **ahead 78 commit** so với `fork/chore/web-bun-migration` (**chưa push**). HEAD là commit `docs(desktop-native): hand off the C/D/E session state`.
+- Renderer duy nhất: **gpui 0.2.2**, bin `dsh-desktop-native-app`. Shell egui, `src/ui_harness.rs`, `egui_kittest`, `legacy-egui` và snapshot PNG đã bị xoá ngày 2026-11-06.
+- Gate hiện tại: `cargo test --locked --offline --manifest-path apps/desktop-tauri/native-app/Cargo.toml` = **191 pass / 1 ignored**; `client-core` = **104 + 8 + 11 pass**. Harness UI headless là `src/harness.rs` (`debug_bounds` + baseline `tests/snapshots/shell-*.txt`); gpui 0.2.2 **không có** accessibility tree hay pixel rasterize.
+- Đã chạy trên Hyprland thật với Home cô lập: AppImage gpui `host=ready` 1,4 s / `auth=ok` 1,5 s, cửa sổ render đủ nav rail, Sessions và bottom bar. RSS cây tiến trình idle ~**290–297 MiB** (gate < 300 MiB).
+- Đã xong 07/11: C3 (`session/delete` + UI hai bước), T08 (`expectedStatus` cho discard), D3 (tab buffer Agent, tối đa 6, đóng/chuyển), D4 (một trang Preferences), D5 (`maxWorkspaceTerminals`), D7 (test composition IME tự động ở state machine + harness), **D2 diagnostics** (chỉ server LSP user đã cấu hình/cài; panel bottom dock + jump-to-line). Còn mở thật sự: production signing/published-feed swap, physical-window pointer + visual review, Marketplace rollback. EXT-04 đã có test; `request_id` giữ nguyên không auto-retry (outcome unknown).
 
 ## Native gpui port — 2026-10-31
 
 Native GUI của lane chạy trên **`gpui` 0.2.2** (GPU-first renderer qua wgpu) với **một bin duy nhất**: `dsh-desktop-native-app`. Shell egui cũ (`src/main.rs`, `ui_harness.rs`, `settings_panel.rs`, `transcript_view.rs`, feature `legacy-egui`, `eframe`, snapshot PNG) đã **bị xoá ngày 2026-11-06**; xem mục cuối file. Module chia theo vai (client-core protocol, host, explorer, session_list, question_card, transcript, terminal_ansi, fonts, ui_preferences, layout) giữ nguyên contracts; presentation layer (`shell/`) là gpui.
 
-Gate hiện tại (sau khi xoá legacy): `cargo test --bin dsh-desktop-native-app` = **179 pass / 0 fail**; `cargo build` xanh (đã sửa 4 test `host.rs` đỏ sẵn: gpui kéo `serde_json/preserve_order` vào làm đổi thứ tự key JSON, còn fixture so sánh chuỗi byte; giờ so từng field nên không phụ thuộc thứ tự). 48 test mới phủ preferences chord/parse, auto-connect, office/image path, text-delta budget, model picker/probe/catalog, settings error, theme metrics/blend, terminal log budget, layout bounds, `contains_cjk` và tiến trình khởi động Host.
+Gate tại thời điểm 31/10 (sau khi xoá legacy; số hiện tại là 188 pass / 1 ignored): `cargo test --bin dsh-desktop-native-app` = **179 pass / 0 fail**; `cargo build` xanh (đã sửa 4 test `host.rs` đỏ sẵn: gpui kéo `serde_json/preserve_order` vào làm đổi thứ tự key JSON, còn fixture so sánh chuỗi byte; giờ so từng field nên không phụ thuộc thứ tự). 48 test mới phủ preferences chord/parse, auto-connect, office/image path, text-delta budget, model picker/probe/catalog, settings error, theme metrics/blend, terminal log budget, layout bounds, `contains_cjk` và tiến trình khởi động Host.
 
-Startup đo thật (debug, cây packaged, Home cô lập): **host=ready 2,5–3,7 s**, `auth=ok` thêm **~0,13–0,17 s**; riêng `desktop-host` packaged tới listen **1,2–1,6 s warm**. Shell in `dsh: native host=ready in <ms>` / `auth=ok in <ms>` để đo độ trễ thay vì đoán, và trong lúc chờ Host nó hiện `Starting Host sidecar… <n>s`.
+Startup đo tại thời điểm 31/10 (debug, cây packaged, Home cô lập; số release 01/11 ở mục "Release measurement"): **host=ready 2,5–3,7 s**, `auth=ok` thêm **~0,13–0,17 s**; riêng `desktop-host` packaged tới listen **1,2–1,6 s warm**. Shell in `dsh: native host=ready in <ms>` / `auth=ok in <ms>` để đo độ trễ thay vì đoán, và trong lúc chờ Host nó hiện `Starting Host sidecar… <n>s`.
 
-Còn lại: runtime gpui cần session Wayland **thật** (headless Weston expose no seat → panic ở `gpui linux wayland client seat`) để xác nhận boot/auth/streams; headless gpui test-support cho shell mới chưa có suite riêng; visual/IME/physical-window review và RSS mới chưa đo; release build + doc gates + pre-push checks chưa chạy lại sau port.
+Còn lại lúc đó (nhiều mục đã đóng bởi các mục 01/11 và 06/11 bên dưới): runtime gpui cần session Wayland **thật** (headless Weston expose no seat → panic ở `gpui linux wayland client seat`); headless gpui test-support cho shell mới; visual/IME/physical-window review; release build + doc gates + pre-push checks sau port.
 
 ## Native UI rollout — 2026-10-26
 
@@ -119,6 +129,8 @@ Probe AppImage có thư mục `squashfs-root` chỉ đọc nên lần đầu `bu
 Remaining: successful Retry after a recovered live Host, timed-question composition, production feed signing/publication, physical-window input and visual review, and the release lane. Packaged Marketplace installation, Office preview, PTY TUI input, and the signed fake-image GUI swap are covered by the 2026-10-25 probes above; see [`PARITY.md`](PARITY.md) for evidence levels.
 
 ## 1. Trạng thái repo
+
+_Ảnh chụp lịch sử (2026-10-23); **không phải trạng thái hiện tại** — xem "Trạng thái hiện tại" ở đầu file._
 
 | Mục | Giá trị |
 |---|---|
@@ -255,6 +267,8 @@ Sau grill với chủ dự án, lane **chuyển hẳn** sang ứng dụng native
 
 ## 3. Việc nên làm tiếp (theo thứ tự giá trị)
 
+_Ảnh chụp lịch sử 2026-10-22 (kế hoạch chốt Goal 2 thời Tauri). Ưu tiên hiện hành nằm ở mục "Còn mở" của bàn giao 2026-11-06 cuối file._
+
 **Ưu tiên: Linux trước — macOS và Windows để pending** (2026-10-22). Lane chỉ mở việc cho macOS/Windows khi có runner + chứng thư; ma trận portability trong PLAN là hồ sơ, không phải việc đang làm.
 
 **Kế hoạch chốt Goal 2 nằm trong `PLAN.md` § "Kế hoạch chốt Goal 2 (2026-10-22)"**: B1 phát hành `0.2.1-rc.4` → B2 chạy lại release lane → B3 bằng chứng GUI (CSP + lượt model thật) → B4 chốt ngân sách bộ nhớ + workload typing/scroll → B5 portability → B6 lượt soi phần deferred.
@@ -380,25 +394,24 @@ git tag desktop-v0.2.1-rc.4 && git push fork desktop-v0.2.1-rc.4   # kích hoạ
 ```
 Phát hành (làm thay đổi trên `fork`): bump version **mọi package** ⇒ tag `desktop-v<version>` ⇒ lane release tự chạy ⇒ feed mới đã ký.
 
-## 7b. Kiểm thử UI không cửa sổ (gpui kittest / harness)
+## 7b. Kiểm thử UI không cửa sổ (gpui harness)
 
-Không dùng toạ độ pixel, không chạm Hyprland: harness dựng **cùng** `DesktopApp::tick`/`render` mà cửa sổ dùng, trong `egui::Context` không có OS window.
+Không dùng toạ độ pixel, không chạm Hyprland: `src/harness.rs` (chỉ `cfg(test)`) mở `DesktopApp` thật trong **test window của gpui** rồi đọc hình học renderer sinh ra qua `debug_bounds`. gpui 0.2.2 **không có** accessibility tree và **không có** API rasterize, nên harness không hỏi widget theo label và không so pixel.
 
 ```sh
-cargo test --locked --offline --manifest-path apps/desktop-tauri/native-app/Cargo.toml ui_harness
+cargo test --locked --offline --manifest-path apps/desktop-tauri/native-app/Cargo.toml harness
 ```
 
-- `src/ui_harness.rs` (chỉ `cfg(test)`): `FixtureHost` là HTTP Host trong tiến trình, trả lời `session/list`, `session/create`, `session/prompt`, `session/page`, `model/catalog`, `settings/describe|mutate` (tự áp path op vào document của nó rồi tăng revision), `pluginMarket/listIndexes|search`, `pluginManager/inspect|installBundle`, `pluginInventory/list`, `officeToPdf/render`, và `POST /__dsh-desktop/updates-open` (204 hoặc lỗi); `GET /connect` trả 503 để test attach thất bại. Nó **ghi lại request** để assert payload; `RemoteStreamMux::loopback` (feature `test-fixtures` của client-core) phát frame follow, replay snapshot cho stream mở muộn.
-- Widget được định danh bằng AccessKit: `harness.get_by_label("New Session")`, `"Composer"`, `"Send"`, `"Allow once"`. `TextEdit` không có tham số label nên `accessible_label()` gắn tên ổn định (Composer, Model, Session title, Terminal command, Marketplace search, Document path, Host settings JSON); nút "Search" của Marketplace có tên riêng `Search marketplace` vì panel Sessions cũng có nút "Search"
-- Test hiện có (20 test thường): luồng semantic (New Session → chọn session → gõ → Send → payload prompt đúng → event follow hiện lên → Allow once phát `ApprovalCommand::Answer`), mở session cũ có tool events + deliverable trong lịch sử, snapshot chen lúc load, chuyển session, 2.100 event cắt còn 2.000, phân trang 120 event, Settings (ghi + đọc lại + xung đột revision), Marketplace (search + install + nhánh từ chối), Retry connection (bấm nút, Host nhận `GET /connect`, bị từ chối ⇒ vẫn disconnected), preview Office→PDF→raster (và nhánh PDF hỏng), update check Host bridge (thành công + lỗi), terminal TUI (AccessKit gửi bracketed paste, click SGR trên màn hình, wheel được xếp và phát sau ack), layout 3 viewport + report JSON ở `target/dsh-kittest/layout.json`, 3 snapshot vỏ rỗng ở `tests/snapshots/`. Hai test ignored trong cùng harness chạy bằng `native-journey-probe.sh panels|update-ui` để gắn renderer vào Host đóng gói.
-- **Fixture PASS ≠ live PASS**: reply của fixture chứng minh UI phát đúng request và render đúng reply, không chứng minh Host thật ghi settings, cài bundle hay reconnect. Retry chỉ chứng minh *attach attempt* + nhánh từ chối; reconnect thành công cần Host thật vì harness không có WebSocket mux. Settings test kiểm tra read-back bằng revision mới do fixture áp op, nên vẫn là fixture-side effect.
-- Terminal TUI compatibility: mode tracker chạy tăng dần theo output frame và giữ DECSET state sau khi output buffer bị trim; paste/mouse được encode bằng cùng `TerminalWriter`, ack giải phóng hàng đợi theo thứ tự, refusal xoá phần còn lại và hiện lỗi. Native unit + kittest assert input/output bytes. Một phép chạy thủ công trong PTY cô lập với Neovim `mouse=a` xác nhận Neovim bật `2004`, `1002`, `1006`, lưu chính xác paste hai dòng được bọc bằng `ESC[200~`/`ESC[201~`, và đổi vị trí chèn theo SGR mouse click. Đây là kiểm tra giao thức với TUI thật, không phải probe Host/AppImage hay GUI OS.
-- Packaged native-panel journeys: `native-journey-probe.sh panels` cài Office component trong Home cô lập, cấu hình loopback market/registry rồi chạy `egui_kittest` với transport và mux thật; AccessKit cài bundle và kiểm tra `listBundles`, preview `probe.docx` qua Office Host + `pdftoppm`, tạo/attach terminal, chạy TUI qua PTY và xác nhận bracketed paste + mouse report tới TUI. `native-journey-probe.sh update-ui` dùng key Ed25519 sinh theo lượt, fake AppImage executable, và cùng harness để bấm Download/Install and restart; test kiểm tra byte ảnh, permission executable, `HostEvent::Restart`, rồi probe chờ fake image chạy sau khi test process thoát. Đây là L2 packaged Host + UI renderer, không phải physical-window L3 hay feed production.
-- Bẫy: sau mỗi click AccessKit phải `harness.run_steps` trước khi `host.wait_for`, vì `wait_for` chỉ chờ phía fixture và không đẩy frame UI. Bẫy thứ hai: `Modifiers::CTRL` **không** khớp select-all của egui; dùng `Modifiers::COMMAND`, và assert lại `value()` của editor sau khi gõ thay thế.
-- Snapshot chỉ là baseline chống hồi quy; **chất lượng thị giác vẫn chờ review độc lập**. IME, tray, drag & drop, hành vi cửa sổ vẫn do probe Weston cô lập lo.
-- Cập nhật baseline: `UPDATE_SNAPSHOTS=1 cargo test ... ui_harness`, rồi xem lại ảnh trước khi commit.
+- Baseline: `tests/snapshots/shell-1366x768.txt` và `shell-1920x1080.txt` giữ geometry của bar/panel/dock; `shell_layout_matches_the_recorded_baselines` so từng dòng.
+- Phủ: bar 30/34/26, ngưỡng dock Explorer/Changes, toggle Changes, chuyển trang (page thay conversation và ẩn hai dock), command palette giữ layout và đóng khi dismiss.
+- Packaged L2: `bash apps/desktop-tauri/scripts/native-journey-probe.sh shell` chạy harness với Host đóng gói — shell kết nối, tạo Session qua đúng RPC, xác nhận Session có trong list (chạy thật ~1,8 s, `host=ready 1529ms`).
+- `native-journey-probe.sh terminal|timed-question|model-default` vẫn dùng probe hook env của gpui.
+- **Đã mất, chưa có tương đương:** `egui_kittest` (AccessKit + snapshot PNG) là nơi duy nhất chạy headless UI theo label và là L2 cho `panels`/`model-default`/`update-ui`; ba journey đó đã bị gỡ khỏi `native-journey-probe.sh`, `office-component-probe.sh`, `model-default-probe.sh`, `update-flow-probe.mjs`. Dựng lại harness tương đương trên gpui là mục mở.
+- **Fixture PASS ≠ live PASS**: harness chứng minh layout và request, không chứng minh Host thật ghi settings, cài bundle hay reconnect.
+- Snapshot chỉ là baseline chống hồi quy; **chất lượng thị giác và pixel snapshot vẫn chờ review độc lập**.
+- Terminal TUI compatibility: mode tracker chạy tăng dần theo output frame và giữ DECSET state sau khi output buffer bị trim; paste/mouse được encode bằng cùng `TerminalWriter`, ack giải phóng hàng đợi theo thứ tự, refusal xoá phần còn lại và hiện lỗi; unit test native assert input/output bytes. Một phép chạy thủ công trong PTY cô lập với Neovim `mouse=a` xác nhận Neovim bật `2004`, `1002`, `1006`, lưu chính xác paste hai dòng được bọc bằng `ESC[200~`/`ESC[201~`, và đổi vị trí chèn theo SGR mouse click. Đây là kiểm tra giao thức với TUI thật, không phải probe Host/AppImage hay GUI OS.
 - Đo bộ nhớ trên desktop thật: dựng binary release, chạy với `DSH_HOME` cô lập trên một workspace, rồi đọc `VmHWM`/`VmRSS` từ `/proc/<pid>/status` và `Pss:` từ `/proc/<pid>/smaps_rollup` sau mỗi thao tác (boot → tạo Session → dán chữ CJK → mở Settings). Số 2026-10-24: 92,7 MB peak (79,6 PSS) lúc boot, 133,5 MB (120,5 PSS) khi có CJK + Settings. **Bẫy**: cửa sổ DSH của người dùng cũng có class `DeepSeek Harness`, nên `hyprctl -j activewindow` theo class là chưa đủ — phải so `pid` với pid app vừa lao động trước khi gõ phím; và `DSH_HOME` cô lập chỉ tách session, còn số liệu usage trong Settings vẫn đọc từ dữ liệu chung nên đừng nhầm đó là session của mình.
-- Lịch sử Session: `session/page` và `session/follow` cùng đổ vào `Transcript::merge` (sort theo `seq`, mỗi event project một lần, trang cũ chèn lên trước, snapshot cửa sổ không xoá lịch sử cũ). Danh sách event thô (seq/type/text) đã bỏ để chỉ còn một renderer; nút "Load older events" chuyển lên đầu khung chat. Test: mở session cũ (kèm tool events), snapshot chen lúc load, chuyển session, 2.100 event (cắt còn 2.000), phân trang 120 event; ordering của live stream được test riêng ở tầng wire frame (`live_follow_frames_project_in_wire_order`), không dựa vào replay của loopback.
+- Lịch sử Session: `session/page` và `session/follow` cùng đổ vào `Transcript::merge` (sort theo `seq`, mỗi event project một lần, trang cũ chèn lên trước, snapshot cửa sổ không xoá lịch sử cũ); nút "Load older events" chuyển lên đầu khung chat. Test: mở session cũ (kèm tool events), snapshot chen lúc load, chuyển session, 2.100 event (cắt còn 2.000), phân trang 120 event; ordering của live stream được test riêng ở tầng wire frame (`live_follow_frames_project_in_wire_order`), không dựa vào replay của loopback.
 
 ## 8. Tài liệu lane
 `.agents/plan/desktop-tauri/PLAN.md` (kế hoạch + bảng finding F01–F13) · `MEMORY.md` (quyết định D1–D39, số đo M1–M25, bẫy B1–B52) · `AGENTS.md` (luật lệ của lane) · `probes/` (probe cũ) — cập nhật cả hai file đầu khi có quyết định mới.
@@ -461,12 +474,12 @@ Trạng thái nhánh: `chore/web-bun-migration`, **chưa push**, working tree s�
 - `bun run typecheck` **5/5**, `bun run test:docs` **21/21**, `verify-type-equiv` **494**, `verify-cordis-catalog` fresh, `verify-translation-pairing` **1018 pair**.
 
 ### Còn mở (đã cân nhắc, không phải bỏ sót)
-1. **C3 — xoá cứng Session.** `packages/session/session-persistence` chỉ có `create/open/flush/stat/list`; provider duy nhất là `session-persistence-jsonl`. Muốn làm phải thêm `delete` vào seam + provider, chặn session đang mở/đang chạy, rồi `session/delete` + UI confirm. Đây là quyết định durability/data-destructive; archive hiện là đường an toàn được hỗ trợ.
-2. **D2 — Diagnostics panel.** Không có nguồn dữ liệu: `packages/lsp/lsp-stdio/src/connection.ts` **chủ động bỏ** notification `publishDiagnostics`, và `packages/lsp` tuyên bố diagnostics ngoài scope. Cần owner state mới (accumulator + freshness/clear rules) trước khi có RPC/UI.
-3. **D3 — nhiều buffer tab Agent**, **D4 — gộp Preferences thành một cửa sổ**: thay đổi layout/state lớn, nên làm PR riêng.
-4. **D5 — terminal policy theo workspace.** Host chỉ có cap theo Session (`maxTerminals` trong `api-terminal-controller`); không có khái niệm workspace ⇒ cần quyết định sản phẩm.
-5. **D7 — test composition IME tự động.** Harness không inject được composition của platform; hiện có test marked-text + bằng chứng tay trên desktop thật (fcitx5 Bamboo).
-6. Việc cũ chưa đóng: production signing/published-feed swap, physical-window pointer + visual review, Marketplace rollback version cũ, T08 discard version/source guard, EXT-04 test lỗi extension, `request_id` phía client không retry tự động.
+1. ~~**C3 — xoá cứng Session.**~~ **Xong 07/11:** `delete` đã vào seam `session-persistence`, provider JSONL xoá cả thư mục sau khi lấy cross-process lease, `session/delete` từ chối Session đang attach/chạy, client-core và Sessions page có nút Delete hai bước. Contract test phủ delete + refusal khi còn handle mở.
+2. ~~**D2 — Diagnostics panel.**~~ **Xong 07/11:** `lsp-stdio` nhận `publishDiagnostics`, `ctx.lsp.diagnostics()` chỉ gộp provider đã đăng ký (server user cấu hình/cài), `session/diagnostics` + panel bottom dock có Refresh và jump-to-line. Server khởi động lazy nên snapshot rỗng không có nghĩa workspace sạch.
+3. ~~**D3 — nhiều buffer tab Agent**~~ **Xong 07/11:** `DesktopApp.agent_tabs` (tối đa `MAX_AGENT_TABS = 6`), tab strip trong Agent column có chuyển/đóng buffer, đóng buffer active chọn buffer kế bên hoặc xoá conversation. Transcript vẫn dùng cache LRU 6 + `load_session`; **chỉ buffer đang active giữ follow stream**, buffer nền resume khi kích hoạt. **D4 — gộp Preferences** đã đạt: `render/pages.rs` chỉ có một trang Preferences với các section Appearance/Workspace/Updates/Host settings, không còn nhiều cửa sổ.
+4. ~~**D5 — terminal policy theo workspace.**~~ **Xong 07/11:** `maxWorkspaceTerminals` (default 16) cap tổng terminal của mọi Session trong cùng Workspace; `terminal-controller` đọc `workspaceRegistry` qua `ctx.get` (optional) nên deployment không mount Workspace vẫn giữ cap theo Session. Session ngoài Workspace dùng `maxTerminals`. README en/zh cập nhật; test controller 62 pass.
+5. ~~**D7 — test composition IME tự động.**~~ **Xong 07/11:** tách state change khỏi `InputHandler` thành `compose_composition`/`commit_composition`/`unmark_composition`; unit test phủ mark → update → commit → cancel, harness test chạy cùng đường qua entity input thật (`compose_input`/`commit_input`) nên không cần platform injector. Vẫn có bằng chứng tay fcitx5 Bamboo.
+6. Việc cũ chưa đóng: production signing/published-feed swap, physical-window pointer + visual review, Marketplace rollback version cũ. **T08** đã thêm `expectedStatus` cho `git/discard` (Host từ chối nếu status đã đổi). **EXT-04** đã có test cô lập activation failure trong `plugin-manager/tests/manager.spec.ts`. **`request_id`** giữ nguyên không auto-retry: submit lỗi là "outcome unknown", retry mù có thể gửi trùng kết quả approval; UI báo unknown thay vì giả thành công.
 
 ### File chính của phiên
 - `packages/api/workspace-controller/src/{git,types}.ts`, `tests/git.host.spec.ts`
@@ -489,7 +502,27 @@ Trạng thái nhánh: `chore/web-bun-migration`, **chưa push**, working tree s�
 - Packaged journey chạy bằng: `bash apps/desktop-tauri/scripts/native-journey-probe.sh shell` (cần cây packaged ở `apps/desktop/.desktop-build/targets/linux-x64`, mock model `scripts/mock-model-server.mjs` mode approval).
 
 ### Gợi ý thứ tự tiếp theo
-1. C3 nếu owner chấp nhận semantics xoá cứng (viết Agent Note + upgrade guide nếu đổi surface).
-2. D3 (multi-buffer) — tách state tab khỏi transcript hiện tại.
-3. D2 diagnostics — cần package owner + quyết định freshness trước khi làm UI.
-4. A runtime mode cho `ask_user_question` nếu owner muốn timed có journey packaged.
+1. ~~C3~~ đã xong 07/11; còn viết upgrade guide nếu owner muốn ghi nhận surface `session/delete` ra ngoài lane.
+2. ~~D3 (multi-buffer)~~ đã xong 07/11 (buffer tab; follow stream chỉ ở buffer active).
+3. ~~D2 diagnostics~~ đã xong 07/11 (snapshot, không stream).
+4. ~~D5 terminal policy theo workspace~~ đã xong 07/11.
+5. ~~D7 test IME tự động~~ đã xong 07/11.
+6. A runtime mode cho `ask_user_question` nếu owner muốn timed có journey packaged.
+
+## Bàn giao 2026-11-07 — C3, T08 guard, docs
+
+- **C3 xoá cứng Session** (owner đã chọn semantics xoá cứng):
+  - `SessionPersistence.delete` + `SessionPersistenceDeleteOptions`; provider JSONL tìm generation, lấy cross-process lease, `rm -rf` thư mục Session, xoá cold-log/migration memo.
+  - Từ chối khi còn handle mở/writer claim (`SessionAlreadyOwnedError`); Session chưa materialize hoặc không tồn tại → `SessionPersistenceNotFoundError`.
+  - `session/delete` từ chối Session đang attach (`session/agent-busy`, reason `attached`) hoặc đang chạy (`reason: running`), trả `session/not-found` / `session/writer-held` từ seam.
+  - client-core `SessionsClient::delete`; Sessions page có nút **Delete** hai bước (click lần hai mới gửi), nhãn đổi thành `Confirm delete`.
+  - Test: contract `delete removes...` + `delete refuses while an open handle...` (190 test JSONL pass), `git.host` 79 pass.
+- **T08**: `GitPathRequest.expectedStatus`; `git/discard` từ chối khi status hiện tại khác status đã review; client-core `discard` nhận `expected_status`; shell truyền status của confirmation. Test mới trong `git.host.spec.ts`.
+- **D5**: `maxWorkspaceTerminals` (default 16) cap tổng terminal của các Session trong cùng Workspace; registry được đọc optional qua `ctx.get`, Session ngoài Workspace vẫn chỉ dùng `maxTerminals`. Test `controller.spec.ts` thêm ca workspace cap (62 pass).
+- **D3**: `agent_tabs` + tab strip trong Agent column; mở buffer qua `load_session`, đóng buffer bằng nút ×, tối đa 6 buffer, đóng buffer active chọn buffer kế bên. Chỉ buffer active giữ follow stream; buffer nền dùng transcript cache và resume khi kích hoạt. Harness test phủ mở/chuyển/đóng/cap.
+- **D7**: `TextInput` tách `compose_composition`/`commit_composition`/`unmark_composition` khỏi `InputHandler`; unit test phủ composition mark/update/commit/cancel, harness test chạy qua entity input thật.
+- **D2**: `lsp-stdio` ghi `textDocument/publishDiagnostics` (giới hạn 500 item/instance, normalize severity/range, bỏ payload hỏng); `ctx.lsp.diagnostics(workspaceRoot)` gộp từ **các provider đã đăng ký**, tức chỉ server user cấu hình hoặc cài qua bundle; `session/diagnostics` trả snapshot; client-core `DiagnosticsClient`; bottom dock có **Diagnostics** panel với Refresh và click mở Document tại dòng. Server LSP vẫn khởi động lazy, nhưng mở một file text trong Document preview sẽ gọi `session/diagnose` (open → chờ publish → close) để panel có dữ liệu ngay; file không có provider cấu hình hoặc server không publish trong `diagnoseTimeoutMs` trả rỗng. Empty snapshot vẫn không có nghĩa workspace sạch.
+- **EXT-04**: đã có test cô lập activation failure (`keeps a valid installed bundle when its subsequent activation fails`, `returns unchanged failures as warnings...`) — không thêm code.
+- **Docs**: thêm khối "Trạng thái hiện tại" đầu `HANDOFF.md`, sửa §7b sang harness gpui, đánh dấu các mục lịch sử.
+- Gate đã chạy: `bun run typecheck` 5/5; `bun run lint` pass (1 warning có sẵn); `bun run test:docs` pass sau khi bỏ commit hash khỏi HANDOFF; `cargo test` native-app 188/1, client-core **104 + 8 + 11**; JSONL contract 190; git.host 79; plugin-manager 108.
+- Chưa làm: release/signing, physical-window pointer/visual review, Marketplace rollback.
