@@ -91,6 +91,18 @@ describe('read-only', () => {
 describe('workspace-write containment', () => {
   beforeEach(() => boot('workspace-write'))
 
+  it('rejects an extra directory replaced by a symlink to an ungranted sibling', async () => {
+    const extra = join(workspace, 'extra')
+    await mkdir(extra)
+    const policy = { mode: 'workspace-write' as const, workspaceRoot: workspace, additionalWritableRoots: [extra] }
+    await fs.writeText(await target(join(extra, 'before.txt')), 'allowed', undefined, undefined, policy)
+    await rm(extra, { recursive: true })
+    await symlink(outside, extra, 'dir')
+    await expect(fs.writeText(await target(join(outside, 'escape.txt')), 'denied', undefined, undefined, policy))
+      .rejects.toMatchObject({ code: 'SANDBOX_INVALID_ROOT' })
+    expect(existsSync(join(outside, 'escape.txt'))).toBe(false)
+  })
+
   it('a write under the workspace lands', async () => {
     const path = join(workspace, 'nested', 'ok.txt')
     const outcome = await fs.writeText(await target(path), 'inside')
@@ -242,47 +254,37 @@ describe('FsError identity', () => {
   })
 })
 
-describe('rename and remove under workspace-write', () => {
-  beforeEach(() => boot('workspace-write'))
-
-  it('renames and deletes inside the workspace', async () => {
-    await writeFile(join(workspace, 'a.txt'), 'one')
-    const source = await target(join(workspace, 'a.txt'))
-    await fs.rename(source, await target(join(workspace, 'b.txt')))
-    expect(await readFile(join(workspace, 'b.txt'), 'utf8')).toBe('one')
-    await fs.remove(await target(join(workspace, 'b.txt')))
-    expect(existsSync(join(workspace, 'b.txt'))).toBe(false)
-  })
-
-  it('denies a rename whose source or destination escapes the workspace', async () => {
-    await writeFile(join(workspace, 'a.txt'), 'one')
-    await writeFile(join(outside, 'o.txt'), 'two')
-    await expect(fs.rename(await target(join(workspace, 'a.txt')), await target(join(outside, 'moved.txt'))))
-      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
-    await expect(fs.rename(await target(join(outside, 'o.txt')), await target(join(workspace, 'in.txt'))))
-      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
-    expect(existsSync(join(outside, 'moved.txt'))).toBe(false)
-    expect(existsSync(join(workspace, 'in.txt'))).toBe(false)
-  })
-
-  it('denies deleting a file outside the workspace', async () => {
-    await writeFile(join(outside, 'o.txt'), 'two')
-    await expect(fs.remove(await target(join(outside, 'o.txt'))))
-      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
-    expect(existsSync(join(outside, 'o.txt'))).toBe(true)
-  })
-})
-
-describe('rename and remove under read-only', () => {
-  beforeEach(() => boot('read-only'))
-
-  it('denies both mutations', async () => {
-    await writeFile(join(workspace, 'a.txt'), 'one')
-    const source = await target(join(workspace, 'a.txt'))
-    await expect(fs.rename(source, await target(join(workspace, 'b.txt'))))
-      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
-    await expect(fs.remove(source))
-      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
-    expect(existsSync(join(workspace, 'a.txt'))).toBe(true)
+describe('patch, delete, and move fences', () => {
+  it.each(['read-only', 'workspace-write', 'danger-full-access'] as const)('fences every new mutation under %s', async (mode) => {
+    await boot(mode)
+    const sourcePath = join(workspace, 'source')
+    const outsidePath = join(outside, 'file')
+    await writeFile(sourcePath, 'source\n')
+    await writeFile(outsidePath, 'outside\n')
+    const source = await target(sourcePath)
+    const out = await target(outsidePath)
+    const patch = [{ lineNumber: 3, oldLines: ['source'], newLines: ['patched'], isEndOfFile: false }]
+    if (mode === 'read-only') {
+      await expect(fs.patchText(source, patch)).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+      await expect(fs.deleteFile(source)).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+      await expect(fs.moveFile(source, out, {})).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+      expect(await readFile(sourcePath, 'utf8')).toBe('source\n')
+    } else if (mode === 'workspace-write') {
+      await expect(fs.moveFile(source, out, {})).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+      await expect(fs.moveFile(out, source, {})).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+      await expect(fs.patchText(out, [])).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+      await expect(fs.deleteFile(out)).rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+      expect(await readFile(sourcePath, 'utf8')).toBe('source\n')
+      expect(await readFile(outsidePath, 'utf8')).toBe('outside\n')
+      expect(await fs.patchText(source, patch)).toMatchObject({ after: 'patched\n' })
+      const destination = await target(join(workspace, 'moved'))
+      expect(await fs.moveFile(source, destination, {})).toMatchObject({ sourceDeleted: true })
+      expect(await fs.deleteFile(destination)).toEqual({ before: 'patched\n' })
+    } else {
+      expect(await fs.patchText(source, patch)).toMatchObject({ after: 'patched\n' })
+      expect(await fs.moveFile(source, out, {})).toMatchObject({ sourceDeleted: true })
+      expect(await readFile(outsidePath, 'utf8')).toBe('patched\n')
+      expect(await fs.deleteFile(out)).toEqual({ before: 'patched\n' })
+    }
   })
 })

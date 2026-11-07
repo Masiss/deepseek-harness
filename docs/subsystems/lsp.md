@@ -213,7 +213,7 @@ Generated from source by `scripts/gen-cordis-catalog.ts` (verified fresh by `pnp
 
 ### `ctx.lsp` — `LspService`
 
-The LSP capability seam (`ctx.lsp`). Owns provider registration/selection and normalized query execution; exposes exactly the four operations and no protocol escape hatch. Diagnostics are a separate provider-optional snapshot (`diagnostics()` for polling, `diagnoseFile()` for on-demand open-wait-close), never a query result.
+The LSP capability seam (`ctx.lsp`). Owns provider registration/selection and normalized query execution; exposes exactly the four operations and no protocol escape hatch. Diagnostics are a separate provider-optional snapshot, never a query result.
 
 ```ts cordis-catalog
 /**
@@ -233,6 +233,26 @@ registerProvider(provider: LspProvider): () => void
  * @returns the normalized, closed-union result.
  */
 query(request: LspQueryRequest, signal?: AbortSignal): Promise<LspQueryResult>
+
+/**
+ * Last diagnostics published by every configured provider for one workspace.
+ *
+ * Only registered providers contribute, so a server the user did not
+ * configure or install can never appear here. Results are a snapshot, not a
+ * stream; callers poll when their panel needs freshness.
+ * @param workspaceRoot - canonical or caller-supplied workspace root.
+ * @returns merged diagnostics in provider registration order.
+ */
+diagnostics(workspaceRoot: string): Promise<readonly LspDiagnostic[]>
+
+/**
+ * Ask the provider that handles this file's extension to open it and wait
+ * for diagnostics. A file with no registered provider throws `LSP_UNAVAILABLE`.
+ * @param request - file, workspace root, and optional wait budget.
+ * @param signal - optional cancellation forwarded to the provider.
+ * @returns normalized diagnostics for the file.
+ */
+diagnoseFile(request: LspDiagnoseRequest, signal?: AbortSignal): Promise<readonly LspDiagnostic[]>
 ```
 
 Source: [`packages/lsp/lsp/src/types.ts`](../../packages/lsp/lsp/src/types.ts)

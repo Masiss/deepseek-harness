@@ -31,8 +31,12 @@ const MANIFEST_BIN_ALLOWLIST = new Map<string, ManifestBin>([
 
 /** Every JavaScript executable in an application or packaging workspace has one explicit role. */
 const EXECUTABLE_SOURCE_ALLOWLIST = new Map<string, string>([
+  ['apps/cli/src/installed-bin.ts', 'installed dsh command entry'],
   ['apps/cli/src/bin.ts', 'supported dsh application launcher'],
   ['apps/desktop/scripts/logged-notarytool.mjs', 'build-only notarization logging wrapper'],
+  ['apps/desktop-tauri/scripts/gui-evidence-prompt.mjs', 'test-only GUI evidence prompt'],
+  ['apps/desktop-tauri/scripts/mock-model-server.mjs', 'test-only model server'],
+  ['apps/desktop-tauri/scripts/update-flow-probe.mjs', 'test-only packaged update probe'],
   ['packages/context/time-context/tests/fixtures/driver.ts', 'test-only subprocess driver'],
   ['packages/experimental/webworker-packer/bin.js', 'build-only wrapper'],
   ['packages/experimental/webworker-packer/src/bin.ts', 'build-only implementation'],

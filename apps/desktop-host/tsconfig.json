@@ -36,6 +36,30 @@
     },
     {
       "path": "../../packages/credentials/deepseek-account"
+    },
+    {
+      "path": "../../packages/boot/plugin-manager"
+    },
+    {
+      "path": "../../packages/util/official-bundles"
+    },
+    {
+      "path": "../../packages/fs/fs"
+    },
+    {
+      "path": "../../packages/core/session"
+    },
+    {
+      "path": "../../packages/session/session-persistence"
+    },
+    {
+      "path": "../../packages/sandbox/sandbox-policy"
+    },
+    {
+      "path": "../../packages/util/workspace-path"
+    },
+    {
+      "path": "../../packages/util/brand"
     }
   ]
 }

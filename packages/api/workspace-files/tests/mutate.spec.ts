@@ -48,9 +48,12 @@ describe('workspaceFiles.rename', () => {
   })
 
   it('rejects empty or identical paths', async () => {
+    await writeFile(join(workspace, 'a.txt'), 'one\n', 'utf8')
     await expect(harness.endpoint().rename(harness.scope, '', 'b.txt', undefined, signal()))
       .rejects.toMatchObject({ code: 'gateway/bad-request' })
     await expect(harness.endpoint().rename(harness.scope, 'a.txt', 'a.txt', undefined, signal()))
+      .rejects.toMatchObject({ code: 'gateway/bad-request' })
+    await expect(harness.endpoint().rename(harness.scope, 'a.txt', './a.txt', undefined, signal()))
       .rejects.toMatchObject({ code: 'gateway/bad-request' })
   })
 })

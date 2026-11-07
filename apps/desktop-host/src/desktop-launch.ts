@@ -141,7 +141,7 @@ export async function launchDesktopProfile(options: DesktopLaunchOptions): Promi
   const { ctx } = await application
   await options.compose?.(ctx)
   const url = ctx.connection.authenticatedUrl(`${ctx.webServer.protocol}//127.0.0.1:${String(ctx.webServer.port)}`)
-  void transport.send({ type: 'ready', url, injections: ctx.webServer.collectIndexInjections() })
+  void transport.send({ type: 'ready', url, injections: ctx.webServer.collectIndexInjections(ctx.connection.browserPeer) })
     .then(async () => { await options.onReady?.() })
     .catch((error: unknown) => { console.error(error) })
   return { ctx, stop, stopping: () => stopping !== undefined }

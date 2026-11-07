@@ -146,7 +146,7 @@ describe('desktop bridge', () => {
 
   it('contributes the bootstrap row that installs window.dshDesktop', () => {
     const table: IndexInjection[] = []
-    context?.emit('webserver/index-inject', table)
+    context?.emit('webserver/index-inject', table, {} as never)
 
     expect(table).toHaveLength(1)
     const row = table[0]
@@ -165,7 +165,7 @@ describe('desktop bridge', () => {
     dispose?.()
     dispose = undefined
     const table: IndexInjection[] = []
-    context?.emit('webserver/index-inject', table)
+    context?.emit('webserver/index-inject', table, {} as never)
 
     expect(table).toEqual([])
     // The server keeps running: only the bridge's own route is gone.

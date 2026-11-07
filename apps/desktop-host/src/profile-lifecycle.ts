@@ -23,12 +23,14 @@
 
 import {
   initProfile,
-  PROFILE_TEMPLATES,
   readProfileManifest,
   removeLinkProjections,
   writeProfileBundles,
-  type ProfileTemplate,
 } from '@deepseek-ai/dsh-app-boot'
+import {
+  PROFILE_TEMPLATES,
+  type ProfileTemplate,
+} from '@deepseek-ai/dsh-official-bundles'
 
 /** Bundles the Desktop Host boots the Web application with. */
 export function desktopProfileBundles(): readonly string[] {
