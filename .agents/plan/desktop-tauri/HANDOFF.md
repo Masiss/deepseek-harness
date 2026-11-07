@@ -526,3 +526,16 @@ Trạng thái nhánh: `chore/web-bun-migration`, **chưa push**, working tree s�
 - **Docs**: thêm khối "Trạng thái hiện tại" đầu `HANDOFF.md`, sửa §7b sang harness gpui, đánh dấu các mục lịch sử.
 - Gate đã chạy: `bun run typecheck` 5/5; `bun run lint` pass (1 warning có sẵn); `bun run test:docs` pass sau khi bỏ commit hash khỏi HANDOFF; `cargo test` native-app 188/1, client-core **104 + 8 + 11**; JSONL contract 190; git.host 79; plugin-manager 108.
 - Chưa làm: release/signing, physical-window pointer/visual review, Marketplace rollback.
+
+## Merge upstream `dsh-v0.2.2-rc.1` — 2026-11-08
+
+Worktree `/home/masis/deepseek-harness-merge`, nhánh **`merge/upstream-0.2.2`**, merge commit trên nền `upstream/master`. Chưa merge ngược vào `chore/web-bun-migration`.
+
+- **Nền mới**: upstream `0.2.2-rc.1`; Node floor **>= 24.9**; Cordis 4.1.0 / Loader 1.1.0 / Include 1.1.0; pi-ai 1.3.0. Đã khôi phục `patchedDependencies` cho các patch pnpm-only (oar, lexical, mdast, micromark) để Bun áp patch giống pnpm.
+- **Rust client**: `session/control` projection frame đổi sang `{seq, changes:[{key,val}]}`; `session/follow` bỏ `fromSeq` (Host 0.2.2 luôn mở ở log end) — native dùng snapshot + page và **reset transcript** khi phát hiện gap so với cache.
+- **Host shared packages**: C3/D2/D5/T08 được giữ trên API mới. `fs` bỏ `rename/remove`, dùng `patchText/moveFile/deleteFile`; `workspace-files` rename/delete được port sang `moveFile`/`deleteFile` (destination-exists map sang `FS_NOT_OBSERVED` → `workspace-file/already-exists`). LSP diagnostics giữ nguyên vì upstream không đổi.
+- **Liveshare**: bảng endpoint classification bổ sung các endpoint fork-only (`session/delete`, `diagnostics`, `diagnose`, `skills/setDisabled`, toàn bộ `git/*`, `workspaceFiles/{write,rename,delete,search,searchPaths}`) để policy Host và Client face khớp.
+- **Docs/tooling**: `AGENTS.md` tăng ceiling 2080 → 2140 (merge mang thêm rule upstream); regenerate `gen-cordis-catalog` cho LSP/session types; cập nhật test Bun cho `ci-workflow`, `compile-referenced-projects`, `desktop-build-paths`; `flock-entry` và test license-bundle resolve `pnpm` từ PATH thay vì `npm_execpath`.
+- **Gate đã chạy**: `bun run typecheck` 5/5; `bun run build` 10/10; `bun run lint`; `bun run test:docs` 21/21; `test:expected` 144/144; `test:snapshot` 255/255; targeted suites (session/persistence, api/session-controller, workspace-files, fs, lsp, terminal, liveshare) **4226 pass**; `cargo test` client-core 106+8+11, native-app 194/1.
+- **Còn đỏ toàn bộ `bun run test`**: các test timeout 5 s của upstream mới (`forge-github`, `worktree`, `client-ui-forge`) trên máy này; `scripts/release/pack.spec.ts > does not broaden an empty parallel family` và `bash-sandbox partial-landlock` là **pre-existing** (đã xác nhận trên worktree gốc). Không sửa fixture để vượt.
+- **Chưa làm**: physical-window review sau merge; chưa quyết định native update channel `stable` (upstream đổi `latest` → `stable`); chưa rebase/merge branch này vào lane chính.
