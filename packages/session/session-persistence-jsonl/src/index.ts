@@ -23,11 +23,12 @@ import pLimit, { type LimitFunction } from 'p-limit'
 import {
   SessionPersistence, SessionPersistenceRevision, SessionFormatUnsupportedError,
   SessionPersistenceCorruptionError,
-  SessionAlreadyExistsError, SessionPersistenceNotFoundError,
+  SessionAlreadyExistsError, SessionAlreadyOwnedError, SessionPersistenceNotFoundError,
   assertStoredId, materializeCreateHeader, sessionFormatVersionRefusal, validateStoredEvents,
   type SessionAccess, type SessionHandle,
   type SessionHandleReadResult,
   type SessionLocation, type SessionPersistenceCreateOptions,
+  type SessionPersistenceDeleteOptions,
   type SessionPersistenceListOptions, type SessionPersistenceOpenOptions,
   type SessionPersistenceSnapshot, type SessionPersistenceStatOptions,
   type SessionPersistenceRevision as PersistenceRevision,
@@ -559,6 +560,34 @@ class JsonlSessionPersistence extends SessionPersistence {
     }
     signal?.throwIfAborted()
     return snapshots
+  }
+
+  /**
+   * Permanently remove one stored session directory after acquiring its
+   * cross-process write lock.
+   *
+   * An open handle in this process or a writer holding the lock elsewhere is
+   * refused before any byte is removed; an absent session is reported as not
+   * found. The lock file disappears with the directory.
+   * @param id - the stored session to remove.
+   * @param options - optional cancellation.
+   */
+  async delete(id: SessionId, options?: SessionPersistenceDeleteOptions): Promise<void> {
+    const signal = options?.signal
+    signal?.throwIfAborted()
+    if (this.tracker.hasOpenHandle(id)) throw new SessionAlreadyOwnedError(id)
+    const selected = await this.findLog(id, signal)
+    if (selected === undefined) throw new SessionPersistenceNotFoundError(id)
+    const dir = dirname(selected.sourcePath)
+    const lease = await this.acquireLease(id, undefined, dir)
+    try {
+      signal?.throwIfAborted()
+      await rm(dir, { recursive: true, force: true })
+    } finally {
+      await lease.release()
+    }
+    this.coldLogMemo.delete(id)
+    this.migrationPreparations.delete(id)
   }
 
   // --- handle-facing storage internals (package-private via the handle class below) ---

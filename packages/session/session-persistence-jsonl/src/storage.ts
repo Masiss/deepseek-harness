@@ -458,6 +458,17 @@ export class JsonlBackendTracker {
   }
 
   /**
+   * Whether any open handle or writer claim still addresses one session.
+   * @param id - the session to test.
+   * @returns true for read handles, write handles, and construction claims.
+   */
+  hasOpenHandle(id: SessionId): boolean {
+    if (this.writers.has(id)) return true
+    for (const handle of this.openHandles) if (handle.id === id) return true
+    return false
+  }
+
+  /**
    * Iterate the pending sessions for listing.
    * @returns the pending entries, keyed by session id.
    */

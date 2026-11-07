@@ -34,6 +34,7 @@ Shell 探测结果首先列出执行环境声明的默认 shell。仅当 provide
 | `shell` | 省略 | 使用执行环境默认 shell，或指定一个 profile |
 | `shellCandidates` | `zsh`、`bash`、`fish`、`pwsh`、`powershell`、`cmd` | 已安装时供用户选择的额外可执行名称或路径 |
 | `maxTerminals` | `8` | 每个 Session 保留的终端和创建请求上限 |
+| `maxWorkspaceTerminals` | `16` | 同一 Workspace 内所有 Session 共享的终端和创建请求上限；不属于 Workspace 的 Session 只使用 `maxTerminals` |
 | `maxCols`、`maxRows` | `500`、`200` | PTY 最大尺寸 |
 | `scrollback` | `1000` | 屏幕历史行数 |
 | `maxBufferedBytes` | `2097152` | 单个订阅者输出及 Client 输入帧的缓存上限 |

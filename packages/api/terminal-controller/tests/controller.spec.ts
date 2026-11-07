@@ -18,7 +18,7 @@ import type { TerminalInput, WebTerminalId } from '../src/types.ts'
 
 const roots: Context[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map(ctx => ctx.fiber.dispose())) })
-const config: Config = { shellCandidates: ['zsh', 'bash', 'sh'], shell: { path: '/bin/bash', name: 'bash', args: ['--noprofile', '--norc', '-i'] }, maxTerminals: 2, maxCols: 200, maxRows: 100, scrollback: 100, maxBufferedBytes: 100_000, maxInputBytes: 1000, disposeGraceMs: 100, unattendedTimeoutMs: 7_200_000, activityPollIntervalMs: 30_000, cleanupRetryMs: 60_000 }
+const config: Config = { shellCandidates: ['zsh', 'bash', 'sh'], shell: { path: '/bin/bash', name: 'bash', args: ['--noprofile', '--norc', '-i'] }, maxTerminals: 2, maxWorkspaceTerminals: 16, maxCols: 200, maxRows: 100, scrollback: 100, maxBufferedBytes: 100_000, maxInputBytes: 1000, disposeGraceMs: 100, unattendedTimeoutMs: 7_200_000, activityPollIntervalMs: 30_000, cleanupRetryMs: 60_000 }
 const id = 'test-terminal' as WebTerminalId
 const request = { id, cols: 80, rows: 24 }
 const signal = (): AbortSignal => new AbortController().signal
@@ -275,6 +275,20 @@ describe('TerminalController', () => {
     await expect(controller.create(agent, request, signal())).rejects.toThrow('unavailable')
     expect(subprocess.spawnTerminal).not.toHaveBeenCalled()
 
+  })
+
+  it('caps terminals across Sessions that share one Workspace', async () => {
+    const { controller, agent, ctx } = fixture({ maxTerminals: 5, maxWorkspaceTerminals: 1 })
+    const other = owner(ctx, 'session-two')
+    const workspace = { id: 'workspace-one', sessionIds: [agent.id, other.id] }
+    ctx.provide('workspaceRegistry', {
+      list: () => [workspace],
+      get: (id: string) => id === workspace.id ? workspace : undefined,
+    } as never)
+
+    await controller.create(agent, request, signal())
+    await expect(controller.create(other, { ...request, id: 'other' as WebTerminalId }, signal()))
+      .rejects.toMatchObject({ code: 'terminal/limit-reached', details: { limit: 1 } })
   })
 
   it('keeps the committed identity on repeated creation and counts pending reservations toward the Session limit', async () => {

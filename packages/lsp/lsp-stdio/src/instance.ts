@@ -9,6 +9,8 @@
 
 import { LspError } from '@deepseek-ai/dsh-lsp'
 import type {
+  LspDiagnostic,
+  LspDiagnosticSeverity,
   LspOperation,
   LspProviderQuery,
   LspQueryResult,
@@ -28,9 +30,56 @@ import {
   supportsTransientOpen,
 } from './translate.ts'
 
+/** Maximum diagnostics retained across all documents of one server instance. */
+const MAX_PUBLISHED_DIAGNOSTICS = 500
+
+/** Map an LSP severity number to the seam vocabulary; unknown values are information. */
+function normalizeSeverity(value: unknown): LspDiagnosticSeverity {
+  switch (value) {
+    case 1: return 'error'
+    case 2: return 'warning'
+    case 3: return 'information'
+    default: return 'hint'
+  }
+}
+
+/** Project one wire diagnostic, dropping malformed ranges or messages. */
+function normalizeDiagnostic(uri: string, value: unknown): LspDiagnostic | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  const range = record.range
+  if (range === null || typeof range !== 'object') return undefined
+  const rangeRecord = range as Record<string, unknown>
+  const start = wirePosition(rangeRecord.start)
+  const end = wirePosition(rangeRecord.end)
+  if (start === undefined || end === undefined) return undefined
+  if (typeof record.message !== 'string' || record.message.length === 0) return undefined
+  const code = typeof record.code === 'string' || typeof record.code === 'number'
+    ? String(record.code)
+    : undefined
+  return {
+    uri,
+    range: { start, end },
+    severity: normalizeSeverity(record.severity),
+    message: record.message,
+    ...typeof record.source === 'string' ? { source: record.source } : {},
+    ...code === undefined ? {} : { code },
+  }
+}
+
+/** Read one zero-based wire position, rejecting negative or non-numeric values. */
+function wirePosition(value: unknown): { readonly line: number; readonly character: number } | undefined {
+  if (value === null || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  const line = record.line
+  const character = record.character
+  if (typeof line !== 'number' || typeof character !== 'number') return undefined
+  if (!Number.isSafeInteger(line) || !Number.isSafeInteger(character) || line < 0 || character < 0) return undefined
+  return { line, character }
+}
+
 /** Everything an instance needs beyond the connection spec. */
-export interface InstanceSpec extends ConnectionSpec {
-  /** Canonical workspace file URI supplied by the filesystem provider. */
+export interface InstanceSpec extends ConnectionSpec {  /** Canonical workspace file URI supplied by the filesystem provider. */
   readonly workspaceUri: string
   /** Static `initialize` options forwarded to the server. */
   readonly initializationOptions: unknown
@@ -54,6 +103,14 @@ export class LspInstance {
   private processClosed = false
   /** Populated once `initialize` succeeds; a failed handshake rejects every query. */
   private readonly ready: Promise<void>
+  /** Last diagnostics per document URI, bounded by the total item count. */
+  private readonly publishedDiagnostics = new Map<string, readonly LspDiagnostic[]>()
+  /** Publish counter per URI, so a diagnose call waits for a fresh notification. */
+  private readonly diagnosticRevisions = new Map<string, number>()
+  /** Callbacks waiting for the next publish of one URI. */
+  private readonly diagnosticWaiters = new Map<string, Set<() => void>>()
+  /** URIs whose document is currently open on the server. */
+  private readonly openDocuments = new Set<string>()
 
   /**
    * @param spec - the launch, initialize, and teardown parameters.
@@ -61,7 +118,13 @@ export class LspInstance {
    * @param writer - optional connection writer used by transport conformance tests.
    */
   constructor(private readonly spec: InstanceSpec, spawner: ConnectionSpawner, writer?: ConnectionWriter) {
-    this.connection = new LspConnection(spec, spawner, (method, params) => this.answerServerRequest(method, params), writer)
+    this.connection = new LspConnection(
+      spec,
+      spawner,
+      (method, params) => this.answerServerRequest(method, params),
+      writer,
+      (method, params) => { this.observeNotification(method, params) },
+    )
     this.ready = this.initialize()
     // A handshake rejection must not surface as an unhandled rejection before the first query awaits
     // it; queries attach the real handler.
@@ -166,6 +229,7 @@ export class LspInstance {
         throw error
       }
       opened = true
+      this.openDocuments.add(uri)
       const payload = await this.sendRequest(request.operation, uri, request.position, signal)
       return this.normalize(request.operation, payload)
     } finally {
@@ -181,6 +245,7 @@ export class LspInstance {
           await this.awaitTeardownAttempt()
         }
       }
+      if (opened) this.openDocuments.delete(uri)
     }
   }
 
@@ -264,10 +329,147 @@ export class LspInstance {
   }
 
   /**
+   * Diagnostics last published by this instance, across the documents it has
+   * opened. The snapshot is a copy; later publishes replace it.
+   * @returns bounded normalized diagnostics.
+   */
+  diagnostics(): readonly LspDiagnostic[] {
+    const items: LspDiagnostic[] = []
+    for (const file of this.publishedDiagnostics.values()) items.push(...file)
+    return items
+  }
+
+  /**
+   * Open one document, wait for a fresh diagnostics publish, then close it.
+   *
+   * Empty publishes are retained only while the document is open, so closing a
+   * file does not erase the last diagnostics a panel is showing.
+   * @param source - validated host source with the canonical file URI.
+   * @param languageId - language id from the provider's extension map.
+   * @param timeoutMs - longest wait for the server's publish.
+   * @param signal - optional cancellation for open/wait/close.
+   * @returns the published diagnostics for the file, or none on timeout.
+   */
+  async diagnose(
+    source: HostSource,
+    languageId: string,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<readonly LspDiagnostic[]> {
+    const deadAtEntry = this.dead
+    if (deadAtEntry) throw new LspError('LSP instance is not available', 'LSP_DISPOSED')
+    await this.ready
+    const capabilities = this.capabilities
+    /* v8 ignore next -- `ready` resolves only after capabilities are set. */
+    if (capabilities === undefined) throw new Error('LSP instance is not initialized')
+    if (!supportsTransientOpen(capabilities.textDocumentSync)) {
+      throw new LspError('server does not support the textDocument/didOpen this host requires', 'LSP_UNSUPPORTED_OPERATION')
+    }
+    const uri = source.fileUrl
+    const baseline = this.diagnosticRevisions.get(uri) ?? 0
+    if (signal?.aborted) throw abortError(signal)
+    await abortable(this.connection.notify('textDocument/didOpen', {
+      textDocument: { uri, languageId, version: 1, text: source.text },
+    }), signal)
+    this.openDocuments.add(uri)
+    try {
+      await this.waitForDiagnostics(uri, baseline, timeoutMs, signal)
+      return this.publishedDiagnostics.get(uri) ?? []
+    } finally {
+      try {
+        await this.connection.notify('textDocument/didClose', { textDocument: { uri } })
+      } catch (_closeFailure: unknown) {
+        // Closing is best-effort; the returned snapshot was already captured.
+      }
+      this.openDocuments.delete(uri)
+    }
+  }
+
+  /** Resolve when the URI's publish counter moves past `baseline`, or on timeout/abort. */
+  private waitForDiagnostics(
+    uri: string,
+    baseline: number,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if ((this.diagnosticRevisions.get(uri) ?? 0) > baseline) return Promise.resolve()
+    return new Promise<void>((resolve, reject) => {
+      let settled = false
+      const finish = (error?: Error): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        signal?.removeEventListener('abort', onAbort)
+        const waiters = this.diagnosticWaiters.get(uri)
+        waiters?.delete(check)
+        if (waiters !== undefined && waiters.size === 0) this.diagnosticWaiters.delete(uri)
+        if (error === undefined) resolve()
+        else reject(error)
+      }
+      const check = (): void => {
+        if ((this.diagnosticRevisions.get(uri) ?? 0) > baseline) finish()
+      }
+      const onAbort = (): void => {
+        if (signal !== undefined) finish(abortError(signal))
+      }
+      const timer = setTimeout(() => { finish() }, timeoutMs)
+      let waiters = this.diagnosticWaiters.get(uri)
+      if (waiters === undefined) {
+        waiters = new Set()
+        this.diagnosticWaiters.set(uri, waiters)
+      }
+      waiters.add(check)
+      signal?.addEventListener('abort', onAbort, { once: true })
+      check()
+    })
+  }
+
+  /**
+   * Record one `textDocument/publishDiagnostics` notification. Other
+   * notifications stay ignored. Malformed params are dropped instead of
+   * failing the server.
+   */
+  private observeNotification(method: string, params: unknown): void {
+    if (method !== 'textDocument/publishDiagnostics') return
+    if (params === null || typeof params !== 'object') return
+    const record = params as { uri?: unknown; diagnostics?: unknown }
+    if (typeof record.uri !== 'string' || !Array.isArray(record.diagnostics)) return
+    const diagnostics: LspDiagnostic[] = []
+    for (const value of record.diagnostics) {
+      const diagnostic = normalizeDiagnostic(record.uri, value)
+      if (diagnostic !== undefined) diagnostics.push(diagnostic)
+    }
+    // Keep the last non-empty publish after the document closes; an empty
+    // publish while open is a real clear.
+    if (diagnostics.length > 0 || this.openDocuments.has(record.uri)) {
+      this.publishedDiagnostics.delete(record.uri)
+      this.publishedDiagnostics.set(record.uri, diagnostics)
+    }
+    this.diagnosticRevisions.set(record.uri, (this.diagnosticRevisions.get(record.uri) ?? 0) + 1)
+    const waiters = this.diagnosticWaiters.get(record.uri)
+    if (waiters !== undefined) {
+      for (const waiter of [...waiters]) waiter()
+    }
+    let total = 0
+    for (const file of this.publishedDiagnostics.values()) total += file.length
+    while (total > MAX_PUBLISHED_DIAGNOSTICS) {
+      const oldest = this.publishedDiagnostics.keys().next()
+      if (oldest.done === true) break
+      const removed = this.publishedDiagnostics.get(oldest.value)
+      this.publishedDiagnostics.delete(oldest.value)
+      total -= removed?.length ?? 0
+    }
+  }
+
+  /**
    * Reject queued work, attempt graceful `shutdown`/`exit`, then escalate SIGTERM→SIGKILL, awaiting
    * process close so nothing outlives disposal.
    */
   async dispose(): Promise<void> {
+    this.publishedDiagnostics.clear()
+    this.diagnosticRevisions.clear()
+    this.diagnosticWaiters.clear()
+    this.openDocuments.clear()
     await this.startTeardown()
   }
 

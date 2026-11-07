@@ -279,6 +279,12 @@ export interface GitCheckoutValue {
 export interface GitPathRequest {
   /** Path relative to the repository root, as reported by {@link GitChangedFile.path}. */
   readonly path: string
+  /**
+   * Status the caller displayed before a destructive verb. When present, the
+   * Host refuses the mutation if the path's current status differs, so a
+   * concurrent edit cannot be discarded under a stale confirmation.
+   */
+  readonly expectedStatus?: string
 }
 
 /** Diff request for one changed path. */

@@ -59,12 +59,15 @@ The `servers` record maps each stable provider id to one server command. The pro
 | `maxDocumentBytes` | `4000000` | Largest source file this host opens |
 | `shutdownTimeoutMs` | `5000` | Graceful `shutdown`/`exit` budget before escalation |
 | `killGraceMs` | `2000` | Request-cancel and SIGTERM→SIGKILL escalation grace |
+| `diagnoseTimeoutMs` | `1500` | Longest wait for a server's diagnostics publish after opening a file |
 
 `servers` must contain at least one entry with non-empty ids; timer budgets must be positive integers within Node's timer range, and byte caps must be positive. The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-lsp-stdio) is the exhaustive source for every accepted field.
 
 ### What a query does
 
 On the first query for a workspace, the provider launches one server process for that workspace and keeps it pooled. Each query reads the current source through `ctx.fs`, opens it in the server (`textDocument/didOpen`), runs the requested operation, and closes it — so the server always sees current text and no document state persists between calls. Queries to one server and workspace run one at a time; different workspaces run in parallel. If the pooled process fails before or during a read-only query, the provider retries that query once on a fresh process.
+
+The provider also records `textDocument/publishDiagnostics` notifications the pooled server emits, normalized to the seam's `LspDiagnostic` vocabulary and bounded to 500 items per instance. `diagnostics(workspaceRoot)` returns that snapshot for the workspace's live instance; a workspace whose server has not run yet returns none. Only servers this deployment configured (directly or through an installed bundle) are registered, so no other language server can contribute.
 
 ### Observable success and failures
 
@@ -147,6 +150,7 @@ These limits define when the provider is a poor fit or needs special operational
 - **Transient-open compatibility floor** — servers whose synchronization omits open/close (or advertises `None`) are unsupported even if closed-document queries would work; the pinned TypeScript e2e establishes one compatibility floor, not a cross-language claim.
 - **Per-server and per-workspace serialization latency** — parallel agents sharing one server and workspace queue behind one process; long-lived workspace processes consume memory until disposal.
 - **A hard-killed harness orphans language servers** — `initialize.processId: null` removes server-side client-PID monitoring, so servers are cleaned only by graceful service disposal; a SIGKILL'd harness leaves them running until they exit on their own.
+- **Diagnostics are snapshot-shaped** — the provider stores the last publish per URI; consumers poll and servers publish only after they open a document, so an empty snapshot does not mean a clean workspace.
 
 <a id="dev-note"></a>
 ### Dev Note

@@ -140,7 +140,17 @@ function handle(message: { id?: number; method?: string; params?: unknown; resul
       const params = message.params as { textDocument?: { text?: unknown } } | undefined
       appendFileSync(openMarker, `${JSON.stringify(params?.textDocument?.text)}\n`)
     }
-    if (onOpen !== undefined) emitServerRequest(onOpen)
+    if (onOpen !== undefined) {
+      if (onOpen === 'diagnostics') {
+        const params = message.params as { textDocument?: { uri?: unknown } } | undefined
+        const uri = typeof params?.textDocument?.uri === 'string'
+          ? params.textDocument.uri
+          : 'file:///workspace/a.ts'
+        emitDiagnostics(uri)
+      } else {
+        emitServerRequest(onOpen)
+      }
+    }
     return
   }
   if (method === 'initialized') {
@@ -170,10 +180,29 @@ function markExit(event: string): void {
   if (exitMarker !== undefined) appendFileSync(exitMarker, `${event}\n`)
 }
 
+/** Emit a fixed diagnostics publish for one document URI. */
+function emitDiagnostics(uri: string): void {
+  send({
+    method: 'textDocument/publishDiagnostics',
+    params: {
+      uri,
+      diagnostics: [
+        { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } }, severity: 1, message: 'first error', source: 'fixture', code: 1001 },
+        { range: { start: { line: 1, character: 2 }, end: { line: 1, character: 4 } }, severity: 2, message: 'second warning' },
+        { range: { start: { line: -1, character: 0 }, end: { line: 0, character: 0 } }, severity: 1, message: 'malformed range' },
+      ],
+    },
+  })
+}
+
 /** Emit a server→client request and log the client's reply to stderr for the test to assert. */
 function emitServerRequest(kind: string): void {
   if (kind === 'notification') {
     send({ method: 'window/logMessage', params: { type: 3, message: 'hello' } })
+    return
+  }
+  if (kind === 'diagnostics') {
+    emitDiagnostics('file:///workspace/a.ts')
     return
   }
   const id = serverRequestId++

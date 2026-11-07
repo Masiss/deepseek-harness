@@ -442,6 +442,18 @@ describe('GitCommands diff and index verbs', () => {
     await expect(readFile(join(root, 'a.txt'), 'utf8')).resolves.toBe('one\n')
   })
 
+  it('refuses a discard whose reviewed status no longer matches', async () => {
+    await writeFile(join(root, 'a.txt'), 'local\n')
+    const commands = new GitCommands(RUNNER)
+    await expect(
+      commands.discard(root, { path: 'a.txt', expectedStatus: 'deleted' }, signal()),
+    ).rejects.toMatchObject({ code: 'git/path-refused' })
+    await expect(readFile(join(root, 'a.txt'), 'utf8')).resolves.toBe('local\n')
+    await expect(
+      commands.discard(root, { path: 'a.txt', expectedStatus: 'modified' }, signal()),
+    ).resolves.toEqual({ path: 'a.txt', operation: 'discard' })
+  })
+
   it('commits the staged index', async () => {
     await writeFile(join(root, 'a.txt'), 'two\n')
     const commands = new GitCommands(RUNNER)

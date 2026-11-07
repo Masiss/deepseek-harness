@@ -306,7 +306,7 @@ export abstract class FileSystem extends Service {
    *   under; a sandboxing backend fences both source and destination.
    * @returns the destination version after the rename.
    */
-  async rename(
+  rename(
     target: FsTarget,
     destination: FsTarget,
     expected?: { version: FsVersion },
@@ -317,8 +317,8 @@ export abstract class FileSystem extends Service {
     void destination
     void expected
     void sandboxPolicy
-    if (signal?.aborted === true) throw new FsError('rename aborted', 'FS_ABORTED')
-    throw new FsError('Renaming is not supported by this filesystem provider.', 'FS_IO_ERROR')
+    if (signal?.aborted === true) return Promise.reject(new FsError('rename aborted', 'FS_ABORTED'))
+    return Promise.reject(new FsError('Renaming is not supported by this filesystem provider.', 'FS_IO_ERROR'))
   }
 
   /**
@@ -330,7 +330,7 @@ export abstract class FileSystem extends Service {
    * @param sandboxPolicy - the per-call mode and workspace root this delete runs
    *   under; a sandboxing backend fences it.
    */
-  async remove(
+  remove(
     target: FsTarget,
     expected?: { version: FsVersion },
     signal?: AbortSignal,
@@ -339,8 +339,8 @@ export abstract class FileSystem extends Service {
     void target
     void expected
     void sandboxPolicy
-    if (signal?.aborted === true) throw new FsError('delete aborted', 'FS_ABORTED')
-    throw new FsError('Deleting is not supported by this filesystem provider.', 'FS_IO_ERROR')
+    if (signal?.aborted === true) return Promise.reject(new FsError('delete aborted', 'FS_ABORTED'))
+    return Promise.reject(new FsError('Deleting is not supported by this filesystem provider.', 'FS_IO_ERROR'))
   }
 }
 

@@ -34,6 +34,7 @@ Shell discovery lists the execution environment's declared default shell first. 
 | `shell` | omitted | Use the execution environment's default shell, or one explicit profile |
 | `shellCandidates` | `zsh`, `bash`, `fish`, `pwsh`, `powershell`, `cmd` | Additional executable names or paths offered when installed |
 | `maxTerminals` | `8` | Retained terminals and pending allocations per Session |
+| `maxWorkspaceTerminals` | `16` | Retained terminals and pending allocations across Sessions sharing one Workspace; Sessions outside a Workspace use `maxTerminals` only |
 | `maxCols`, `maxRows` | `500`, `200` | Maximum PTY dimensions |
 | `scrollback` | `1000` | Retained screen history rows |
 | `maxBufferedBytes` | `2097152` | Encoded output per follower and buffered Client input |

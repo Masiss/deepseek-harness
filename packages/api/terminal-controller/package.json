@@ -59,6 +59,7 @@
     "@deepseek-ai/dsh-lazy-require": "workspace:*",
     "@deepseek-ai/dsh-typert-protocol": "workspace:*",
     "@deepseek-ai/dsh-util-values": "workspace:*",
+    "@deepseek-ai/dsh-workspace": "workspace:*",
     "@deepseek-ai/schemastery": "workspace:~",
     "@xterm/addon-serialize": "^0.14.0",
     "@xterm/headless": "^6.0.0",

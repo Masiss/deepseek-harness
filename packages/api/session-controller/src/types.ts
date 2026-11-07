@@ -339,6 +339,73 @@ export interface SessionRenameRequest {
   readonly title: string
 }
 
+/** Request to permanently remove one stored Session. */
+export interface SessionDeleteRequest {
+  readonly sessionId: SessionId
+}
+
+/** Confirmation that a stored Session was removed. */
+export interface SessionDeleteValue {
+  readonly sessionId: SessionId
+}
+
+/** Request for diagnostics published by configured language servers. */
+export interface SessionDiagnosticsRequest {
+  readonly sessionId: SessionId
+}
+
+/** Diagnostic severity shared with the LSP seam vocabulary. */
+export type SessionDiagnosticSeverity = 'error' | 'warning' | 'information' | 'hint'
+
+/** Zero-based UTF-16 diagnostic coordinate. */
+export interface SessionDiagnosticPosition {
+  readonly line: number
+  readonly character: number
+}
+
+/** Zero-based UTF-16 diagnostic range. */
+export interface SessionDiagnosticRange {
+  readonly start: SessionDiagnosticPosition
+  readonly end: SessionDiagnosticPosition
+}
+
+/** One diagnostics item from a configured language server. */
+export interface SessionDiagnostic {
+  readonly uri: string
+  readonly range: SessionDiagnosticRange
+  readonly severity: SessionDiagnosticSeverity
+  readonly message: string
+  readonly source?: string
+  readonly code?: string
+}
+
+/** Diagnostics snapshot for the Session's workspace. */
+export interface SessionDiagnosticsValue {
+  /** Workspace root the providers indexed. */
+  readonly workspaceRoot: string
+  /** Merged diagnostics from configured providers; empty when none are running or they published none. */
+  readonly items: readonly SessionDiagnostic[]
+}
+
+/** Request to diagnose one file on demand. */
+export interface SessionDiagnoseRequest {
+  readonly sessionId: SessionId
+  /** File to open in its configured language server (workspace-relative or absolute). */
+  readonly path: string
+}
+
+/** On-demand diagnostics for one file. */
+export interface SessionDiagnoseValue {
+  /** Workspace root the provider indexed. */
+  readonly workspaceRoot: string
+  /** The file that was diagnosed. */
+  readonly path: string
+  /** Canonical file URI the provider opened, used by clients to replace stale items. */
+  readonly uri: string
+  /** Diagnostics published for the file, or empty when the server did not publish in time. */
+  readonly items: readonly SessionDiagnostic[]
+}
+
 /** Normalized title and the durable event position that committed it. */
 export interface SessionRenameValue {
   readonly title: string

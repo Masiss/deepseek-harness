@@ -112,6 +112,45 @@ const RESPONDING_SERVER =
 const locJson = () => JSON.stringify({ uri: pathToFileURL(join(ws, 'a.ts')).href, range: { start: { line: 0, character: 0 }, end: { line: 0, character: 3 } } })
 
 describe('LspInstance server-request handling', () => {
+  it('records normalized diagnostics published while a document is open', async () => {
+    const instance = makeInstance({ LSP_FAKE_ON_OPEN: 'diagnostics' })
+    await run(instance)
+    const uri = pathToFileURL(join(ws, 'a.ts')).href
+    expect(instance.diagnostics()).toEqual([
+      {
+        uri,
+        range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } },
+        severity: 'error',
+        message: 'first error',
+        source: 'fixture',
+        code: '1001',
+      },
+      {
+        uri,
+        range: { start: { line: 1, character: 2 }, end: { line: 1, character: 4 } },
+        severity: 'warning',
+        message: 'second warning',
+      },
+    ])
+    await instance.dispose()
+    expect(instance.diagnostics()).toEqual([])
+  })
+
+  it('opens a file on demand and returns its diagnostics', async () => {
+    const instance = makeInstance({ LSP_FAKE_ON_OPEN: 'diagnostics' })
+    const workspace = {
+      target: await fs.resolve(ws),
+      canonicalPath: ws,
+      fileUrl: pathToFileURL(ws).href,
+    }
+    const source = await readHostSource(fs, 'a.ts', workspace, 4_000_000)
+    const items = await instance.diagnose(source, 'typescript', 1_000)
+    expect(items).toHaveLength(2)
+    expect(items[0]?.message).toBe('first error')
+    // Retained after didClose so a panel does not lose the last snapshot.
+    expect(instance.diagnostics()).toHaveLength(2)
+  })
+
   it('answers workspace/configuration with the static config per item', async () => {
     const instance = makeInstance({ LSP_FAKE_ON_OPEN: 'configuration', LSP_FAKE_DEF: locJson() })
     // The query drives didOpen, which makes the fake emit workspace/configuration; a healthy answer

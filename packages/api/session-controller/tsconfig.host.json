@@ -66,6 +66,9 @@
       "path": "../../llm/llm"
     },
     {
+      "path": "../../lsp/lsp"
+    },
+    {
       "path": "../../util/deque"
     },
     {

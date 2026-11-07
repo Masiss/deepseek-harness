@@ -7,7 +7,8 @@
  * {@link Lsp.registerProvider} validates and conflict-checks everything before mutating, so an
  * invalid or conflicting registration publishes nothing, and its disposer releases every
  * reservation together. Selection routes a query by the file's final extension; it never depends on
- * registration order. The seam exposes exactly the four operations and no JSON-RPC escape hatch.
+ * registration order. The seam exposes exactly the four operations and no JSON-RPC escape hatch;
+ * diagnostics are a separate provider-optional snapshot.
  * @module @deepseek-ai/dsh-lsp
  */
 
@@ -15,6 +16,8 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import { HarnessError } from '@deepseek-ai/dsh-llm'
 import type { LspProviderId } from './brand.ts'
 import type {
+  LspDiagnoseRequest,
+  LspDiagnostic,
   LspProvider,
   LspQueryRequest,
   LspQueryResult,
@@ -23,6 +26,9 @@ import type {
 
 export { LspProviderId } from './brand.ts'
 export type {
+  LspDiagnoseRequest,
+  LspDiagnostic,
+  LspDiagnosticSeverity,
   LspHover,
   LspLocation,
   LspOperation,
@@ -82,6 +88,8 @@ interface Route {
 export class Lsp extends Service implements LspService {
   private readonly providerIds = new Set<LspProviderId>()
   private readonly routes = new Map<string, Route>()
+  /** Providers in registration order, including ones that expose diagnostics. */
+  private readonly providers = new Set<LspProvider>()
 
   constructor(ctx: Context) {
     super(ctx, 'lsp')
@@ -129,9 +137,11 @@ export class Lsp extends Service implements LspService {
     // releases them together.
     const dispose = this.ctx.effect(function* (this: Lsp) {
       this.providerIds.add(id)
+      this.providers.add(provider)
       for (const [ext, route] of pending) this.routes.set(ext, route)
       yield () => {
         this.providerIds.delete(id)
+        this.providers.delete(provider)
         for (const ext of pending.keys()) this.routes.delete(ext)
       }
     }.bind(this), 'lsp.registerProvider()')
@@ -146,6 +156,26 @@ export class Lsp extends Service implements LspService {
       throw new LspError(`no LSP provider handles "${request.filePath}"`, 'LSP_UNAVAILABLE')
     }
     return route.provider.query({ ...request, languageId: route.languageId }, signal)
+  }
+
+  async diagnostics(workspaceRoot: string): Promise<readonly LspDiagnostic[]> {
+    const merged: LspDiagnostic[] = []
+    for (const provider of this.providers) {
+      const items = await provider.diagnostics?.(workspaceRoot)
+      if (items !== undefined) merged.push(...items)
+    }
+    return merged
+  }
+
+  async diagnoseFile(request: LspDiagnoseRequest, signal?: AbortSignal): Promise<readonly LspDiagnostic[]> {
+    const route = this.routes.get(finalExtension(request.filePath))
+    if (route === undefined) {
+      throw new LspError(`no LSP provider handles "${request.filePath}"`, 'LSP_UNAVAILABLE')
+    }
+    if (route.provider.diagnose === undefined) {
+      throw new LspError(`LSP provider "${route.provider.id}" does not publish diagnostics`, 'LSP_UNSUPPORTED_OPERATION')
+    }
+    return route.provider.diagnose(request, signal)
   }
 }
 

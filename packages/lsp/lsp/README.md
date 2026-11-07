@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-Use `dsh-lsp` to give agents language-server navigation for definitions, references, implementations, and hover documentation. Queries select the configured provider by file extension and return normalized results with structured failures, so backend changes do not alter the navigation request or model-visible response. Navigation is read-only and deliberately excludes generic JSON-RPC access, rename, formatting, diagnostics, and symbol lists. This package must be combined with a provider such as `dsh-lsp-stdio` and the model-facing `dsh-tool-lsp`; alone it provides no navigation.
+Use `dsh-lsp` to give agents language-server navigation for definitions, references, implementations, and hover documentation. Queries select the configured provider by file extension and return normalized results with structured failures, so backend changes do not alter the navigation request or model-visible response. Navigation is read-only and deliberately excludes generic JSON-RPC access, rename, formatting, and symbol lists. Diagnostics are a separate pull snapshot (`diagnostics()`) for user-facing surfaces; they are never part of a navigation result. This package must be combined with a provider such as `dsh-lsp-stdio` and the model-facing `dsh-tool-lsp`; alone it provides no navigation.
 
 ## Table of Contents
 
@@ -29,7 +29,7 @@ Mount a language-server provider and the `lsp` tool to give agents semantics-bas
 
 ### When to choose it
 
-Choose this service when a deployment wants model-visible code navigation backed by language servers. It covers read-only navigation — definitions, references, implementations, and hover — and deliberately omits mutations (rename, code actions, formatting), symbol lists, and diagnostics. The service is provider-neutral: local stdio servers, remote servers, and sandbox-native providers register the same way, so replacing the backend does not change what the model sees or how it asks.
+Choose this service when a deployment wants model-visible code navigation backed by language servers. It covers read-only navigation — definitions, references, implementations, and hover — and deliberately omits mutations (rename, code actions, formatting) and symbol lists. Diagnostics are a non-model-facing snapshot: only providers that implement `diagnostics()` contribute, so only servers the deployment configured appear. The service is provider-neutral: local stdio servers, remote servers, and sandbox-native providers register the same way, so replacing the backend does not change what the model sees or how it asks.
 
 ### Composing a navigation stack
 
@@ -55,6 +55,8 @@ Each query asks one of four semantic questions at a cursor position in a source 
 | `findReferences` | Every reference, always including the declaration |
 | `goToImplementation` | The concrete implementation site(s) |
 | `hover` | Normalized documentation for the symbol, or none |
+
+Diagnostics are not a fifth operation. `diagnoseFile({ filePath, workspaceRoot })` asks the provider for that file's extension to open the document and wait for a publish, returning normalized `LspDiagnostic` items; `diagnostics(workspaceRoot)` returns the last published snapshot for surfaces that poll. Neither path is part of a model-facing query result, and only registered providers contribute.
 
 `findReferences` always includes declarations, so impact analysis never misses the defining site. Positions are zero-based UTF-16 on the wire; the model-facing tool accepts one-based cursor coordinates and converts them.
 
@@ -125,7 +127,7 @@ No direct invalidation; `dsh-tool-lsp` owns request-prefix changes.
 These limits define the seam's current scope. They are package constraints, not a task backlog.
 
 - **Exclusive extension ownership within one runtime** — two providers cannot both claim `.ts`, even with different language ids; overlaps fail registration. A deployment-configured selector above registrations is the intended extension, which can relax exclusive reservation without adding provider choice to model input.
-- **Four read-only operations only** — symbols and call hierarchy are deferred because they need different schemas; diagnostics need separate freshness and accumulation rules; mutations (rename, code actions, formatting) require separate tools with preview, permission, and write-policy integration.
+- **Four read-only operations only** — symbols and call hierarchy are deferred because they need different schemas; diagnostics are a separate provider-optional snapshot with bounded retention rather than a fifth query operation; mutations (rename, code actions, formatting) require separate tools with preview, permission, and write-policy integration.
 - **No observation API** — availability is observed only by running `query()` and routing the thrown `LspError` codes; there is no provider-change event or capability-status query.
 
 <a id="dev-note"></a>

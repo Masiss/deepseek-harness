@@ -13,8 +13,10 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { LspError, LspProviderId } from '@deepseek-ai/dsh-lsp'
+import { finalExtension, LspError, LspProviderId } from '@deepseek-ai/dsh-lsp'
 import type {
+  LspDiagnoseRequest,
+  LspDiagnostic,
   LspProvider,
   LspProviderQuery,
   LspQueryResult,
@@ -51,6 +53,7 @@ const DEFAULT_MAX_STDERR_BYTES = 1_000_000
 const DEFAULT_MAX_DOCUMENT_BYTES = 4_000_000
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5_000
 const DEFAULT_KILL_GRACE_MS = 2_000
+const DEFAULT_DIAGNOSE_TIMEOUT_MS = 1_500
 
 /** One configured local language server and its host bounds. */
 export interface LspLocalServerConfig {
@@ -76,6 +79,8 @@ export interface LspLocalServerConfig {
   shutdownTimeoutMs?: number
   /** Request-cancel and SIGTERM→SIGKILL grace (ms). Default 2000. */
   killGraceMs?: number
+  /** Longest wait for a server's diagnostics publish after opening a file (ms). Default 1500. */
+  diagnoseTimeoutMs?: number
 }
 
 /** Plugin configuration: provider id → local language-server configuration. */
@@ -100,6 +105,7 @@ const LspLocalServerConfig: z<LspLocalServerConfig> = z.object({
   maxDocumentBytes: z.number().default(DEFAULT_MAX_DOCUMENT_BYTES),
   shutdownTimeoutMs: z.number().max(MAX_TIMER_DELAY_MS).default(DEFAULT_SHUTDOWN_TIMEOUT_MS),
   killGraceMs: z.number().max(MAX_TIMER_DELAY_MS).default(DEFAULT_KILL_GRACE_MS),
+  diagnoseTimeoutMs: z.number().max(MAX_TIMER_DELAY_MS).default(DEFAULT_DIAGNOSE_TIMEOUT_MS),
 })
 
 export const Config: z<Config> = z.object({
@@ -191,6 +197,7 @@ function validateServerConfig(providerId: string, resolved: ResolvedServerConfig
   // nonpositive value would let a server that ignores shutdown hang disposal forever. Fail at load.
   assertTimer(providerId, 'shutdownTimeoutMs', resolved.shutdownTimeoutMs)
   assertTimer(providerId, 'killGraceMs', resolved.killGraceMs)
+  assertTimer(providerId, 'diagnoseTimeoutMs', resolved.diagnoseTimeoutMs)
   // Byte caps must be positive: a nonpositive stderr cap defeats the retained-tail bound
   // (`slice(-0)` keeps everything), `maxMessageBytes: 0` makes every response fatal, and a bad
   // document cap fails later in the read path instead of at load.
@@ -311,6 +318,55 @@ class LocalLspProvider implements LspProvider {
         this.assertActive(querySignal)
         instance = this.instanceFor(workspaceKey, workspace)
       }
+    })
+  }
+
+  /**
+   * Diagnostics last published by the pooled server for one workspace. A
+   * workspace whose server has not started yet has no diagnostics.
+   * @param workspaceRoot - caller-supplied workspace root.
+   * @returns normalized diagnostics from the workspace's live instance.
+   */
+  async diagnostics(workspaceRoot: string): Promise<readonly LspDiagnostic[]> {
+    this.assertActive()
+    const workspace = await canonicalizeWorkspace(this.fs, workspaceRoot, this.lifetime.signal)
+    const instance = this.instances.get(workspace.target.targetKey)
+    return instance?.diagnostics() ?? []
+  }
+
+  /**
+   * Open one file in the workspace's pooled server and wait for its
+   * diagnostics publish.
+   * @param request - file, workspace root, and optional wait budget.
+   * @param signal - optional cancellation.
+   * @returns diagnostics for the file, or none when the server did not publish in time.
+   */
+  async diagnose(request: LspDiagnoseRequest, signal?: AbortSignal): Promise<readonly LspDiagnostic[]> {
+    this.assertActive(signal)
+    const querySignal = this.querySignal(signal)
+    const languageId = this.extensionToLanguage[finalExtension(request.filePath)]
+    if (languageId === undefined) {
+      throw new LspError(`no extension route for "${request.filePath}"`, 'LSP_UNAVAILABLE')
+    }
+    const workspace = await canonicalizeWorkspace(this.fs, request.workspaceRoot, querySignal)
+    const workspaceKey = workspace.target.targetKey
+    const timeoutMs = request.timeoutMs ?? this.config.diagnoseTimeoutMs
+    return this.enqueue(workspaceKey, querySignal, async () => {
+      this.assertActive(querySignal)
+      const source = await readHostSource(this.fs, request.filePath, workspace, this.config.maxDocumentBytes, querySignal)
+      this.assertActive(querySignal)
+      const instance = this.instanceFor(workspaceKey, workspace)
+      const [outcome] = await Promise.allSettled([
+        instance.diagnose(source, languageId, timeoutMs, querySignal),
+      ])
+      if (instance.dead) {
+        const [teardown] = await Promise.allSettled([instance.dispose()])
+        this.evictIfCurrent(workspaceKey, instance)
+        if (outcome.status === 'rejected') throw outcome.reason
+        if (teardown.status === 'rejected') throw teardown.reason
+      }
+      if (outcome.status === 'fulfilled') return outcome.value
+      throw outcome.reason
     })
   }
 

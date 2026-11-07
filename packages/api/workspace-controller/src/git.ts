@@ -458,6 +458,13 @@ export class GitCommands {
     if (!change.worktree) {
       throw new RemoteError('git/path-refused', `"${path}" has no unstaged change to discard`, { path })
     }
+    if (request.expectedStatus !== undefined && change.status !== request.expectedStatus) {
+      throw new RemoteError(
+        'git/path-refused',
+        `"${path}" changed from ${request.expectedStatus} to ${change.status} since review`,
+        { path },
+      )
+    }
     if (change.status === 'untracked' || change.status === 'ignored' || change.status === 'added'
       || change.status === 'renamed' || change.status === 'copied' || change.status === 'conflict') {
       throw new RemoteError('git/path-refused', `"${path}" cannot discard its ${change.status} change safely`, { path })

@@ -240,4 +240,68 @@ describe('SessionController facade', () => {
     await disposal
     await expect(waiting).resolves.toMatchObject({ done: true })
   })
+
+  it('returns diagnostics from the configured lsp service', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(AgentRegistry)
+    const sessionId = SessionId('diag-session')
+    const header: SessionHeader = {
+      version: SESSION_FORMAT_VERSION,
+      id: sessionId,
+      createdAt: 1,
+      cwd: '/workspace',
+      isSeeded: false,
+    }
+    ctx.provide('sessionPersistence', testSessionPersistence(ctx, {
+      list: () => Promise.resolve([header]),
+    }) as never)
+    const diagnostics = vi.fn(() => Promise.resolve([{
+      uri: 'file:///workspace/a.ts',
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+      severity: 'error' as const,
+      message: 'bad',
+    }]))
+    ctx.provide('lsp', { diagnostics } as never)
+    const controller = createSessionTestController(ctx, defaults)
+
+    await expect(controller.diagnostics({ sessionId }, new AbortController().signal)).resolves.toEqual({
+      workspaceRoot: '/workspace',
+      items: [{
+        uri: 'file:///workspace/a.ts',
+        range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+        severity: 'error',
+        message: 'bad',
+      }],
+    })
+    expect(diagnostics).toHaveBeenCalledWith('/workspace')
+  })
+
+  it('deletes a stored Session and refuses an attached one', async () => {    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(AgentRegistry)
+    const sessionId = SessionId('delete-me')
+    const header: SessionHeader = {
+      version: SESSION_FORMAT_VERSION,
+      id: sessionId,
+      createdAt: 1,
+      cwd: '/workspace',
+      isSeeded: false,
+    }
+    const remove = vi.fn(() => Promise.resolve())
+    ctx.provide('sessionPersistence', testSessionPersistence(ctx, {
+      list: () => Promise.resolve([header]),
+      delete: remove,
+    }) as never)
+    const controller = createSessionTestController(ctx, defaults)
+
+    await expect(controller.delete({ sessionId }, new AbortController().signal))
+      .resolves.toEqual({ sessionId })
+    expect(remove).toHaveBeenCalledWith(sessionId, expect.anything())
+
+    ctx.sessions.create(sessionId, { meta: header })
+    await expect(controller.delete({ sessionId }, new AbortController().signal))
+      .rejects.toMatchObject({ code: 'session/agent-busy' })
+    expect(remove).toHaveBeenCalledOnce()
+  })
 })

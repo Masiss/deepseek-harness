@@ -610,5 +610,41 @@ export function runPersistenceContract(name: string, make: () => Promise<Contrac
         await dispose()
       }
     })
+
+    it('delete removes a stored session and reports an absent one as not found', async () => {
+      const { persistence, dispose } = await make()
+      try {
+        const m = meta('deletable', '/work')
+        const writer = await persistence.create(m)
+        await writer.append(oneTurnLog())
+        await writer.flush()
+        await writer.close()
+
+        await persistence.delete(m.id)
+        expect(await persistence.stat(m.id)).toBeUndefined()
+        expect((await persistence.list()).some(snapshot => snapshot.header.id === m.id)).toBe(false)
+        await expect(persistence.open(m.id, 'read')).rejects.toBeInstanceOf(SessionPersistenceNotFoundError)
+        await expect(persistence.delete(SessionId('never-stored'))).rejects.toBeInstanceOf(SessionPersistenceNotFoundError)
+      } finally {
+        await dispose()
+      }
+    })
+
+    it('delete refuses while an open handle still owns the session', async () => {
+      const { persistence, dispose } = await make()
+      try {
+        const m = meta('delete-refusal', '/work')
+        const writer = await persistence.create(m)
+        await writer.append(oneTurnLog())
+        await writer.flush()
+
+        await expect(persistence.delete(m.id)).rejects.toBeInstanceOf(SessionAlreadyOwnedError)
+        await writer.close()
+        await persistence.delete(m.id)
+        expect(await persistence.stat(m.id)).toBeUndefined()
+      } finally {
+        await dispose()
+      }
+    })
   })
 }

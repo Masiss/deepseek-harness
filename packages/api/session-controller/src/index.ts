@@ -2,6 +2,7 @@
 
 import { hostname } from 'node:os'
 import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-fs'
 import { Context } from '@deepseek-ai/cordis'
@@ -11,6 +12,11 @@ import type {} from '@deepseek-ai/dsh-client-file-upload'
 import { canOpenNativePath, nativeFileManager, nativeFileApplications, openNativeFileApplication, openNativeAssociatedPath, revealNativePath } from '@deepseek-ai/dsh-native-command'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
+import type {} from '@deepseek-ai/dsh-lsp'
+import {
+  SessionAlreadyOwnedError,
+  SessionPersistenceNotFoundError,
+} from '@deepseek-ai/dsh-session-persistence'
 import type {} from '@deepseek-ai/dsh-session-projection-cache'
 import { SessionQueryError, type SessionObservation } from '@deepseek-ai/dsh-session-query'
 import { Remote, RemoteError, TypertRemoteService, principalOf } from '@deepseek-ai/dsh-typert-protocol'
@@ -43,6 +49,12 @@ import type {
   SessionControlFrame,
   SessionCreateRequest,
   SessionCreateValue,
+  SessionDeleteRequest,
+  SessionDeleteValue,
+  SessionDiagnosticsRequest,
+  SessionDiagnosticsValue,
+  SessionDiagnoseRequest,
+  SessionDiagnoseValue,
   SessionFollowFrame,
   SessionFollowRequest,
   SessionForkRequest,
@@ -450,6 +462,108 @@ export class SessionController extends TypertRemoteService {
       }
     }
     return this.commands.fork(request)
+  }
+
+  /**
+   * Permanently remove one stored Session and its artifacts.
+   *
+   * Attached or running Sessions are refused so a live Agent never loses its
+   * log. The Session list re-reads persistence, so removal is visible to the
+   * next `session/list` without a separate invalidation.
+   * @param request - the stored Session to remove.
+   * @param signal - caller cancellation for the backend deletion.
+   * @returns confirmation naming the removed Session.
+   */
+  @Remote('delete')
+  async delete(request: SessionDeleteRequest, signal: AbortSignal): Promise<SessionDeleteValue> {
+    signal.throwIfAborted()
+    const sessionId = request.sessionId
+    if (this.ctx.sessions.get(sessionId) !== undefined) {
+      throw new RemoteError('session/agent-busy', 'Close the Session before deleting it', { reason: 'attached' })
+    }
+    if (this.ctx.agents.get(sessionId)?.status === 'running') {
+      throw new RemoteError('session/agent-busy', 'Stop the running turn before deleting the Session', { reason: 'running' })
+    }
+    const persistence = this.ctx.get('sessionPersistence')
+    if (persistence === undefined) {
+      throw new RemoteError('gateway/internal', 'deleting is unavailable: this deployment mounts no session-persistence service', {})
+    }
+    try {
+      await persistence.delete(sessionId, { signal })
+    } catch (error) {
+      if (error instanceof SessionPersistenceNotFoundError) {
+        throw new RemoteError('session/not-found', `session "${sessionId}" is not stored`, { sessionId })
+      }
+      if (error instanceof SessionAlreadyOwnedError) {
+        throw new RemoteError('session/writer-held', `session "${sessionId}" is held by an open writer`, { sessionId })
+      }
+      throw new RemoteError('gateway/internal', `failed to delete session "${sessionId}": ${String(error)}`, { sessionId })
+    }
+    this.ctx.emit('api-session/removed', sessionId)
+    return { sessionId }
+  }
+
+  /**
+   * Read diagnostics last published for the Session's workspace by the
+   * language servers this deployment configured or installed.
+   *
+   * A deployment without `ctx.lsp`, a Session without a workspace directory,
+   * or a server that has not published yet all return an empty list; the
+   * response names the workspace so a client can say which one it checked.
+   * @param request - Session whose workspace is inspected.
+   * @param signal - caller cancellation for the persistence read.
+   * @returns the workspace root and the merged diagnostics snapshot.
+   */
+  @Remote('diagnostics')
+  async diagnostics(request: SessionDiagnosticsRequest, signal: AbortSignal): Promise<SessionDiagnosticsValue> {
+    signal.throwIfAborted()
+    const workspaceRoot = await this.sessionWorkspace(request.sessionId, signal)
+    if (workspaceRoot === undefined) return { workspaceRoot: '', items: [] }
+    const lsp = this.ctx.get('lsp')
+    if (lsp === undefined) return { workspaceRoot, items: [] }
+    return { workspaceRoot, items: await lsp.diagnostics(workspaceRoot) }
+  }
+
+  /**
+   * Open one file in its configured language server and return the diagnostics
+   * published for it. A file with no configured provider returns an empty list;
+   * a server that does not publish within the Host budget also returns empty.
+   * @param request - Session, workspace, and file to diagnose.
+   * @param signal - caller cancellation for the read and diagnose cycle.
+   * @returns the workspace root, the diagnosed path, and its diagnostics.
+   */
+  @Remote('diagnose')
+  async diagnose(request: SessionDiagnoseRequest, signal: AbortSignal): Promise<SessionDiagnoseValue> {
+    signal.throwIfAborted()
+    const workspaceRoot = await this.sessionWorkspace(request.sessionId, signal)
+    if (workspaceRoot === undefined) return { workspaceRoot: '', path: request.path, uri: '', items: [] }
+    const uri = pathToFileURL(resolve(workspaceRoot, request.path)).href
+    const lsp = this.ctx.get('lsp')
+    if (lsp === undefined) return { workspaceRoot, path: request.path, uri, items: [] }
+    try {
+      const items = await lsp.diagnoseFile({ filePath: request.path, workspaceRoot }, signal)
+      return { workspaceRoot, path: request.path, uri, items }
+    } catch (error) {
+      if ((error as { code?: unknown }).code === 'LSP_UNAVAILABLE') {
+        return { workspaceRoot, path: request.path, uri, items: [] }
+      }
+      throw new RemoteError(
+        'gateway/internal',
+        `failed to diagnose "${request.path}": ${String(error)}`,
+        {},
+      )
+    }
+  }
+
+  /** Read the Session's workspace directory, or throw the stable not-found failure. */
+  private async sessionWorkspace(sessionId: SessionId, signal: AbortSignal): Promise<string | undefined> {
+    const attached = this.ctx.sessions.get(sessionId)
+    const header = attached?.header
+      ?? (await this.ctx.get('sessionPersistence')?.stat(sessionId, { signal }))?.header
+    if (header === undefined) {
+      throw new RemoteError('session/not-found', `session "${sessionId}" not found`, { sessionId })
+    }
+    return header.cwd
   }
 
   /**

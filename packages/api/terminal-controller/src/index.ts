@@ -5,6 +5,8 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
 import type {} from '@deepseek-ai/dsh-working-directory'
+import type {} from '@deepseek-ai/dsh-workspace'
+import type { WorkspaceId } from '@deepseek-ai/dsh-workspace'
 import { Remote, RemoteError, TypertRemoteService, type RemoteStream } from '@deepseek-ai/dsh-typert-protocol'
 import { discoverShells, resolveShell } from './shells.ts'
 import { BrowserTerminal } from './terminal.ts'
@@ -38,6 +40,12 @@ export interface Config {
   readonly shellCandidates: string[]
   /** Maximum retained terminals and pending allocations per Session. */
   readonly maxTerminals: number
+  /**
+   * Maximum retained terminals and pending allocations across every Session
+   * that shares one Workspace. Sessions outside a Workspace use
+   * {@link maxTerminals} only.
+   */
+  readonly maxWorkspaceTerminals: number
   /** Maximum terminal width in columns. */
   readonly maxCols: number
   /** Maximum terminal height in rows. */
@@ -81,6 +89,7 @@ export class TerminalController extends TypertRemoteService {
     }), z.const(undefined)]),
     shellCandidates: z.array(z.string().min(1)).default(['zsh', 'bash', 'fish', 'pwsh', 'powershell', 'cmd']),
     maxTerminals: z.number().step(1).min(1).default(8),
+    maxWorkspaceTerminals: z.number().step(1).min(1).default(16),
     maxCols: z.number().step(1).min(2).default(500),
     maxRows: z.number().step(1).min(1).default(200),
     scrollback: z.number().step(1).min(0).default(1000),
@@ -172,6 +181,10 @@ export class TerminalController extends TypertRemoteService {
       return terminal.info
     }
     if (new Set([...owner.terminals.keys(), ...owner.pending.keys(), ...owner.allocations.keys()]).size >= this.config.maxTerminals) throw new RemoteError('terminal/limit-reached', 'Session terminal limit reached', { limit: this.config.maxTerminals })
+    const workspaceId = this.workspaceOf(agent.id)
+    if (workspaceId !== undefined && this.workspaceTerminalCount(workspaceId) >= this.config.maxWorkspaceTerminals) {
+      throw new RemoteError('terminal/limit-reached', 'Workspace terminal limit reached', { limit: this.config.maxWorkspaceTerminals })
+    }
     const allocation = this.spawn(agent, owner, request, AbortSignal.any([signal, this.lifetime.signal, owner.lifetime.signal]))
     owner.pending.set(request.id, allocation)
     try {
@@ -253,6 +266,36 @@ export class TerminalController extends TypertRemoteService {
       await allocation.cleanup.close()
       owner.allocations.delete(id)
     }
+  }
+
+  /**
+   * Resolve the Workspace that owns one Session, when the deployment mounts
+   * the Workspace registry and the Session is a member.
+   * @param sessionId - Session whose membership is tested.
+   * @returns the owning Workspace id, or undefined outside a Workspace.
+   */
+  private workspaceOf(sessionId: SessionId): WorkspaceId | undefined {
+    const registry = this.ctx.get('workspaceRegistry')
+    if (registry === undefined) return undefined
+    return registry.list().find(workspace => workspace.sessionIds.includes(sessionId))?.id
+  }
+
+  /**
+   * Count every retained, pending, or allocating terminal across the
+   * Sessions that share one Workspace.
+   * @param workspaceId - Workspace whose members are counted.
+   * @returns the number of terminal identities held by member Sessions.
+   */
+  private workspaceTerminalCount(workspaceId: WorkspaceId): number {
+    const workspace = this.ctx.get('workspaceRegistry')?.get(workspaceId)
+    if (workspace === undefined) return 0
+    let count = 0
+    for (const sessionId of workspace.sessionIds) {
+      const owner = this.owners.get(sessionId)
+      if (owner === undefined) continue
+      count += new Set([...owner.terminals.keys(), ...owner.pending.keys(), ...owner.allocations.keys()]).size
+    }
+    return count
   }
 
   private owner(agent: Agent): OwnedSession {

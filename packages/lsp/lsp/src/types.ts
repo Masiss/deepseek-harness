@@ -3,7 +3,8 @@
  * {@link LspError} taxonomy and the {@link LspProviderId} brand factory are runtime and live in
  * `index.ts`. Positions and ranges are zero-based UTF-16, matching the protocol; the model-facing
  * tool owns the one-based cursor convention. The seam exposes no protocol types, process or document
- * controls, or generic JSON-RPC escape hatch — only the four semantic operations.
+ * controls, or generic JSON-RPC escape hatch — the four semantic operations plus a provider-optional
+ * diagnostics snapshot.
  * @module @deepseek-ai/dsh-lsp/types
  */
 
@@ -56,6 +57,20 @@ export interface LspProviderQuery extends LspQueryRequest {
   readonly languageId: string
 }
 
+/**
+ * A request for one file's diagnostics. Providers open the document, wait for
+ * the server to publish for that URI, and return the result; a server that
+ * never publishes within the budget yields an empty list rather than failing.
+ */
+export interface LspDiagnoseRequest {
+  /** The source file to diagnose (relative to `workspaceRoot` or absolute). */
+  readonly filePath: string
+  /** The workspace root the provider resolves against and indexes. */
+  readonly workspaceRoot: string
+  /** Longest wait for the server's publish after `didOpen`, in milliseconds. */
+  readonly timeoutMs?: number
+}
+
 /** One resolved location: a document URI and the range within it. */
 export interface LspLocation {
   /** The target document URI (`file:` or otherwise), verbatim from the server. */
@@ -70,6 +85,28 @@ export interface LspHover {
   readonly contents: string
   /** The range the hover applies to, when the server supplied one. */
   readonly range?: LspRange
+}
+
+/** Normalized diagnostic severity, matching the LSP numeric values 1–4. */
+export type LspDiagnosticSeverity = 'error' | 'warning' | 'information' | 'hint'
+
+/** One diagnostics item published by a configured language server. URIs stay
+ * verbatim from the server; a consumer that needs workspace-relative paths
+ * resolves them through the provider's canonical workspace URI.
+ */
+export interface LspDiagnostic {
+  /** Document URI the diagnostic belongs to. */
+  readonly uri: string
+  /** Range the diagnostic covers. */
+  readonly range: LspRange
+  /** Normalized severity. */
+  readonly severity: LspDiagnosticSeverity
+  /** Human-readable message. */
+  readonly message: string
+  /** Server-declared source label, when present. */
+  readonly source?: string
+  /** Server-declared diagnostic code, when present. */
+  readonly code?: string
 }
 
 /**
@@ -104,11 +141,30 @@ export interface LspProvider {
    * @returns the normalized, closed-union result.
    */
   query(request: LspProviderQuery, signal?: AbortSignal): Promise<LspQueryResult>
+  /**
+   * Diagnostics last published by this provider's servers for one workspace.
+   *
+   * Providers that cannot observe diagnostics omit this method; the seam then
+   * reports none for that provider. Servers only publish after a document they
+   * know about changes, so an empty result does not mean the workspace is clean.
+   * @param workspaceRoot - the same caller-supplied root used by queries.
+   * @returns normalized diagnostics, bounded by the provider.
+   */
+  diagnostics?(workspaceRoot: string): Promise<readonly LspDiagnostic[]>
+  /**
+   * Open one file, wait for the server to publish diagnostics for it, and
+   * return them. Providers that keep no server state omit this method.
+   * @param request - file, workspace root, and the wait budget.
+   * @param signal - optional cancellation for the whole open/wait/close cycle.
+   * @returns normalized diagnostics for the file; empty when the server did not publish in time.
+   */
+  diagnose?(request: LspDiagnoseRequest, signal?: AbortSignal): Promise<readonly LspDiagnostic[]>
 }
 
 /**
  * The LSP capability seam (`ctx.lsp`). Owns provider registration/selection and normalized query
- * execution; exposes exactly the four operations and no protocol escape hatch.
+ * execution; exposes exactly the four operations and no protocol escape hatch. Diagnostics are a
+ * separate provider-optional snapshot, never a query result.
  */
 export interface LspService {
   /**
@@ -127,4 +183,22 @@ export interface LspService {
    * @returns the normalized, closed-union result.
    */
   query(request: LspQueryRequest, signal?: AbortSignal): Promise<LspQueryResult>
+  /**
+   * Last diagnostics published by every configured provider for one workspace.
+   *
+   * Only registered providers contribute, so a server the user did not
+   * configure or install can never appear here. Results are a snapshot, not a
+   * stream; callers poll when their panel needs freshness.
+   * @param workspaceRoot - canonical or caller-supplied workspace root.
+   * @returns merged diagnostics in provider registration order.
+   */
+  diagnostics(workspaceRoot: string): Promise<readonly LspDiagnostic[]>
+  /**
+   * Ask the provider that handles this file's extension to open it and wait
+   * for diagnostics. A file with no registered provider throws `LSP_UNAVAILABLE`.
+   * @param request - file, workspace root, and optional wait budget.
+   * @param signal - optional cancellation forwarded to the provider.
+   * @returns normalized diagnostics for the file.
+   */
+  diagnoseFile(request: LspDiagnoseRequest, signal?: AbortSignal): Promise<readonly LspDiagnostic[]>
 }
