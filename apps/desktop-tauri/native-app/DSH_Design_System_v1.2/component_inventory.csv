@@ -1,0 +1,47 @@
+component,tier,priority,implementation_status,native_evidence,keyboard_a11y,visual_review,notes
+DsButton,primitive / layout,P0,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsIconButton,primitive / layout,P0,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsTextField,primitive / layout,P0,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsTextArea,primitive / layout,P0,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsSelect,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsCheckbox,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsSwitch,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsRadioGroup,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsSegmented,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsTooltip,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsBadge,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsDivider,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsProgress,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsSkeleton,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsEmptyState,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsErrorState,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsToast,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsInlineAlert,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsPopover,primitive / layout,P0,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsMenu,primitive / layout,P0,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsDialog,primitive / layout,P0,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsCommandPalette,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsKbd,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsTreeView,primitive / layout,P0,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsTabBar,primitive / layout,P0,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsListRow,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsSearchResults,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsResizablePane,primitive / layout,P0,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsPanelHeader,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsFilePath,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsCodeBlock,primitive / layout,P0,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsDiffViewer,primitive / layout,P0,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsStatusIndicator,primitive / layout,P0,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+DsResizableTerminal,primitive / layout,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+SessionPicker,DSH composite,P0,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+AgentTranscript,DSH composite,P0,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+MessageBlock,DSH composite,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+ToolActivityGroup,DSH composite,P0,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+ToolActivityRow,DSH composite,P0,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+ApprovalCard,DSH composite,P0,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+AgentComposer,DSH composite,P0,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+RunStateBanner,DSH composite,P0,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+ReviewActionBar,DSH composite,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+GitOperationBanner,DSH composite,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+MarketplaceItem,DSH composite,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host
+PreferenceRow,DSH composite,P1,NOT_AUDITED,,NOT_AUDITED,NOT_AUDITED,Reconcile with pinned GPUI / actual Host

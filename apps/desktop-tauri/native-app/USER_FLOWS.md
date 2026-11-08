@@ -153,51 +153,66 @@ Chuyển sang Session khác sẽ tải lại hoặc xóa lựa chọn tiện íc
 
 -----
 
-## Chỉnh Settings và cập nhật
+## Chỉnh Preferences và cập nhật
 
-1. Mở **Settings** từ menu **☰** → **Preferences…**, từ **Quick open** (Ctrl+P) hoặc bằng **Ctrl+,**.
-2. Chỉnh Appearance, Layout, Shortcuts hoặc Advanced cho giao diện native.
-3. Chọn **Preview changes** để áp dụng tạm hoặc **Save preferences** để lưu vào tệp cấu hình cục bộ.
-4. Mở **Host settings** riêng nếu cần xem hoặc sửa user overrides do Host quản lý.
-5. Nếu muốn kiểm tra phiên bản Desktop, mở **Desktop updates** và chọn **Check for updates** khi đã kết nối.
-6. Khi Host hiển thị yêu cầu xác nhận, chọn Download/Install and restart hoặc Not now.
+1. Mở **Preferences** từ menu ứng dụng, từ **Quick open** (Ctrl+P) hoặc bằng **Ctrl+,**.
+2. Preferences mở thành cửa sổ nổi khoảng 910×680, shell vẫn hiện phía sau và bị làm mờ; nav bên trái gồm General, Appearance, Keymap, Extensions, Skills, Marketplace, About.
+3. Trong **Appearance**, chỉnh Theme (System/Light/Dark), pack giao diện (built-in, tệp người dùng, pack GitHub), Accent, Density, Scale và font. Pack người dùng có thể thêm từ tệp, nhân bản, sửa JSON, xuất và xoá; pack GitHub có thể thêm bằng URL hoặc `owner/repo` và cập nhật thủ công.
+4. **Keymap** chọn preset DSH/Zed/VSCode; các phím override thuộc bốn lệnh được chỉnh riêng.
+5. Đóng bằng **Esc**, bấm nền hoặc nút đóng; focus quay về ô nhập đã mở Preferences. Thay đổi được lưu ngay khi áp dụng, không có nút Save riêng.
+6. Mở **Host settings** trong General nếu cần xem hoặc sửa user overrides do Host quản lý.
+7. Nếu muốn kiểm tra phiên bản Desktop, mở **Desktop updates** và chọn **Check for updates** khi đã kết nối; Host điều phối các bước tải và cài đặt.
 
-Appearance và Host settings có chủ sở hữu dữ liệu khác nhau. Lỗi ghi Host settings giữ bản nháp và yêu cầu refresh; xung đột không được tự gửi lại. Cập nhật Desktop được Host điều phối; ứng dụng hỏi người dùng trước các bước tải và cài đặt mà Host yêu cầu.
+Preferences và Host settings có chủ sở hữu dữ liệu khác nhau. Lỗi validate pack hoặc JSON hiện ngay trong overlay và không ghi tệp; lỗi ghi Host settings giữ bản nháp và yêu cầu refresh; xung đột không được tự gửi lại. Cập nhật Desktop được Host điều phối; ứng dụng hỏi người dùng trước các bước tải và cài đặt mà Host yêu cầu.
 
 -----
 
-## Xem Git và đổi branch
+## Xem Git, review thay đổi và lịch sử commit
 
 ```mermaid
 flowchart TD
     A[Chọn Session] --> B[Client gọi git/status]
     B --> C{Có repository?}
     C -- Không --> D[Bottom bar hiện No repository]
-    C -- Có --> E[Bottom bar hiện branch và số file thay đổi]
-    E --> F[Bấm branch hoặc Git]
-    F --> G[Tab Branches gọi git/branches]
-    G --> H[Bấm một branch khác]
-    H --> I[Client gọi git/checkout]
-    I --> J{Checkout thành công?}
-    J -- Có --> K[Refresh status và branch]
-    J -- Không --> L[Hiện lỗi git/checkout-refused]
-    E --> M[Tab Files: chọn file]
-    M --> N[Tab Diff: xem patch staged/unstaged]
-    M --> O[Stage / Unstage / Discard]
-    M --> P[Nhập message và Commit]
-    O --> Q[Refresh status]
-    P --> Q
-    G --> R[Fetch / Pull / Push]
-    R --> Q
-    G --> S[Rebase hoặc Pick một branch]
-    S --> T{Conflict?}
-    T -- Có --> U[Banner operation + danh sách conflict]
-    U --> V[Sửa file, Stage, Continue hoặc Abort]
-    V --> Q
-    T -- Không --> Q
+    C -- Có --> E[Bottom bar hiện branch, ahead/behind và số file]
+    E --> F[Bấm branch label]
+    F --> G[Menu nhánh: checkout, merge, rebase, cherry-pick, revert]
+    G --> H[Xác nhận rồi gọi verb tương ứng]
+    E --> I[Bấm sync icon]
+    I --> J[Menu đồng bộ: Fetch, Pull, Push, Push and set upstream, Stash…]
+    J --> K[Xác nhận với push/publish; fetch/pull chạy ngay]
+    E --> L[Cột Changes]
+    L --> M[Tab Files: nhóm Staged/Changes/Untracked, stats từng phía]
+    M --> N[Chọn nhiều rồi Stage/Unstage/Discard]
+    M --> O[Tab Diff: hunk card]
+    O --> P[Stage/Unstage/Discard từng hunk qua git/apply]
+    L --> Q[Commit bar: message, Amend, Sign-off, Commit, Commit & Push]
+    L --> R[Tab History: graph từ git/log]
+    R --> S[Chọn commit để xem git/show, Cherry-pick/Revert]
+    K --> T{Conflict?}
+    T -- Có --> U[Banner operation: chip conflict mở base/ours/theirs]
+    U --> V[Accept ours/theirs qua git/resolve, hoặc sửa tay rồi stage]
+    V --> W[Continue/Abort]
+    T -- Không --> X[Refresh status]
+    W --> X
+    P --> X
+    N --> X
+    Q --> X
 ```
 
-Mọi thao tác Git đều chạy trên Host; ứng dụng không tự chạy `git` trên máy desktop. Fetch/Pull/Push dùng credential helper và SSH agent của Host; Push luôn cần xác nhận lần hai và không bao giờ force. Pull chỉ fast-forward nên history diverge sẽ báo lỗi thay vì tạo merge commit. Rebase/Cherry-pick trả trạng thái conflict thật; người dùng sửa file, stage rồi Continue, hoặc Abort để quay lại HEAD trước đó. `Discard` chỉ áp dụng cho file đã track đang có thay đổi ở worktree; file untracked hoặc conflict bị từ chối và không bị xoá. Khi working tree dirty đến mức git từ chối đổi branch, thông báo lỗi của git hiện trong tab Branches và không có file nào bị ghi đè. Commit chỉ chạy khi có ít nhất một file staged; Host trả lỗi thật nếu git từ chối commit.
+Mọi thao tác Git chạy trên Host; ứng dụng không tự chạy `git` trên máy desktop. Cột **Changes** có header 43 px (số file, ahead/behind, Review all) và tab **Diff / Files / History** cao 33 px; tab **Branches** chỉ hiện khi mở từ menu nhánh ở status bar.
+
+- **Files** nhóm theo Staged / Changes / Untracked, hiện loại thay đổi, thống kê từng phía (`stats.index` cho Staged, `stats.worktree` cho Changes, không cộng gộp) và nhãn `binary`/`untracked`. Chọn nhiều dòng để stage, unstage hoặc discard hàng loạt; mọi thao tác xoá đều xác nhận và gửi `expectedStatus` để Host từ chối nếu file đã đổi từ lúc review.
+- **Diff** hiện từng hunk với số dòng cũ/mới; stage, unstage hoặc discard một hunk qua `git/apply`. Patch hỏng hoặc diff đã cũ thì Host từ chối, client xoá patch và tải lại status thay vì báo thành công. Trạng thái **Reviewed** chỉ lưu trong UI và tự đặt lại khi trạng thái Git của file đổi.
+- **Commit bar** dùng `git/commit`; **Amend** chỉ bật khi HEAD chưa push và đang có thay đổi staged, **Sign-off** thêm trailer, **Commit & Push** gọi `git/push` sau khi commit thành công. Ô message trống hoặc chưa có gì staged thì nút bị tắt kèm lý do.
+- **History** đọc `git/log` theo trang 50 commit với nút **Load older commits**. Graph swimlane do client vẽ: làn giữ cột cho tới khi nhánh merge lại, merge có đường cong cho cha phụ, ref thành chip, HEAD có vòng tròn. Chọn commit bằng click hoặc **↑/↓** để xem patch từ `git/show`; oid cha bấm được khi cha nằm trong trang đã tải; **Cherry-pick…** và **Revert…** xác nhận trước khi gọi Host.
+- **Menu nhánh** (bấm branch label) liệt kê branch local từ `git/branches`, checkout, merge, rebase, cherry-pick và revert tip; lỗi dirty tree hoặc detached HEAD hiện nguyên văn từ git.
+- **Menu đồng bộ** (bấm icon sync) có Fetch, Pull (fast-forward only), Push, Push and set upstream và Stash…; hiển thị ahead/behind, xác nhận trước push/publish và không bao giờ force. Lỗi `git/remote-auth`, `git/remote-diverged`, `git/remote-no-upstream`, `git/remote-failed` hiện nguyên văn.
+- **Stash** mở panel: message tuỳ chọn, **Include untracked**, Save; danh sách entry có Apply/Pop/Drop, mỗi thao tác xác nhận và Host giới hạn số entry.
+- **Xung đột**: chip conflict trong banner mở view base/ours/theirs; **Accept ours** hoặc **Accept theirs** gọi `git/resolve` rồi refresh, **Continue** chỉ bật khi Host báo hết conflict, **Abort** quay lại trạng thái trước đó.
+- **Xoá untracked** dùng `git/discardUntracked` với xác nhận riêng; Host từ chối thư mục, ignored path và file đã track.
+
+Mỗi repository chỉ có một thao tác Git chạy tại một thời điểm; trong lúc chờ, các nút bị tắt và nêu lý do. Phím tắt: **Ctrl+Shift+D** mở Changes ở tab Diff, **Alt+↑/↓** chọn hunk, **s/u/d** stage/unstage/discard (bulk hoặc hunk), **Ctrl+Enter** commit khi con trỏ ở ô message; các phím này không chạy khi đang gõ trong ô nhập khác hoặc composer.
 
 -----
 

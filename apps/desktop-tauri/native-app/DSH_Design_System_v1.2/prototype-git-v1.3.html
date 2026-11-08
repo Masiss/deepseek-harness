@@ -1,0 +1,1902 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <title>DSH — Interactive UI prototype v2</title>
+  <style>
+    :root {
+      --bg: #0d1721;
+      --top: #0d1720;
+      --panel: #101b26;
+      --panel-deep: #0c1620;
+      --panel-soft: #14212d;
+      --border: #263544;
+      --border-faint: #1c2a37;
+      --text: #d8e0e9;
+      --muted: #8b9aac;
+      --faint: #65788a;
+      --blue: #4a99f7;
+      --blue-wash: #18324b;
+      --accent-rgb: 74,153,247;
+      --scale: 1;
+      --green: #53d49b;
+      --red: #f17c80;
+      --orange: #e9b46b;
+      --green-wash: #153b34;
+      --red-wash: #44272c;
+      --shadow: 0 18px 52px rgba(0, 0, 0, .4);
+      --top-h: 30px;
+      --bottom-h: 26px;
+      --left-w: 300px;
+      --right-w: 565px;
+      --tree-row: 27px;
+      --ui: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --mono: 'JetBrains Mono', 'Cascadia Code', 'SFMono-Regular', Consolas, monospace;
+    }
+    :root[data-theme="light"] {
+      color-scheme: light;
+      --bg: #f6f8fb; --top: #f4f7fb; --panel: #ffffff; --panel-deep: #f8fafc;
+      --panel-soft: #edf3f9; --border: #d8e0e9; --border-faint: #e6ecf2;
+      --text: #273544; --muted: #667487; --faint: #8894a3;
+      --blue: #257fd3; --blue-wash: #e1eefb; --green: #19865a; --red: #be4249;
+      --orange: #ad7a32; --green-wash: #e0f2e9; --red-wash: #fae7e8;
+      --shadow: 0 18px 52px rgba(35, 49, 72, .16);
+    }
+    :root[data-theme="midnight"] {
+      --bg: #080e16; --top: #090f18; --panel: #0c1420; --panel-deep: #090f18;
+      --panel-soft: #121f30; --border: #233346; --border-faint: #152333;
+      --text: #dbe6f6; --muted: #8195b0; --faint: #5a718b;
+      --green-wash: #102f2b; --red-wash: #382127;
+    }
+    :root[data-theme="light"] .pop, :root[data-theme="light"] .prefs-window { color: var(--text); }
+    :root[data-accent="teal"] { --blue: #42b7ba; --blue-wash: #13373b; --accent-rgb: 66,183,186; }
+    :root[data-accent="violet"] { --blue: #a38df5; --blue-wash: #2a2450; --accent-rgb: 163,141,245; }
+    :root[data-theme="light"][data-accent="teal"] { --blue: #168b8e; --blue-wash: #e1f4f3; }
+    :root[data-theme="light"][data-accent="violet"] { --blue: #775bd1; --blue-wash: #eeebfc; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body { overflow: hidden; font: calc(13px * var(--scale))/1.48 var(--ui); background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
+    button, textarea, input { font: inherit; }
+    button { color: inherit; cursor: pointer; border: 0; background: none; }
+    button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+    .icon { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; vertical-align: -3px; flex: 0 0 auto; }
+    .icon.sm { width: 13px; height: 13px; }
+    .icon.md { width: 17px; height: 17px; }
+    .icon.lg { width: 19px; height: 19px; }
+    .muted { color: var(--muted); }
+    .faint { color: var(--faint); }
+    .app { display: flex; flex-direction: column; height: 100dvh; min-height: 500px; min-width: 750px; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; height: var(--top-h); min-height: var(--top-h); border-bottom: 1px solid var(--border); background: var(--top); }
+    .top-left, .top-right { display: flex; align-items: center; height: 100%; }
+    .top-left > * + * { border-left: 1px solid var(--border-faint); }
+    .top-button { height: 100%; min-width: 35px; padding: 0 10px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); }
+    .top-button:hover, .workspace-button:hover { color: var(--text); background: var(--panel-soft); }
+    .workspace-button { height: 100%; display: inline-flex; gap: 9px; padding: 0 12px; align-items: center; font-size: 12.5px; font-weight: 560; min-width: 122px; }
+    .workspace-button .icon { color: var(--muted); }
+    .top-right { gap: 2px; padding-right: 4px; }
+    .workarea { display: flex; flex: 1; min-height: 0; min-width: 0; position: relative; }
+    .explorer { width: var(--left-w); flex: 0 0 var(--left-w); min-width: 0; background: var(--panel-deep); display: flex; flex-direction: column; border-right: 1px solid var(--border); position: relative; }
+    .tree-scroll { flex: 1; overflow: auto; padding: 7px 5px 4px 8px; scrollbar-width: thin; scrollbar-color: #354656 transparent; }
+    .tree-row { width: 100%; height: var(--tree-row); display: flex; align-items: center; padding-right: 8px; gap: 6px; text-align: left; color: #becbd9; border-radius: 3px; white-space: nowrap; font-size: 12.6px; }
+    .tree-row .chevron { width: 13px; height: 13px; color: #8696a8; transition: transform .12s ease; }
+    .tree-row .chevron.open { transform: rotate(90deg); }
+    .tree-row .chevron-placeholder { flex: 0 0 13px; }
+    .tree-row .name { overflow: hidden; text-overflow: ellipsis; }
+    .tree-row:hover { background: rgba(108, 148, 187, .1); }
+    .tree-row.selected { background: var(--blue-wash); color: #dceafa; box-shadow: inset 2px 0 var(--blue); }
+    .tree-row.selected .file-icon { color: var(--blue); }
+    .file-icon { color: #8fa8c3; }
+    .file-icon.js { color: #c7a953; }
+    .file-icon.ts { color: #58a4e7; }
+    .file-icon.md { color: #acc7de; }
+    .file-icon.py { color: #9ecb75; }
+    .file-icon.json { color: #e1b36f; }
+    .file-icon.html { color: #db9474; }
+    .tree-ghost { width: 100%; height: 1px; }
+    .sidebar-foot { border-top: 1px solid var(--border-faint); padding: 7px 9px; display: flex; gap: 6px; align-items: center; }
+    .session-name { min-width: 0; flex: 1; text-align: left; height: 30px; display: flex; align-items: center; gap: 7px; padding: 0 9px; border: 1px solid var(--border); border-radius: 5px; color: var(--muted); font-size: 12px; }
+    .session-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .session-name:hover, .small-button:hover { background: var(--panel-soft); color: var(--text); }
+    .small-button { height: 30px; width: 30px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 5px; color: var(--muted); }
+    .agent-pane { flex: 1 1 auto; min-width: 320px; background: var(--bg); display: flex; flex-direction: column; position: relative; }
+    .buffer-line { height: 34px; flex: 0 0 34px; display: flex; align-items: stretch; padding-left: 10px; border-bottom: 1px solid var(--border); }
+    .buffer-tab { display: inline-flex; align-items: center; gap: 7px; padding: 0 13px; height: 100%; position: relative; font-size: 12.5px; color: var(--text); background: rgba(124, 163, 202, .045); }
+    .buffer-tab.active::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--blue); }
+    .conversation { overflow: auto; flex: 1; padding: 21px clamp(20px, 2.25vw, 36px) 24px; scrollbar-width: thin; scrollbar-color: #314454 transparent; }
+    .conversation-inner { max-width: 790px; margin: 0 auto; }
+    .task-heading { padding-bottom: 14px; margin-bottom: 19px; border-bottom: 1px solid var(--border-faint); }
+    .task-heading h1 { margin: 0 0 5px; font-size: 16px; line-height: 1.3; letter-spacing: -.012em; font-weight: 620; }
+    .task-heading .meta { font-size: 11.5px; color: var(--muted); }
+    .message { display: grid; grid-template-columns: 31px minmax(0, 1fr); gap: 13px; margin-bottom: 23px; }
+    .avatar { width: 29px; height: 29px; border-radius: 50%; background: linear-gradient(135deg, #626f89, #3d506a); color: #fff; display: grid; place-items: center; font-weight: 650; font-size: 12px; }
+    .avatar.agent { color: #172b3c; background: linear-gradient(135deg, #b5dfff, #81b9ef); }
+    .speaker { display: flex; align-items: baseline; justify-content: space-between; font-size: 12.5px; font-weight: 620; margin-bottom: 8px; }
+    .speaker time { font-size: 11px; font-weight: 400; color: var(--faint); }
+    .message p { margin: 0 0 13px; font-size: 12.6px; line-height: 1.68; color: var(--text); }
+    .message h2 { font-size: 12.6px; line-height: 1.2; margin: 16px 0 7px; font-weight: 650; }
+    .message ul, .message ol { margin: 0 0 12px; padding-left: 19px; font-size: 12.6px; line-height: 1.65; }
+    .message li { padding-left: 2px; margin: 1px 0; }
+    .message code { font: 11.8px/1.45 var(--mono); color: #bdd3e7; }
+    .activity { margin: 22px 0 0 44px; padding-top: 10px; border-top: 1px solid var(--border); }
+    .activity-toggle { display: flex; align-items: center; width: 100%; padding: 4px 0 8px; gap: 9px; text-align: left; font-size: 12.5px; }
+    .activity-toggle:hover { color: var(--blue); }
+    .activity-toggle .arrow { transition: transform .14s; }
+    .activity.collapsed .arrow { transform: rotate(-90deg); }
+    .activity.collapsed .activity-list { display: none; }
+    .activity-list { position: relative; margin-left: 5px; padding: 0 0 0 20px; border-left: 1px solid var(--border); }
+    .activity-row { display: grid; grid-template-columns: 17px 47px minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 5px 0 5px; font-size: 11.6px; }
+    .activity-row .ok { color: var(--green); }
+    .activity-row .running { color: var(--blue); }
+    .activity-row .verb { color: #d5e0e9; }
+    .activity-row .detail { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .activity-row .duration { color: var(--faint); font-variant-numeric: tabular-nums; }
+    .activity-row .icon { width: 14px; height: 14px; }
+    .composer-shell { padding: 0 18px 13px; flex: 0 0 auto; }
+    .composer { border: 1px solid #38546e; background: var(--panel-soft); border-radius: 7px; padding: 7px 8px 7px 12px; box-shadow: 0 0 0 1px rgba(26, 89, 152, .05); max-width: 826px; margin: auto; }
+    .composer textarea { width: 100%; min-height: 25px; max-height: 130px; resize: none; display: block; border: 0; padding: 3px 3px 0; background: transparent; color: var(--text); font: 12.5px/1.55 var(--ui); outline: 0; scrollbar-width: thin; }
+    .composer textarea::placeholder { color: #92a4b6; }
+    .composer-bottom { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 26px; }
+    .composer-tools, .composer-right { display: flex; gap: 4px; align-items: center; }
+    .tool-button { width: 27px; height: 27px; display: grid; place-items: center; color: var(--muted); border-radius: 4px; }
+    .tool-button:hover { background: rgba(129, 167, 206, .12); color: var(--text); }
+    .selector { height: 27px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 5px; padding: 0 9px; color: #d0deea; font-size: 11.7px; white-space: nowrap; }
+    .selector:hover { border-color: #4b647d; background: rgba(118, 148, 180, .07); }
+    .send-button { display: grid; place-items: center; height: 28px; width: 30px; border-radius: 5px; background: #2b88f4; color: white; }
+    .send-button:hover { background: #50a2ff; }
+    .send-button:disabled { opacity: .55; cursor: default; }
+    .changes-pane { width: var(--right-w); flex: 0 0 var(--right-w); min-width: 0; display: flex; flex-direction: column; background: var(--panel-deep); border-left: 1px solid var(--border); position: relative; }
+    .changes-head { height: 43px; min-height: 43px; padding: 0 17px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .changes-title { display: flex; align-items: baseline; gap: 13px; min-width: 0; }
+    .changes-title strong { font-weight: 620; font-size: 14px; }
+    .changes-title span { color: var(--muted); font-size: 11.7px; }
+    .outlined-button { border: 1px solid var(--border); border-radius: 5px; padding: 5px 10px; font-size: 11px; color: #cfdae5; white-space: nowrap; }
+    .outlined-button:hover { border-color: #4c6580; background: var(--panel-soft); }
+    .right-tabs { display: flex; gap: 3px; height: 33px; min-height: 33px; padding-left: 10px; border-bottom: 1px solid var(--border); }
+    .right-tab { min-width: 57px; padding: 0 13px; font-size: 12px; color: var(--muted); position: relative; }
+    .right-tab:hover { color: var(--text); }
+    .right-tab.active { color: #8ec1fc; }
+    .right-tab.active::after { content: ''; height: 2px; background: var(--blue); bottom: -1px; left: 2px; right: 2px; position: absolute; }
+    .diff-content, .files-content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .files-content[hidden], .diff-content[hidden] { display: none; }
+    .diff-filebar { height: 33px; min-height: 33px; padding: 0 15px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border-faint); gap: 12px; }
+    .filename { display: inline-flex; gap: 7px; align-items: center; overflow: hidden; min-width: 0; font: 11.8px/1.4 var(--mono); color: #cfdae5; }
+    .filename span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .diff-stats { display: flex; gap: 11px; flex: 0 0 auto; font: 11.2px var(--mono); }
+    .added { color: var(--green); }
+    .removed { color: var(--red); }
+    .diff-scroll { flex: 1; overflow: auto; scrollbar-width: thin; scrollbar-color: #34495c transparent; }
+    .diff-code { min-width: max-content; font: 11px/1.72 var(--mono); font-variant-ligatures: none; tab-size: 2; }
+    .diff-line { min-height: 19px; display: grid; grid-template-columns: 36px 18px minmax(420px, 1fr); align-items: stretch; white-space: pre; }
+    .diff-line .line-no { text-align: right; padding-right: 8px; color: #6f8498; user-select: none; }
+    .diff-line .mark { text-align: center; color: #70859a; user-select: none; }
+    .diff-line .code-text { padding: 0 10px; white-space: pre; }
+    .diff-line.plus { background: var(--green-wash); }
+    .diff-line.minus { background: var(--red-wash); }
+    .diff-line.plus .mark { color: #56d99d; }
+    .diff-line.minus .mark { color: #f08082; }
+    .diff-line.hunk { background: #192b3d; color: #7992a9; font-size: 10px; }
+    .diff-line.hunk .code-text { color: #8499ad; }
+    .syntax-comment { color: #718da0; }
+    .syntax-key { color: #a5c5f4; }
+    .syntax-str { color: #e8a275; }
+    .syntax-fn { color: #80c7d4; }
+    .diff-bottom { padding: 8px 12px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 7px; }
+    .primary-button { background: #2786ef; color: white; font-size: 11.4px; border-radius: 5px; padding: 7px 12px; }
+    .primary-button:hover { background: #48a2ff; }
+    .subtle-button { padding: 7px 11px; border: 1px solid var(--border); border-radius: 5px; color: var(--muted); font-size: 11.3px; }
+    .subtle-button:hover { color: var(--text); background: var(--panel-soft); }
+    .files-list { overflow: auto; padding: 10px; }
+    .file-item { width: 100%; padding: 9px 10px; display: flex; align-items: center; gap: 10px; text-align: left; border-radius: 5px; font: 11.7px var(--mono); }
+    .file-item:hover, .file-item.active { background: var(--blue-wash); }
+    .file-item .file-item-stat { margin-left: auto; color: var(--green); }
+    .file-preview { border-top: 1px solid var(--border); padding: 14px 17px; font: 11.7px/1.7 var(--mono); color: var(--muted); white-space: pre-wrap; overflow: auto; flex: 1; }
+    .statusbar { height: var(--bottom-h); min-height: var(--bottom-h); background: var(--top); border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 10px 0 14px; color: var(--muted); }
+    .status-left, .status-right { display: flex; align-items: center; height: 100%; gap: 4px; }
+    .status-action { height: 100%; padding: 0 7px; display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+    .status-action:hover, .status-action.active { color: var(--text); background: var(--panel-soft); }
+    .status-icon { height: 100%; min-width: 27px; padding: 0 6px; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+    .status-icon:hover, .status-icon.active { color: var(--text); background: var(--panel-soft); }
+    .status-dot { width: 7px; height: 7px; margin: 0 9px; border-radius: 50%; background: var(--green); box-shadow: 0 0 5px rgba(77, 207, 149, .15); }
+    .splitter { position: absolute; top: 0; right: -3px; bottom: 0; width: 6px; cursor: col-resize; z-index: 4; }
+    .splitter:hover, .splitter.dragging { background: rgba(74, 153, 247, .35); }
+    .changes-pane .splitter { right: auto; left: -3px; }
+    .pop { position: fixed; z-index: 40; min-width: 238px; padding: 6px; background: var(--panel-soft); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); color: var(--text); }
+    .pop[hidden], .modal-layer[hidden], .terminal-panel[hidden] { display: none; }
+    .pop-row { display: flex; align-items: center; width: 100%; min-height: 32px; padding: 5px 9px; border-radius: 5px; gap: 9px; text-align: left; font-size: 12px; }
+    .pop-row:hover, .pop-row.active { background: var(--blue-wash); }
+    .pop-row .end { margin-left: auto; color: var(--faint); font: 10.5px var(--mono); }
+    .pop-separator { height: 1px; background: var(--border); margin: 5px 4px; }
+    .pop-caption { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; padding: 6px 9px 4px; }
+    .modal-layer { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, .52); display: grid; place-items: center; padding: 15px; }
+    .modal { width: min(460px, 90vw); background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 20px; }
+    .modal h2 { margin: 0 0 6px; font-size: 16px; }
+    .modal p { margin: 0 0 16px; font-size: 12px; color: var(--muted); }
+    .setting-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 14px 0; font-size: 12px; }
+    .setting-line select { font: inherit; padding: 6px; background: var(--panel-soft); color: var(--text); border: 1px solid var(--border); border-radius: 5px; }
+    .modal-actions { display: flex; justify-content: flex-end; margin-top: 22px; }
+    .command-box { width: min(620px, 92vw); background: #162432; border: 1px solid #365775; border-radius: 9px; box-shadow: var(--shadow); padding: 9px; }
+    .command-input { width: 100%; background: #0d1b29; color: #e0e9f2; border: 1px solid #34516d; border-radius: 5px; padding: 10px 12px; outline: none; }
+    .command-results { margin-top: 6px; max-height: 300px; overflow: auto; }
+    .toast { position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%); z-index: 70; background: #25394c; padding: 9px 13px; border: 1px solid #45607a; box-shadow: var(--shadow); border-radius: 6px; font-size: 12px; color: #e4edf7; max-width: min(600px, 90vw); text-align: center; opacity: 0; pointer-events: none; transition: opacity .18s; }
+    .toast.show { opacity: 1; }
+    .terminal-panel { height: 225px; flex: 0 0 225px; background: #0a121b; border-top: 1px solid #324657; display: flex; flex-direction: column; }
+    .terminal-head { height: 30px; display: flex; justify-content: space-between; align-items: center; padding: 0 14px; border-bottom: 1px solid #253544; color: #9bacbc; font-size: 11.7px; }
+    .terminal-body { overflow: auto; padding: 11px 19px; flex: 1; color: #b1c9c6; font: 11.5px/1.7 var(--mono); white-space: pre-wrap; }
+    .terminal-input-row { display: flex; align-items: center; gap: 8px; padding: 5px 17px 10px; font: 11.5px var(--mono); color: var(--green); }
+    .terminal-input-row input { flex: 1; border: 0; outline: 0; background: transparent; color: #dbe9ed; font: 11.5px var(--mono); }
+    .session-empty { display: flex; align-items: center; justify-content: center; min-height: 300px; height: 90%; color: var(--muted); text-align: center; }
+    .session-empty h2 { color: var(--text); font-size: 16px; font-weight: 560; margin: 0 0 6px; }
+    .session-empty p { margin: 0; font-size: 12px; }
+    .demo-msg { margin-left: 44px; margin-top: 8px; border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-size: 12px; color: var(--muted); }
+    .dragging-ui, .dragging-ui * { user-select: none !important; }
+    /* Preferences is launched from the hamburger menu, not another toolbar. */
+    .prefs-layer { z-index: 56; }
+    .prefs-window { width: min(910px, calc(100vw - 60px)); height: min(680px, calc(100dvh - 70px)); min-height: 400px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; box-shadow: var(--shadow); overflow: hidden; }
+    .prefs-header { height: 47px; flex: 0 0 47px; display: flex; align-items: center; padding: 0 16px; gap: 10px; border-bottom: 1px solid var(--border); font-weight: 620; font-size: 13px; }
+    .prefs-title { display: flex; color: var(--blue); }
+    .prefs-demo-label { color: var(--faint); font-size: 9px; letter-spacing: .09em; font-weight: 550; border: 1px solid var(--border); padding: 2px 5px; border-radius: 3px; }
+    .prefs-close { margin-left: auto; width: 25px; height: 25px; color: var(--muted); display: grid; place-items: center; border-radius: 4px; }
+    .prefs-close:hover { background: var(--panel-soft); color: var(--text); }
+    .prefs-body { display: flex; min-height: 0; flex: 1; }
+    .prefs-nav { width: 198px; min-width: 198px; background: var(--panel-deep); border-right: 1px solid var(--border); padding: 13px 9px; display: flex; flex-direction: column; gap: 2px; }
+    .prefs-nav-caption { font-size: 9px; color: var(--faint); font-weight: 650; letter-spacing: .11em; padding: 20px 11px 5px; }
+    .prefs-nav-item { height: 35px; display: flex; align-items: center; gap: 10px; text-align: left; padding: 0 11px; width: 100%; border-radius: 5px; font-size: 12px; color: var(--muted); }
+    .prefs-nav-item.active { background: var(--blue-wash); color: var(--text); box-shadow: inset 2px 0 var(--blue); }
+    .prefs-nav-item:hover:not(.active) { background: var(--panel-soft); color: var(--text); }
+    .prefs-mini-count { font: 10px var(--mono); margin-left: auto; color: var(--faint); }
+    .prefs-main { flex: 1; overflow: auto; padding: 26px 32px 40px; scrollbar-width: thin; scrollbar-color: var(--border) transparent; outline: 0; }
+    .prefs-footer { display: flex; justify-content: space-between; border-top: 1px solid var(--border); padding: 8px 15px; font-size: 10px; color: var(--faint); }
+    .prefs-page-head { margin-bottom: 24px; }
+    .prefs-page-head h2 { margin: 0 0 5px; font-size: 18px; font-weight: 620; letter-spacing: -.02em; }
+    .prefs-page-head p { margin: 0; color: var(--muted); font-size: 12px; }
+    .prefs-group { margin: 0 0 27px; }
+    .prefs-group h3 { font-size: 11px; font-weight: 650; letter-spacing: .04em; color: var(--faint); text-transform: uppercase; margin: 0 0 9px; }
+    .prefs-setting { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 12px 0; min-height: 58px; border-bottom: 1px solid var(--border-faint); }
+    .prefs-setting-title { font-size: 12.5px; font-weight: 540; color: var(--text); }
+    .prefs-setting-desc { margin-top: 3px; font-size: 11.3px; color: var(--muted); max-width: 385px; }
+    .prefs-select { min-width: 146px; max-width: 220px; padding: 7px 10px; border: 1px solid var(--border); background: var(--panel-deep); color: var(--text); border-radius: 5px; font-size: 12px; }
+    .prefs-input { min-width: 0; padding: 8px 10px; border: 1px solid var(--border); color: var(--text); background: var(--panel-deep); border-radius: 5px; }
+    .prefs-switch { display: inline-flex; width: 34px; height: 19px; border-radius: 99px; background: var(--border); padding: 2px; align-items: center; transition: background .15s; }
+    .prefs-switch:before { content:''; display:block; width:15px; height:15px; background: #e1e8ee; border-radius: 50%; transition: transform .15s; }
+    .prefs-switch[aria-checked="true"] { background: var(--blue); }
+    .prefs-switch[aria-checked="true"]:before { transform: translateX(15px); }
+    .prefs-btn { border: 1px solid var(--border); border-radius: 5px; padding: 7px 10px; font-size: 11.5px; color: var(--text); background: var(--panel-soft); white-space: nowrap; }
+    .prefs-btn:hover { border-color: var(--blue); }
+    .prefs-btn.primary { background: var(--blue-wash); border-color: var(--blue); }
+    .prefs-btn:disabled { opacity: .55; cursor: default; }
+    .prefs-hint { font-size: 11px; color: var(--muted); padding: 11px 13px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-deep); line-height: 1.6; }
+    .prefs-hint strong { color: var(--text); }
+    .prefs-swatch-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .prefs-swatch { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; border: 1px solid var(--border); background: var(--panel-deep); border-radius: 5px; color: var(--muted); font-size: 11px; }
+    .prefs-swatch.selected { border-color: var(--blue); color: var(--text); }
+    .prefs-swatch-dot { height: 10px; width: 10px; border-radius: 50%; background: var(--swatch); }
+    .prefs-search-row { display: flex; align-items: center; gap: 9px; margin-bottom: 15px; }
+    .prefs-search-row .prefs-input { flex: 1; width: 100%; }
+    .prefs-collection { display: flex; flex-direction: column; }
+    .prefs-card { display: flex; gap: 12px; align-items: flex-start; padding: 13px 0; border-bottom: 1px solid var(--border-faint); }
+    .prefs-card-icon { display: grid; place-items: center; width: 31px; height: 31px; min-width: 31px; background: var(--panel-soft); border: 1px solid var(--border); border-radius: 7px; color: var(--blue); }
+    .prefs-card-body { min-width: 0; flex: 1; }
+    .prefs-card-title { font-size: 12.5px; font-weight: 610; display:flex; gap:8px; align-items: center; flex-wrap: wrap; }
+    .prefs-card-desc { font-size: 11.3px; color: var(--muted); margin-top: 4px; line-height: 1.5; }
+    .prefs-card-meta { display: inline-flex; font-size: 10px; color: var(--faint); margin-top: 5px; }
+    .prefs-card-action { align-self: center; }
+    .prefs-tag { border: 1px solid var(--border); border-radius: 4px; color: var(--muted); padding: 1px 5px; font-size: 9px; font-weight: 450; }
+    .prefs-filter-row { display: flex; gap: 6px; margin-bottom: 16px; }
+    .prefs-filter { border: 1px solid var(--border); padding: 5px 10px; border-radius: 4px; font-size: 11px; color: var(--muted); }
+    .prefs-filter.active { color: var(--text); background: var(--blue-wash); border-color: var(--blue); }
+    .prefs-kbd { font: 11px var(--mono); border: 1px solid var(--border); background: var(--panel-deep); border-radius: 4px; padding: 5px 7px; color: var(--text); white-space: nowrap; }
+    .prefs-kbd.listening { color: var(--blue); border-color: var(--blue); }
+    .prefs-keymap-row { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 9px; padding: 11px 0; border-bottom: 1px solid var(--border-faint); }
+    .prefs-keymap-row > div:first-child { font-size: 12px; }
+    .prefs-keymap-row .muted { display: block; font-size: 10px; }
+    .prefs-quiet { color: var(--muted); font-size: 11.5px; }
+    @media (max-width: 700px) { .prefs-window {width:calc(100vw - 30px)} .prefs-nav {width:155px;min-width:155px} .prefs-main {padding:17px} .prefs-nav-item {padding:0 7px;gap:6px} .prefs-footer{font-size:9px} }
+    .mobile-panel-switch { display: none; }
+    @media (min-width: 1171px) and (max-width: 1450px) {
+      :root { --left-w: 258px; --right-w: 485px; }
+    }
+    @media (max-width: 1170px) {
+      :root { --left-w: 245px; --right-w: 420px; }
+      .conversation { padding-left: 17px; padding-right: 17px; }
+      .changes-head { padding: 0 11px; }
+      .message { gap: 9px; }
+    }
+    @media (max-width: 950px) {
+      .changes-pane { display: none; }
+      .app.show-changes .changes-pane { display: flex; width: 45%; flex-basis: 45%; }
+      .app.show-changes .agent-pane { min-width: 260px; }
+      .mobile-panel-switch { display: flex; }
+    }
+    .app.explorer-hidden .explorer { display: none; }
+    .app.changes-hidden .changes-pane { display: none; }
+    .app.compact { --tree-row: 23px; }
+    .app.compact .conversation { padding-top: 14px; }
+    .app.compact .message { margin-bottom: 14px; }
+
+    /* ===== Git review surface — v1.3 extension (prototype only) ===== */
+    .changes-title { gap: 10px; }
+    .sync-chip { display: inline-flex; align-items: center; gap: 4px; font: 500 11.2px/1 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+    .sync-chip .up { color: var(--blue); }
+    .sync-chip .down { color: var(--muted); }
+    .changes-head-actions { display: flex; align-items: center; gap: 6px; }
+    .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 5px; overflow: hidden; height: 28px; padding: 3px; gap: 2px; }
+    .seg button { padding: 0 8px; font-size: 11px; color: var(--muted); background: transparent; border-radius: 3px; }
+    .seg button.active { background: var(--blue-wash); color: var(--blue); }
+    .git-toolbar { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border-faint); }
+    .git-filter { flex: 1; min-width: 0; height: 25px; padding: 0 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--panel-soft); color: var(--text); font: 11.2px var(--ui); }
+    .git-filter::placeholder { color: var(--muted); }
+    .icon-btn { width: 22px; height: 22px; display: inline-grid; place-items: center; border-radius: 4px; color: var(--muted); }
+    .icon-btn:hover { background: rgba(129, 167, 206, .14); color: var(--text); }
+    .icon-btn.danger:hover { background: var(--red-wash); color: var(--red); }
+    .bulk-bar { display: flex; align-items: center; gap: 6px; padding: 6px 12px; background: var(--panel-soft); border-bottom: 1px solid var(--border-faint); font-size: 11px; color: var(--muted); }
+    .bulk-bar[hidden], .commit-bar[hidden], .op-banner-shell[hidden], .commit-detail[hidden] { display: none; }
+    .bulk-bar .subtle-button { padding: 3px 8px; font-size: 11px; }
+    .git-group-head { display: flex; align-items: center; gap: 7px; padding: 9px 12px 5px; font-size: 10.2px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+    .git-group-head .count { color: var(--muted); letter-spacing: 0; }
+    .git-file-row { display: grid; grid-template-columns: 15px 18px minmax(0, 1fr) auto auto; gap: 8px; align-items: center; min-height: 30px; padding: 0 10px; margin: 0 6px; border-radius: 5px; text-align: left; width: calc(100% - 12px); }
+    .git-file-row:hover, .git-file-row.active { background: var(--blue-wash); }
+    .git-file-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+    .row-check { width: 12px; height: 12px; accent-color: var(--blue); }
+    .kind-chip { width: 16px; height: 16px; display: grid; place-items: center; border-radius: 3px; font: 600 9.5px/1 var(--mono); border: 1px solid transparent; }
+    .kind-M { color: var(--orange); border-color: rgba(233, 180, 107, .45); }
+    .kind-A { color: var(--green); border-color: rgba(83, 212, 155, .45); }
+    .kind-D { color: var(--red); border-color: rgba(241, 124, 128, .45); }
+    .kind-R { color: var(--blue); border-color: rgba(74, 153, 247, .45); }
+    .kind-U { color: var(--muted); border-color: var(--border); }
+    .path { font: 11.6px/1.4 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+    .path .dir { color: var(--muted); }
+    .file-stat { display: inline-flex; align-items: center; gap: 6px; font: 10.8px var(--mono); color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .reviewed-pill { display: inline-flex; align-items: center; gap: 3px; color: var(--green); font-size: 9.8px; }
+    .row-actions { display: inline-flex; gap: 2px; opacity: 0; }
+    .git-file-row:hover .row-actions, .git-file-row:focus-within .row-actions { opacity: 1; }
+    .hunk-card { border-bottom: 1px solid var(--border-faint); }
+    .hunk-head { display: flex; align-items: center; gap: 8px; padding: 3px 12px; background: var(--panel-soft); color: var(--muted); font: 10.4px/1.7 var(--mono); scroll-margin-top: 4px; overflow: hidden; }
+    .hunk-head .hunk-range { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hunk-actions { margin-left: auto; display: inline-flex; gap: 2px; opacity: 0; }
+    .hunk-card:hover .hunk-actions, .hunk-head:focus-within .hunk-actions, .hunk-card.focused .hunk-actions { opacity: 1; }
+    .hunk-card.focused { box-shadow: inset 2px 0 0 var(--blue); }
+    .hunk-body { font: 11px/1.72 var(--mono); font-variant-ligatures: none; tab-size: 2; min-width: max-content; }
+    .hunk-line { display: grid; grid-template-columns: 44px 44px 16px minmax(0, 1fr); min-height: 19px; white-space: pre; }
+    .hunk-line .ln { text-align: right; padding-right: 7px; color: var(--muted); user-select: none; font-variant-numeric: tabular-nums; }
+    .hunk-line .mark { text-align: center; color: var(--muted); user-select: none; }
+    .hunk-line .code { padding: 0 10px; white-space: pre; }
+    .hunk-line.plus { background: var(--green-wash); }
+    .hunk-line.minus { background: var(--red-wash); }
+    .hunk-line.plus .mark { color: var(--green); }
+    .hunk-line.minus .mark { color: var(--red); }
+    .diff-filebar { gap: 9px; }
+    .diff-filebar .filename { flex: 1; }
+    .review-bar { display: flex; align-items: center; flex-wrap: nowrap; gap: 8px; padding: 6px 12px; border-top: 1px solid var(--border); font-size: 10.8px; color: var(--muted); }
+    .review-bar #diffFileActions { display: inline-flex; flex: 0 0 auto; gap: 4px; }
+    .review-bar .subtle-button { padding: 3px 8px; font-size: 11px; }
+    .review-bar .check { flex: 0 0 auto; }
+    .review-bar .hint { flex: 1; min-width: 0; color: var(--muted); font-size: 11px; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .commit-bar { border-top: 1px solid var(--border); padding: 9px 12px; display: flex; flex-direction: column; gap: 7px; background: var(--panel); }
+    .commit-summary { display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+    .commit-input { width: 100%; min-height: 30px; max-height: 96px; resize: none; border: 1px solid var(--border); border-radius: 5px; background: var(--panel-soft); color: var(--text); padding: 6px 8px; font: 11.8px/1.5 var(--ui); }
+    .commit-options { display: flex; align-items: center; gap: 11px; font-size: 11px; color: var(--muted); flex-wrap: wrap; }
+    .check { display: inline-flex; align-items: center; gap: 5px; }
+    .check input { width: 12px; height: 12px; accent-color: var(--blue); }
+    .commit-actions { margin-left: auto; display: flex; gap: 6px; }
+    .commit-actions .primary-button, .commit-actions .subtle-button { padding: 5px 10px; }
+    .commit-actions button:disabled, .commit-bar button:disabled, .subtle-button:disabled { cursor: not-allowed; }
+    .subtle-button:disabled { opacity: .45; }
+    .commit-actions .primary-button:disabled { background: var(--border); color: var(--muted); opacity: 1; }
+    .commit-actions .subtle-button:disabled { opacity: .45; }
+    .hint { font-size: 12px; color: var(--muted); }
+    .file-stat .hint { font-size: 10.8px; }
+    .hint.warn { color: var(--orange); }
+    .op-banner { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border-faint); background: rgba(233, 180, 107, .11); }
+    .op-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .op-title { font-size: 11.4px; color: var(--text); display: inline-flex; align-items: center; gap: 6px; }
+    .op-title .count { color: var(--muted); font-size: 10.6px; }
+    .conflict-chip { font: 10.4px var(--mono); color: var(--text); padding: 1px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel-soft); }
+    .conflict-chip:hover { border-color: var(--blue); color: var(--blue); }
+    .history-list { overflow: auto; padding: 4px 8px 8px 10px; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+    .history-row { width: 100%; display: grid; grid-template-columns: var(--graph-w, 52px) minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 0 8px 0 2px; min-height: 40px; border-radius: 4px; text-align: left; }
+    .history-graph-cell { display: flex; align-items: center; justify-content: flex-start; }
+    .history-graph { display: block; overflow: visible; }
+    .history-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .history-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .history-line .history-subject { flex: 0 1 auto; min-width: 0; }
+    .history-row.head .history-subject { font-weight: 620; }
+    .ref-chip { font: 10.2px/1.6 var(--mono); padding: 0 5px; border-radius: 3px; border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+    .ref-chip.local { color: var(--blue); border-color: rgba(74, 153, 247, .45); }
+    .ref-chip.remote { color: var(--muted); }
+    .ref-chip.tag { color: var(--orange); border-color: rgba(233, 180, 107, .45); }
+    .ref-chip:hover { border-color: var(--blue); }
+    .history-row:hover { background: var(--panel-soft); }
+    .history-row.active { background: var(--blue-wash); }
+    .history-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+    .history-oid { font: 10.6px var(--mono); color: var(--blue); }
+    .history-subject { font-size: 12.4px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .history-oid { font: 10.6px/1 var(--mono); color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; text-align: right; }
+    .history-main { padding: 5px 0; }
+    .history-meta { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .commit-detail { border-top: 1px solid var(--border); padding: 10px 12px 12px; overflow: auto; max-height: 46%; }
+    .commit-detail-head { display: flex; align-items: flex-start; gap: 8px; justify-content: space-between; margin-bottom: 8px; }
+    .commit-detail h3 { margin: 0 0 5px; font-size: 13px; }
+    .commit-detail .meta { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; line-height: 1.6; }
+    .commit-detail .row-actions { opacity: 1; }
+    .diff-snippet { margin: 0; font: 10.8px/1.6 var(--mono); white-space: pre; overflow: auto; border: 1px solid var(--border-faint); border-radius: 5px; padding: 6px 8px; background: var(--panel-soft); color: var(--muted); }
+    .empty-state { padding: 16px; font-size: 11.6px; color: var(--muted); }
+    .empty-state strong { display: block; color: var(--text); font-size: 12px; margin-bottom: 4px; }
+    .state-note { padding: 10px 12px; font-size: 11px; color: var(--muted); display: flex; gap: 7px; align-items: flex-start; }
+    .state-note.warn { color: var(--orange); }
+    .modal .modal-body { font-size: 11.6px; color: var(--muted); margin: 0 0 14px; }
+    .modal .modal-list { margin: 0 0 4px; padding-left: 17px; font: 10.8px/1.7 var(--mono); color: var(--muted); }
+    .danger-button { background: var(--red); color: #fff; border-radius: 5px; padding: 7px 12px; font-size: 11.4px; }
+    .danger-button:hover { filter: brightness(1.08); }
+    /* Contrast floor for the secondary text this screen renders. V2's own --faint
+       resolves to 4.0:1 at these sizes, below the 4.5:1 body-text requirement. */
+    .faint, .speaker time, .activity-row .duration { color: var(--muted); }
+    .speaker time { font-size: 11.5px; }
+    /* Preferences micro-labels: V2 renders them at 9px, below the same text floor. */
+    .prefs-nav-caption, .prefs-demo-label { font-size: 11px; }
+    .prefs-footer { font-size: 10px; }
+    .prefs-mini-count { font-size: 11px; }
+    .prefs-group h3 { font-size: 11.5px; }
+    .activity-row { font-size: 12px; }
+    .hunk-body { font: 12px/1.6 var(--mono); }
+    .diff-snippet { font-size: 11.5px; line-height: 1.6; }
+    /* Light theme: V2 hardcodes several dark-only text colors; keep the surfaces
+       this extension adds readable without touching the frozen V2 file. */
+    :root[data-theme="light"] .tree-row { color: var(--text); }
+    :root[data-theme="light"] .filename,
+    :root[data-theme="light"] .outlined-button,
+    :root[data-theme="light"] .selector,
+    :root[data-theme="light"] .activity-row .verb { color: var(--text); }
+    @media (max-width: 1170px) { .hunk-line { grid-template-columns: 34px 34px 14px minmax(0, 1fr); } }
+  </style>
+</head>
+<body>
+  <svg aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h5l2.2 2H19a2 2 0 0 1 2 2v10H3z"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3h8l5 5v13H6zM14 3v6h5"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 8-4 4 4 4m8-8 4 4-4 4m-3-11-2 14"/></symbol>
+    <symbol id="i-git" viewBox="0 0 24 24"><circle cx="6" cy="4" r="2"/><circle cx="6" cy="20" r="2"/><circle cx="18" cy="7" r="2"/><path d="M6 6v12M18 9v3a4 4 0 0 1-4 4h-4a4 4 0 0 0-4 4"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 5 5"/></symbol>
+    <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M10 2h4l1 3 2 1 3-1 2 4-2 2v2l2 2-2 4-3-1-2 1-1 3h-4l-1-3-2-1-3 1-2-4 2-2v-2L2 9l2-4 3 1 2-1z"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m7.5 12 3 3 6-6"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="m4 4 17 8-17 8 3-8zM7 12h14"/></symbol>
+    <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="m7 13 7-7a4 4 0 0 1 6 6l-9 9a6 6 0 0 1-8-9l8-8"/></symbol>
+    <symbol id="i-at" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M16 8v7c0 2 3 2 4-1M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 3V6a2 2 0 0 1 1-2z"/></symbol>
+    <symbol id="i-sync" viewBox="0 0 24 24"><path d="M20 7V3l-4 4h4A8 8 0 0 0 5 9M4 17v4l4-4H4a8 8 0 0 0 15-2"/></symbol>
+    <symbol id="i-ellipsis" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+    <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><path d="M6 7v10M18 7v3a5 5 0 0 1-5 5H6"/></symbol>
+    <symbol id="i-checklist" viewBox="0 0 24 24"><path d="m3 6 2 2 3-3m4 2h9M3 13l2 2 3-3m4 2h9M3 20l2 2 3-3m4 2h9"/></symbol>
+    <symbol id="i-warning" viewBox="0 0 24 24"><path d="M12 3 2 21h20zM12 9v5m0 4h.01"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M4 7v5h5M4.5 12a8 8 0 1 1 3 6M12 7v5l3 2"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M5 5 19 19M19 5 5 19"/></symbol>
+    <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M7 16h10"/></symbol>
+    <symbol id="i-puzzle" viewBox="0 0 24 24"><path d="M3 9h4a2 2 0 1 1 4 0h4V5a2 2 0 1 1 4 0h2v6h-4a2 2 0 1 0 0 4h4v6h-6v-4a2 2 0 1 0-4 0v4H3z"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 2 2.3 7.7L22 12l-7.7 2.3L12 22l-2.3-7.7L2 12l7.7-2.3z"/></symbol>
+    <symbol id="i-store" viewBox="0 0 24 24"><path d="M3 9h18l-2-6H5zM5 9v12h14V9M9 21v-8h6v8"/><path d="M3 9c0 3 4 3 4 0 0 3 4 3 4 0 0 3 4 3 4 0 0 3 6 3 6 0"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2" fill="var(--panel-soft)"/><circle cx="16" cy="12" r="2" fill="var(--panel-soft)"/><circle cx="7" cy="18" r="2" fill="var(--panel-soft)"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 15a8 8 0 0 1-11-11A8 8 0 1 0 20 15z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l2 2m10 10 2 2M19 5l-2 2M7 17l-2 2"/></symbol>
+  </svg>
+
+  <div class="app" id="app">
+    <header class="topbar">
+      <div class="top-left">
+        <button class="top-button" id="menuButton" title="Menu" aria-label="Mở menu"><svg class="icon md"><use href="#i-menu"/></svg></button>
+        <button class="workspace-button" id="workspaceButton" title="Chọn workspace"><span id="workspaceLabel">HIS_EMR</span><svg class="icon sm"><use href="#i-chevron-down"/></svg></button>
+      </div>
+      <div class="top-right">
+        <button class="top-button" id="searchButton" title="Tìm file / lệnh (Ctrl+K)" aria-label="Tìm kiếm"><svg class="icon"><use href="#i-search"/></svg></button>
+        <button class="top-button" id="toggleChangesTop" title="Ẩn/hiện Changes" aria-label="Ẩn hiện Changes"><svg class="icon"><use href="#i-panel"/></svg></button>
+      </div>
+    </header>
+
+    <div class="workarea" id="workarea">
+      <aside class="explorer" id="explorer" aria-label="Explorer">
+        <div class="tree-scroll" id="treeScroll"><div id="fileTree"></div></div>
+        <div class="sidebar-foot">
+          <button class="small-button" id="newSession" aria-label="Tạo session" title="Session mới (Ctrl+N)"><svg class="icon md"><use href="#i-plus"/></svg></button>
+          <button class="session-name" id="sessionButton" title="Chuyển session"><svg class="icon sm"><use href="#i-history"/></svg><span id="sessionName">Training resume</span><svg class="icon sm" style="margin-left:auto"><use href="#i-chevron-down"/></svg></button>
+        </div>
+        <div class="splitter" id="leftSplitter" aria-label="Thay đổi độ rộng Explorer"></div>
+      </aside>
+
+      <main class="agent-pane" id="agentPane">
+        <div class="buffer-line"><button class="buffer-tab active" aria-current="page"><svg class="icon sm"><use href="#i-chat"/></svg> Agent</button></div>
+        <div class="conversation" id="conversation">
+          <div class="conversation-inner" id="conversationInner">
+            <div class="task-heading">
+              <h1>Training resume and checkpoint</h1>
+              <div class="meta">HIS_EMR <span aria-hidden="true">·</span> GPT-6 (High) <span aria-hidden="true">·</span> Session preview</div>
+            </div>
+            <article class="message">
+              <div class="avatar">U</div>
+              <div><div class="speaker"><span>You</span><time>14:22</time></div>
+              <p>Validate the latest Kaggle checkpoint and make sure we can resume training from it. Check configs, tokenizer, and optimizer state.</p></div>
+            </article>
+            <article class="message">
+              <div class="avatar agent">D</div>
+              <div><div class="speaker"><span>DSH</span><time>14:23</time></div>
+              <p>I've validated the latest Kaggle checkpoint and confirmed we can resume training from it. The model weights, tokenizer, and optimizer state are all compatible with the current codebase. I also found a small config mismatch and have patched the resume logic to handle it.</p>
+              <h2>Summary</h2>
+              <ul>
+                <li>Checkpoint is complete and loadable (model, tokenizer, optimizer, scheduler).</li>
+                <li>Config mismatch in <code>rope_scaling</code> (checkpoint uses <code>type: linear</code>, current config expects <code>type: dynamic</code>). Added backward compatibility handling.</li>
+                <li>Verified training can resume from step 12,480 without loss spike.</li>
+              </ul>
+              <h2>Plan</h2>
+              <ol>
+                <li>Inspect checkpoint structure and configs</li>
+                <li>Fix config mismatch and update resume logic</li>
+                <li>Run a short validation to confirm training resumes correctly</li>
+              </ol></div>
+            </article>
+            <section class="activity" id="activity">
+              <button class="activity-toggle" id="activityToggle" aria-expanded="true"><svg class="icon sm arrow"><use href="#i-chevron-down"/></svg> Tool activity <span class="faint">· 5</span></button>
+              <div class="activity-list">
+                <div class="activity-row"><svg class="icon ok"><use href="#i-check"/></svg><span class="verb">read</span><span class="detail">Read checkpoint config <span class="faint">· config.json</span></span><span class="duration">1.2s</span></div>
+                <div class="activity-row"><svg class="icon ok"><use href="#i-check"/></svg><span class="verb">grep</span><span class="detail">Search for rope_scaling usage <span class="faint">· 5 files</span></span><span class="duration">0.8s</span></div>
+                <div class="activity-row"><svg class="icon ok"><use href="#i-check"/></svg><span class="verb">read</span><span class="detail">Inspect resume logic <span class="faint">· src/train/resume.py</span></span><span class="duration">0.6s</span></div>
+                <div class="activity-row"><svg class="icon ok"><use href="#i-check"/></svg><span class="verb">bash</span><span class="detail">Validate checkpoint with a dry run</span><span class="duration">4.3s</span></div>
+                <div class="activity-row"><svg class="icon ok"><use href="#i-check"/></svg><span class="verb">bash</span><span class="detail">Run short training resume (100 steps)</span><span class="duration">12.6s</span></div>
+              </div>
+            </section>
+          </div>
+        </div>
+        <div class="composer-shell">
+          <form class="composer" id="composerForm">
+            <textarea id="composerInput" rows="1" placeholder="Ask DSH to change, inspect, or explain…" aria-label="Nhập tin nhắn"></textarea>
+            <div class="composer-bottom">
+              <div class="composer-tools">
+                <button type="button" class="tool-button" id="attachButton" title="Đính kèm file (demo)" aria-label="Đính kèm"><svg class="icon"><use href="#i-paperclip"/></svg></button>
+                <button type="button" class="tool-button" id="mentionButton" title="Nhắc tới file" aria-label="Chèn mention"><svg class="icon"><use href="#i-at"/></svg></button>
+              </div>
+              <div class="composer-right">
+                <button type="button" class="selector" id="modelButton"><span id="modelName">GPT-6 (High)</span><svg class="icon sm"><use href="#i-chevron-down"/></svg></button>
+                <button type="button" class="selector" id="modeButton"><span id="modeName">Plan</span><svg class="icon sm"><use href="#i-chevron-down"/></svg></button>
+                <button class="send-button" type="submit" title="Gửi (Enter)" aria-label="Gửi"><svg class="icon md"><use href="#i-send"/></svg></button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </main>
+
+      <section class="changes-pane" id="changesPane" aria-label="Changes" tabindex="-1">
+        <div class="splitter" id="rightSplitter" aria-label="Thay đổi độ rộng Changes"></div>
+        <div class="changes-head">
+          <div class="changes-title">
+            <strong>Changes</strong>
+            <span id="changesCount">3 files</span>
+            <span class="sync-chip" id="aheadBehind" title="Commits ahead / behind origin/main"><span class="up">↑2</span><span class="down">↓1</span></span>
+          </div>
+          <div class="changes-head-actions">
+            <button class="outlined-button" id="reviewAll" title="Đánh dấu mọi file đã review (UI demo)">Review all</button>
+          </div>
+        </div>
+        <div class="object op-banner-shell" id="opBanner" hidden></div>
+        <div class="right-tabs" role="tablist" aria-label="Changes views">
+          <button class="right-tab active" id="diffTab" role="tab" aria-selected="true" aria-controls="diffContent">Diff</button>
+          <button class="right-tab" id="filesTab" role="tab" aria-selected="false" aria-controls="filesContent">Files</button>
+          <button class="right-tab" id="historyTab" role="tab" aria-selected="false" aria-controls="historyContent">History</button>
+        </div>
+
+        <div class="diff-content" id="diffContent" role="tabpanel" aria-labelledby="diffTab">
+          <div class="diff-filebar">
+            <span class="filename"><svg class="icon sm"><use href="#i-file"/></svg><span id="diffFilename">src/runtime/checkpoint.ts</span></span>
+            <span class="diff-stats" id="diffFileStats"><span class="added">+24</span><span class="removed">−12</span></span>
+            <div class="seg" id="diffSeg" role="group" aria-label="Diff side">
+              <button data-side="unstaged" class="active">Unstaged</button>
+              <button data-side="staged">Staged</button>
+            </div>
+          </div>
+          <div class="diff-scroll" id="diffScroll"><div id="diffHunks"></div></div>
+          <div class="review-bar">
+            <span id="diffFileActions"></span>
+            <label class="check"><input type="checkbox" id="reviewedToggle"> Reviewed</label>
+            <span class="hint" id="reviewedHint" title="Đánh dấu chỉ lưu trong UI và tự mất khi nội dung file đổi.">Reset khi file đổi</span>
+          </div>
+        </div>
+
+        <div class="files-content" id="filesContent" role="tabpanel" aria-labelledby="filesTab" hidden>
+          <div class="git-toolbar">
+            <input class="git-filter" id="gitFilter" placeholder="Filter changed files" aria-label="Filter changed files">
+            <button class="icon-btn" id="gitRefresh" title="Đọc lại git/status (demo)" aria-label="Refresh status"><svg class="icon sm"><use href="#i-sync"/></svg></button>
+          </div>
+          <div class="bulk-bar" id="bulkBar" hidden>
+            <span id="bulkCount">0 selected</span>
+            <button class="subtle-button" data-bulk="stage">Stage</button>
+            <button class="subtle-button" data-bulk="unstage">Unstage</button>
+            <button class="subtle-button" data-bulk="discard">Discard…</button>
+            <button class="icon-btn" data-bulk="clear" title="Bỏ chọn" aria-label="Bỏ chọn"><svg class="icon sm"><use href="#i-x"/></svg></button>
+          </div>
+          <div class="files-list" id="gitGroups"></div>
+        </div>
+
+        <div class="files-content" id="historyContent" role="tabpanel" aria-labelledby="historyTab" hidden>
+          <div class="history-list" id="historyList"></div>
+          <div class="commit-detail" id="commitDetail" hidden></div>
+        </div>
+
+        <div class="commit-bar" id="commitBar">
+          <div class="commit-summary">
+            <span id="stagedSummary">No staged changes</span>
+            <button class="icon-btn" id="messageHistory" title="Commit message gần đây" aria-label="Commit message gần đây"><svg class="icon sm"><use href="#i-history"/></svg></button>
+          </div>
+          <textarea class="commit-input" id="commitMessage" rows="2" placeholder="Commit message (Ctrl+Enter)" aria-label="Commit message"></textarea>
+          <div class="commit-options">
+            <label class="check"><input type="checkbox" id="amendToggle"> Amend</label>
+            <label class="check"><input type="checkbox" id="signoffToggle"> Sign-off</label>
+            <span class="hint warn" id="amendHint" hidden>Commit đã push — amend sẽ cần force-push; prototype không hỗ trợ.</span>
+            <div class="commit-actions">
+              <button class="subtle-button" id="commitPush" disabled>Commit &amp; Push</button>
+              <button class="primary-button" id="commitButton" disabled>Commit</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="terminal-panel" id="terminalPanel" hidden>
+      <div class="terminal-head"><span><svg class="icon sm"><use href="#i-terminal"/></svg> Terminal <span class="faint">· preview shell</span></span><button class="tool-button" id="closeTerminal" aria-label="Đóng terminal"><svg class="icon"><use href="#i-x"/></svg></button></div>
+      <div class="terminal-body" id="terminalOutput">DSH prototype shell — demo only, no commands are executed.\nType help to see supported mock commands.</div>
+      <form class="terminal-input-row" id="terminalForm"><span>❯</span><input id="terminalInput" autocomplete="off" spellcheck="false" aria-label="Terminal preview" placeholder="help" /></form>
+    </div>
+
+    <footer class="statusbar">
+      <div class="status-left"><button class="status-action" id="branchButton" title="Git branch"><svg class="icon sm"><use href="#i-branch"/></svg><span id="branchName">main</span><svg class="icon sm"><use href="#i-chevron-down"/></svg></button><button class="status-icon" id="gitButton" title="Git / Changes" aria-label="Git"><svg class="icon"><use href="#i-git"/></svg></button><button class="status-icon" id="syncButton" title="Đồng bộ trạng thái (demo)" aria-label="Sync"><svg class="icon sm"><use href="#i-sync"/></svg></button></div>
+      <div class="status-right"><button class="status-icon" id="terminalToggle" title="Terminal (Ctrl+J)" aria-label="Terminal"><svg class="icon"><use href="#i-terminal"/></svg></button><button class="status-icon" id="problemsButton" title="Problems: 2 (demo)" aria-label="Problems"><svg class="icon"><use href="#i-warning"/></svg></button><span class="status-dot" title="UI prototype · no backend connection" aria-label="Prototype status"></span></div>
+    </footer>
+  </div>
+
+  <div class="pop" id="popup" hidden></div>
+  <div class="modal-layer prefs-layer" id="settingsLayer" hidden>
+    <section class="prefs-window" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <header class="prefs-header"><div class="prefs-title"><svg class="icon"><use href="#i-settings"/></svg></div><span id="settingsTitle">Preferences</span><span class="prefs-demo-label">LOCAL DEMO</span><button class="prefs-close" id="closeSettings" aria-label="Đóng Preferences" title="Close (Esc)"><svg class="icon"><use href="#i-x"/></svg></button></header>
+      <div class="prefs-body">
+        <nav class="prefs-nav" id="settingsNav" aria-label="Settings sections">
+          <button class="prefs-nav-item active" data-settings-section="general"><svg class="icon"><use href="#i-sliders"/></svg> General</button>
+          <button class="prefs-nav-item" data-settings-section="appearance"><svg class="icon"><use href="#i-sun"/></svg> Appearance</button>
+          <button class="prefs-nav-item" data-settings-section="keymap"><svg class="icon"><use href="#i-keyboard"/></svg> Keymap</button>
+          <div class="prefs-nav-caption">EXTEND</div>
+          <button class="prefs-nav-item" data-settings-section="extensions"><svg class="icon"><use href="#i-puzzle"/></svg> Extensions <span class="prefs-mini-count" id="extensionCount"></span></button>
+          <button class="prefs-nav-item" data-settings-section="skills"><svg class="icon"><use href="#i-spark"/></svg> Skills <span class="prefs-mini-count" id="skillCount"></span></button>
+          <button class="prefs-nav-item" data-settings-section="marketplace"><svg class="icon"><use href="#i-store"/></svg> Marketplace</button>
+          <div class="prefs-nav-caption">MORE</div>
+          <button class="prefs-nav-item" data-settings-section="about"><svg class="icon"><use href="#i-info"/></svg> About</button>
+        </nav>
+        <div class="prefs-main" id="settingsMain" tabindex="-1"></div>
+      </div>
+      <footer class="prefs-footer"><span>Preferences are stored locally in this browser.</span><span>Esc to close</span></footer>
+    </section>
+  </div>
+  <div class="modal-layer" id="confirmLayer" hidden>
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+      <h2 id="confirmTitle">Confirm</h2>
+      <p class="modal-body" id="confirmBody"></p>
+      <div id="confirmExtra"></div>
+      <div class="modal-actions">
+        <button class="subtle-button" id="confirmCancel">Cancel</button>
+        <button class="danger-button" id="confirmOk" style="margin-left:7px">Confirm</button>
+      </div>
+    </section>
+  </div>
+  <div class="modal-layer" id="commandLayer" hidden><div class="command-box" role="dialog" aria-modal="true" aria-label="Quick open"><input class="command-input" id="commandInput" placeholder="Search files or commands…" autocomplete="off" /><div class="command-results" id="commandResults"></div></div></div>
+  <div class="toast" id="toast" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      'use strict';
+      const $ = (id) => document.getElementById(id);
+      const icon = (name, cls = '') => `<svg class="icon ${cls}"><use href="#i-${name}"/></svg>`;
+      const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;' }[c]));
+      const data = {
+        HIS_EMR: {
+          files: [
+            { name:'HIS_EMR', children:[
+              { name:'NhiDong', children:[
+                { name:'UIUX', children:[
+                  { name:'prototype', children:[
+                    { name:'tablet', children:[{name:'css',children:[{name:'app.css'}]},{name:'js',children:[{name:'app.js'}]},{name:'index.html'},{name:'PLAN.md'},{name:'README.md'}] },
+                    { name:'tablet-old',children:[{name:'index.html'}]},
+                    { name:'tablet-plan-css-preview',children:[{name:'css',children:[{name:'style.css'}]},{name:'js',children:[{name:'app.js'}]},{name:'index.html'},{name:'README.md'}]}
+                  ] },
+                  {name:'web',children:[]}
+                ]},
+                ...['configs','scripts','tests','docs'].map(name => ({ name,children:[]})),
+                {name:'.gitignore'},{name:'package.json'},{name:'README.md'},{name:'tsconfig.json'}
+              ]}
+            ]}
+          ], branch:'main'
+        },
+        openJev: { files:[{name:'openJev',children:[{name:'src',children:[{name:'broker.rs'},{name:'runtime.rs'},{name:'main.rs'}]},{name:'scripts',children:[]},{name:'tests',children:[]},{name:'Cargo.toml'},{name:'README.md'}]}],branch:'main' },
+        'verdict-next': { files:[{name:'verdict-next',children:[{name:'src',children:[{name:'runtime',children:[{name:'checkpoint.ts'},{name:'trainer.ts'},{name:'resume.py'}]},{name:'train',children:[{name:'resume.py'}]}]},{name:'configs',children:[{name:'config.json'}]},{name:'scripts',children:[]},{name:'docs',children:[{name:'PLAN.md'}]},{name:'README.md'}]}],branch:'main' }
+      };
+      let workspace = 'HIS_EMR';
+      let selectedFile = 'HIS_EMR/NhiDong/UIUX/prototype/tablet';
+      let openFolders = new Set(['HIS_EMR','HIS_EMR/NhiDong','HIS_EMR/NhiDong/UIUX','HIS_EMR/NhiDong/UIUX/prototype','HIS_EMR/NhiDong/UIUX/prototype/tablet']);
+      let sessions = [{id:1,name:'Training resume',initial:true},{id:2,name:'Audit proposal recall',initial:false},{id:3,name:'Review inference broker',initial:false}];
+      let currentSession = 1, sessionCounter = 3;
+      let popupSource = null, toastHandle = null;
+      // ===== Git review surface (v1.3 extension) =====
+      const gitHunk = (header, lines) => ({
+        header,
+        lines: lines.map(([kind, oldNo, newNo, text]) => ({ kind, old: oldNo, new: newNo, text })),
+        adds: lines.filter((line) => line[0] === '+').length,
+        dels: lines.filter((line) => line[0] === '-').length,
+        staged: false
+      });
+      let gitDemo = {
+        branch: 'main', upstream: 'origin/main', ahead: 2, behind: 1, headPushed: true,
+        files: [
+          { path: 'src/runtime/checkpoint.ts', kind: 'M', hunks: [
+            gitHunk('@@ -120,18 +120,30 @@ export async function loadCheckpoint(', [
+              [' ', '120', '120', '  ): Promise<Checkpoint> {'],
+              [' ', '121', '121', '  const metaPath = path.join(checkpointPath, "meta.json");'],
+              [' ', '122', '122', '  const configPath = path.join(checkpointPath, "config.json");'],
+              ['-', '123', '', '  const config = JSON.parse('],
+              ['-', '124', '', '    await fs.readFile(configPath, "utf-8")'],
+              ['-', '125', '', '  ) as TrainingConfig;'],
+              ['+', '', '123', '  let config = JSON.parse('],
+              ['+', '', '124', '    await fs.readFile(configPath, "utf-8")'],
+              ['+', '', '125', '  ) as TrainingConfig;'],
+              ['+', '', '126', ''],
+              ['+', '', '127', '  // Backward compatibility for older checkpoints'],
+              ['+', '', '128', '  if (config.rope_scaling?.type === "linear") {'],
+              ['+', '', '129', '    config = {'],
+              ['+', '', '130', '      ...config,'],
+              ['+', '', '131', '      rope_scaling: {'],
+              ['+', '', '132', '        type: "dynamic",'],
+              ['+', '', '133', '        factor: config.rope_scaling.factor ?? 1.0,'],
+              ['+', '', '134', '      },'],
+              ['+', '', '135', '    };'],
+              ['+', '', '136', '    console.warn('],
+              ['+', '', '137', '      "[checkpoint] Converted rope_scaling.type for compatibility"'],
+              ['+', '', '138', '    );'],
+              ['+', '', '139', '  }'],
+              [' ', '140', '140', ''],
+              [' ', '141', '141', '  const modelPath = path.join(checkpointPath, "model.safetensors");'],
+              [' ', '142', '142', '  const optimPath = path.join(checkpointPath, "optimizer.pt");']
+            ]),
+            gitHunk('@@ -160,7 +172,11 @@ export async function loadCheckpoint(', [
+              [' ', '160', '172', '  const state: Checkpoint = {'],
+              [' ', '161', '173', '    config,'],
+              [' ', '162', '174', '    model: await loadModel(modelPath),'],
+              ['-', '163', '', '    optimizer: await loadOptimizer(optimPath),'],
+              ['+', '', '175', '    optimizer: optimPath'],
+              ['+', '', '176', '      ? await loadOptimizer(optimPath)'],
+              ['+', '', '177', '      : undefined,'],
+              [' ', '166', '178', '    scheduler: await loadScheduler(checkpointPath),'],
+              [' ', '167', '179', '    step: metadata.step,'],
+              [' ', '168', '180', '  };']
+            ])
+          ] },
+          { path: 'src/train/resume.py', kind: 'M', hunks: [
+            gitHunk('@@ -48,6 +48,14 @@ def resume_training(run_dir: Path, step: int) -> None:', [
+              [' ', '48', '48', 'def resume_training(run_dir: Path, step: int) -> None:'],
+              [' ', '49', '49', '    state = load_state(run_dir)'],
+              ['-', '50', '', '    if state.step != step:'],
+              ['-', '51', '', '        raise RuntimeError("step mismatch")'],
+              ['+', '', '50', '    if state.step != step:'],
+              ['+', '', '51', '        raise RuntimeError('],
+              ['+', '', '52', '            f"checkpoint step {state.step} != requested {step}"'],
+              ['+', '', '53', '        )'],
+              ['+', '', '54', '    if state.optimizer is None:'],
+              ['+', '', '55', '        warn("resuming without optimizer state")'],
+              [' ', '52', '56', '    trainer = Trainer(state.config)'],
+              [' ', '53', '57', '    trainer.load(state)']
+            ])
+          ] },
+          { path: 'configs/train.yaml', kind: 'M', hunks: [
+            gitHunk('@@ -12,4 +12,5 @@ trainer:', [
+              [' ', '12', '12', 'trainer:'],
+              [' ', '13', '13', '  precision: bf16'],
+              ['-', '14', '', '  rope_scaling: linear'],
+              ['+', '', '14', '  rope_scaling:'],
+              ['+', '', '15', '    type: dynamic'],
+              [' ', '15', '16', '  grad_clip: 1.0']
+            ])
+          ] },
+          { path: 'docs/PLAN.md', kind: '?', untracked: true, hunks: [] },
+          { path: 'assets/logo.png', kind: 'M', binary: true, hunks: [gitHunk('@@ binary @@', [])] }
+        ],
+        history: [
+          { oid: 'f3a91c2d44', subject: 'Align rope scaling with runtime config', author: 'You', when: '2 giờ trước', parents: ['9f2c1ab4d0'], refs: ['HEAD', 'main', 'origin/main'], adds: 26, dels: 13, patch: '@@ -118,7 +118,9 @@\n-  rope_scaling: linear\n+  rope_scaling:\n+    type: dynamic' },
+          { oid: '9f2c1ab4d0', subject: 'Add resume validation for checkpoint step', author: 'You', when: 'hôm qua', parents: ['5c8e2d0a11'], refs: [], adds: 12, dels: 4, patch: '@@ -48,6 +48,9 @@\n-    raise RuntimeError("step mismatch")\n+    raise RuntimeError(f"checkpoint step {state.step} != requested {step}")' },
+          { oid: '5c8e2d0a11', subject: "Merge branch 'fix/git-review'", author: 'You', when: 'hôm qua', parents: ['b40a7f19c2', '8a44f01c77'], refs: [], adds: 0, dels: 0, patch: '' },
+          { oid: '8a44f01c77', subject: 'fix: guard missing optimizer state', author: 'Dat', when: '2 ngày trước', parents: ['b40a7f19c2'], refs: ['fix/git-review'], adds: 8, dels: 3, patch: '@@ -163,3 +163,6 @@\n-    optimizer: await loadOptimizer(optimPath),\n+    optimizer: optimPath\n+      ? await loadOptimizer(optimPath)\n+      : undefined,' },
+          { oid: 'b40a7f19c2', subject: 'chore: checkpoint loader scaffolding', author: 'Dat', when: '3 ngày trước', parents: ['7d10a449ab'], refs: [], adds: 84, dels: 0, patch: '' },
+          { oid: '7d10a449ab', subject: 'test: cover resume with a missing config', author: 'Dat', when: '3 ngày trước', parents: ['e1c0b2aa31'], refs: [], adds: 31, dels: 0, patch: '' },
+          { oid: 'e1c0b2aa31', subject: 'init: training runtime', author: 'Dat', when: '4 ngày trước', parents: [], refs: ['v0.3.0'], adds: 412, dels: 0, patch: '' }
+        ]
+      };
+      const gitState = {
+        tab: 'diff', diffSide: 'unstaged', selectedPath: 'src/runtime/checkpoint.ts',
+        selection: new Set(), reviewed: new Map(), filter: '', historyOpen: null, op: null
+      };
+
+      function gitStagedTotals() {
+        let adds = 0, dels = 0, files = 0;
+        gitDemo.files.forEach((file) => {
+          const staged = file.hunks.filter((hunk) => hunk.staged);
+          if (!staged.length) return;
+          files += 1;
+          staged.forEach((hunk) => { adds += hunk.adds; dels += hunk.dels; });
+        });
+        return { adds, dels, files };
+      }
+      function gitStats(file, side) {
+        let adds = 0, dels = 0;
+        file.hunks.forEach((hunk) => {
+          if (side === 'staged' ? hunk.staged : !hunk.staged) { adds += hunk.adds; dels += hunk.dels; }
+        });
+        return { adds, dels };
+      }
+      function gitSignature(file) {
+        return file.path + ':' + file.hunks.map((hunk) => hunk.header + hunk.adds + '/' + hunk.dels).join('|') + (file.untracked ? ':u' : '');
+      }
+      function gitIsReviewed(file) {
+        return gitState.reviewed.get(file.path) === gitSignature(file);
+      }
+      function gitFileGroups() {
+        const query = gitState.filter.trim().toLowerCase();
+        const matches = (file) => !query || file.path.toLowerCase().includes(query);
+        const staged = [], changes = [], untracked = [];
+        gitDemo.files.filter(matches).forEach((file) => {
+          if (file.untracked) { untracked.push(file); return; }
+          if (file.hunks.some((hunk) => hunk.staged)) staged.push(file);
+          if (file.hunks.some((hunk) => !hunk.staged)) changes.push(file);
+        });
+        return { staged, changes, untracked };
+      }
+      function gitUniqueCount() {
+        return gitDemo.files.filter((file) => file.untracked || file.hunks.length).length;
+      }
+      function gitPathHtml(path) {
+        const cut = path.lastIndexOf('/');
+        if (cut < 0) return `<span>${esc(path)}</span>`;
+        return `<span class="dir">${esc(path.slice(0, cut + 1))}</span><span>${esc(path.slice(cut + 1))}</span>`;
+      }
+      function gitKindChip(kind) {
+        const cls = kind === '?' ? 'U' : kind;
+        const label = kind === '?' ? '?' : kind;
+        return `<span class="kind-chip kind-${esc(cls)}" title="${esc({ M:'Modified', A:'Added', D:'Deleted', R:'Renamed', '?':'Untracked' }[kind] || 'Changed')}">${esc(label)}</span>`;
+      }
+      function gitFindFile(path) { return gitDemo.files.find((file) => file.path === path); }
+      function gitSelectFile(path, side) {
+        const file = gitFindFile(path);
+        if (!file) return;
+        gitState.selectedPath = path;
+        if (side === 'staged') gitState.diffSide = 'staged';
+        else if (side === 'changes') gitState.diffSide = 'unstaged';
+        renderGit();
+      }
+
+      function renderGitHead() {
+        const count = gitUniqueCount();
+        $('changesCount').textContent = `${count} file${count === 1 ? '' : 's'}`;
+        $('aheadBehind').innerHTML = gitDemo.ahead || gitDemo.behind
+          ? `<span class="up" title="${gitDemo.ahead} commit ahead">↑${gitDemo.ahead}</span><span class="down" title="${gitDemo.behind} commit behind">↓${gitDemo.behind}</span>`
+          : '';
+        $('aheadBehind').title = `Ahead ${gitDemo.ahead} · behind ${gitDemo.behind} · ${gitDemo.upstream}`;
+      }
+
+      function renderGitGroups() {
+        const { staged, changes, untracked } = gitFileGroups();
+        const row = (file, side) => {
+          const stats = gitStats(file, side);
+          const selected = gitState.selection.has(file.path);
+          const reviewed = gitIsReviewed(file);
+          const actions = side === 'staged'
+            ? `<button class="icon-btn" data-act="unstage-file" data-path="${esc(file.path)}" title="Unstage file · git/unstage (demo)" aria-label="Unstage ${esc(file.path)}"><svg class="icon sm"><use href="#i-chevron-down"/></svg></button>`
+            : side === 'untracked'
+              ? `<button class="icon-btn" data-act="stage-file" data-path="${esc(file.path)}" title="Stage file · git/stage (demo)" aria-label="Stage ${esc(file.path)}"><svg class="icon sm"><use href="#i-check"/></svg></button><button class="icon-btn danger" data-act="discard-file" data-path="${esc(file.path)}" title="Delete untracked file · needs a new Host verb (demo)" aria-label="Delete ${esc(file.path)}"><svg class="icon sm"><use href="#i-x"/></svg></button>`
+              : `<button class="icon-btn" data-act="stage-file" data-path="${esc(file.path)}" title="Stage file · git/stage (demo)" aria-label="Stage ${esc(file.path)}"><svg class="icon sm"><use href="#i-check"/></svg></button><button class="icon-btn danger" data-act="discard-file" data-path="${esc(file.path)}" title="Discard changes · git/discard (demo)" aria-label="Discard ${esc(file.path)}"><svg class="icon sm"><use href="#i-x"/></svg></button>`;
+          return `<div class="git-file-row${gitState.selectedPath === file.path ? ' active' : ''}" data-row-path="${esc(file.path)}" data-side="${side}" role="button" tabindex="0" aria-label="${esc(file.path)}">
+            <input class="row-check" type="checkbox" data-select="${esc(file.path)}" ${selected ? 'checked' : ''} aria-label="Select ${esc(file.path)}">
+            ${gitKindChip(file.kind)}
+            <span class="path" title="${esc(file.path)}">${gitPathHtml(file.path)}</span>
+            <span class="file-stat">${file.untracked ? '<span class="hint">untracked</span>' : file.binary ? '<span class="hint">binary</span>' : `<span class="added">+${stats.adds}</span><span class="removed">−${stats.dels}</span>`}${reviewed ? `<span class="reviewed-pill"><svg class="icon sm"><use href="#i-check"/></svg>reviewed</span>` : ''}</span>
+            <span class="row-actions">${actions}</span>
+          </div>`;
+        };
+        const group = (title, list, side) => list.length
+          ? `<section class="git-group"><div class="git-group-head">${title}<span class="count">${list.length}</span></div>${list.map((file) => row(file, side)).join('')}</section>`
+          : '';
+        const markup = group('Staged', staged, 'staged') + group('Changes', changes, 'changes') + group('Untracked', untracked, 'untracked');
+        $('gitGroups').innerHTML = markup || `<div class="empty-state"><strong>Working tree clean</strong>Host báo không có thay đổi nào trong workspace này.</div>`;
+        $('bulkBar').hidden = gitState.selection.size === 0;
+        $('bulkCount').textContent = `${gitState.selection.size} selected`;
+      }
+
+      function renderGitDiff() {
+        const file = gitFindFile(gitState.selectedPath);
+        $('diffSeg').querySelectorAll('button').forEach((button) => {
+          button.classList.toggle('active', button.dataset.side === gitState.diffSide);
+        });
+        if (!file) {
+          $('diffFilename').textContent = 'No file selected';
+          $('diffFileStats').innerHTML = '';
+          $('diffHunks').innerHTML = `<div class="empty-state"><strong>Select a changed file</strong>Chọn một file ở tab Files hoặc mở lại từ Explorer.</div>`;
+          $('reviewedToggle').checked = false;
+          $('reviewedToggle').disabled = true;
+          return;
+        }
+        $('diffFilename').textContent = file.path;
+        const stats = gitStats(file, gitState.diffSide);
+        $('diffFileStats').innerHTML = `<span class="added">+${stats.adds}</span><span class="removed">−${stats.dels}</span>`;
+        $('reviewedToggle').disabled = false;
+        $('reviewedToggle').checked = gitIsReviewed(file);
+        const stagedSide = gitState.diffSide === 'staged';
+        $('diffFileActions').innerHTML = file.untracked
+          ? `<button class="subtle-button" data-act="stage-file" data-path="${esc(file.path)}" title="Stage file · git/stage (demo)">Stage file</button>`
+          : stagedSide
+            ? `<button class="subtle-button" data-act="unstage-file" data-path="${esc(file.path)}" title="Unstage file · git/unstage (demo)">Unstage file</button>`
+            : `<button class="subtle-button" data-act="stage-file" data-path="${esc(file.path)}" title="Stage file · git/stage (demo)">Stage file</button><button class="subtle-button" data-act="discard-file" data-path="${esc(file.path)}" title="Discard changes · git/discard (demo)">Discard…</button>`;
+        $('reviewedHint').textContent = gitIsReviewed(file) ? 'Reviewed' : 'Reset khi file đổi';
+        if (file.binary) {
+          $('diffHunks').innerHTML = `<div class="state-note warn"><svg class="icon sm"><use href="#i-warning"/></svg><span>Git báo file nhị phân: không có text diff. Prototype không đọc nội dung file.</span></div>`;
+          return;
+        }
+        if (file.untracked && gitState.diffSide === 'unstaged') {
+          $('diffHunks').innerHTML = `<div class="state-note"><svg class="icon sm"><use href="#i-file"/></svg><span>File chưa được track — chưa có diff. Stage để đưa vào index trước khi commit.</span></div>`;
+          return;
+        }
+        const hunks = file.hunks.filter((hunk) => gitState.diffSide === 'staged' ? hunk.staged : !hunk.staged);
+        if (!hunks.length) {
+          const stagedSide = gitState.diffSide === 'staged';
+          $('diffHunks').innerHTML = `<div class="empty-state"><strong>${stagedSide ? 'Không còn phần staged' : 'Không có thay đổi unstaged'}</strong>${stagedSide ? 'Mọi hunk đã được đưa ra khỏi index.' : 'Chuyển sang phía Staged để xem phần đã stage.'}</div>`;
+          return;
+        }
+        $('diffHunks').innerHTML = hunks.map((hunk) => {
+          const index = file.hunks.indexOf(hunk);
+          const actions = gitState.diffSide === 'staged'
+            ? `<button class="icon-btn" data-act="unstage-hunk" data-path="${esc(file.path)}" data-hunk="${index}" title="Unstage hunk · git/unstage (demo)" aria-label="Unstage hunk"><svg class="icon sm"><use href="#i-chevron-down"/></svg></button>`
+            : `<button class="icon-btn" data-act="stage-hunk" data-path="${esc(file.path)}" data-hunk="${index}" title="Stage hunk · git/stage (demo)" aria-label="Stage hunk"><svg class="icon sm"><use href="#i-check"/></svg></button><button class="icon-btn danger" data-act="discard-hunk" data-path="${esc(file.path)}" data-hunk="${index}" title="Discard hunk · git/discard (demo)" aria-label="Discard hunk"><svg class="icon sm"><use href="#i-x"/></svg></button>`;
+          const lines = hunk.lines.map((line) => {
+            const cls = line.kind === '+' ? 'plus' : line.kind === '-' ? 'minus' : '';
+            return `<div class="hunk-line ${cls}"><span class="ln">${line.kind === '+' ? '' : esc(line.old)}</span><span class="ln">${line.kind === '-' ? '' : esc(line.new)}</span><span class="mark">${line.kind === ' ' ? ' ' : esc(line.kind)}</span><span class="code">${esc(line.text) || ' '}</span></div>`;
+          }).join('');
+          return `<section class="hunk-card" data-hunk-card="${index}"><header class="hunk-head" tabindex="0"><span class="hunk-range">${esc(hunk.header)}</span><span class="hunk-actions">${actions}</span></header><div class="hunk-body">${lines}</div></section>`;
+        }).join('');
+      }
+
+      function renderGitOperation() {
+        const shell = $('opBanner');
+        if (!gitState.op) { shell.hidden = true; shell.innerHTML = ''; return; }
+        const op = gitState.op;
+        shell.hidden = false;
+        const chips = op.conflicts.map((path) => `<button class="conflict-chip" data-act="conflict" data-path="${esc(path)}" title="${esc(path)}">${esc(path)}</button>`).join('');
+        shell.innerHTML = `<div class="op-banner">
+          <div class="op-row"><span class="op-title"><svg class="icon sm"><use href="#i-warning"/></svg>${op.kind === 'rebase' ? 'Rebase in progress' : 'Merge in progress'}<span class="count">${op.conflicts.length} conflict${op.conflicts.length === 1 ? '' : 's'}</span></span></div>
+          <div class="op-row">${chips || '<span class="hint">Không còn đường dẫn xung đột; bấm Continue để kết thúc (demo).</span>'}</div>
+          <div class="op-row"><span style="flex:1"></span>
+            <button class="subtle-button" data-act="op-continue" ${op.conflicts.length ? 'disabled' : ''}>Continue</button>
+            <button class="subtle-button" data-act="op-abort">Abort…</button>
+          </div>
+        </div>`;
+      }
+
+      function renderGitCommitBar() {
+        const totals = gitStagedTotals();
+        $('stagedSummary').textContent = totals.files
+          ? `${totals.files} staged · <span class="added">+${totals.adds}</span> <span class="removed">−${totals.dels}</span>`
+          : 'No staged changes';
+        $('stagedSummary').innerHTML = totals.files
+          ? `${totals.files} staged · <span class="added">+${totals.adds}</span> <span class="removed">−${totals.dels}</span>`
+          : 'No staged changes';
+        const message = $('commitMessage').value.trim();
+        const canCommit = totals.files > 0 && message.length > 0;
+        $('commitButton').disabled = !canCommit;
+        $('commitPush').disabled = !canCommit;
+        $('amendToggle').disabled = !canCommit || gitDemo.headPushed;
+        $('amendHint').hidden = !gitDemo.headPushed;
+        $('commitBar').hidden = gitState.tab === 'history';
+      }
+
+      const gitLaneColors = ['var(--blue)', 'var(--green)', 'var(--orange)', 'var(--red)'];
+      const gitLaneSpacing = 18;
+
+      // Swimlane layout over a newest-first commit list. Lane indexes stay stable for
+      // the whole history (no mid-stream compaction), so a branch keeps its column
+      // until it merges back; when two lanes wait for the same commit the extra lane
+      // joins the commit's own lane. Every row gets the same gutter width, which keeps
+      // commit subjects aligned.
+      function gitLayoutGraph(commits) {
+        let lanes = [];
+        const rows = [];
+        let maxLanes = 1;
+        commits.forEach((commit) => {
+          const matching = lanes.reduce((acc, value, index) => {
+            if (value === commit.oid) acc.push(index);
+            return acc;
+          }, []);
+          let lane = matching.length ? matching[0] : lanes.indexOf(null);
+          if (lane === -1) { lanes.push(null); lane = lanes.length - 1; }
+          const before = lanes.slice();
+          const joins = matching.slice(1);
+          joins.forEach((index) => { lanes[index] = null; });
+          lanes[lane] = commit.parents[0] ?? null;
+          const extra = [];
+          commit.parents.slice(1).forEach((parent) => {
+            let target = lanes.indexOf(null);
+            if (target === -1) { lanes.push(parent); target = lanes.length - 1; }
+            else { lanes[target] = parent; }
+            extra.push({ parent, lane: target });
+          });
+          while (lanes.length && lanes[lanes.length - 1] === null) lanes.pop();
+          maxLanes = Math.max(maxLanes, lane + 1, lanes.length, ...joiningLanes(before, joins));
+          rows.push({ commit, lane, before, joins, extra });
+        });
+        return { rows, maxLanes };
+      }
+      function joiningLanes(before, joins) { return [0, ...joins.map((index) => index + 1)]; }
+
+      function gitGraphSvg(row, height, lanes) {
+        const center = height / 2;
+        const x = (lane) => lane * gitLaneSpacing + 8;
+        const width = lanes * gitLaneSpacing + 6;
+        const color = (lane) => gitLaneColors[lane % gitLaneColors.length];
+        const dot = x(row.lane);
+        let markup = '';
+        row.before.forEach((value, index) => {
+          if (value === null || index === row.lane || row.joins.includes(index)) return;
+          markup += `<line x1="${x(index)}" y1="0" x2="${x(index)}" y2="${height}" stroke="${color(index)}" stroke-width="1.6" stroke-linecap="round" opacity=".7"/>`;
+        });
+        if (row.lane < row.before.length && row.before[row.lane] !== null) {
+          markup += `<line x1="${dot}" y1="0" x2="${dot}" y2="${center}" stroke="${color(row.lane)}" stroke-width="1.6" stroke-linecap="round"/>`;
+        }
+        row.joins.forEach((index) => {
+          const from = x(index);
+          markup += `<path d="M ${from} 0 C ${from} ${center - 10}, ${dot} ${center - 10}, ${dot} ${center}" fill="none" stroke="${color(index)}" stroke-width="1.6" stroke-linecap="round"/>`;
+        });
+        row.extra.forEach((parent) => {
+          markup += `<path d="M ${dot} ${center} C ${dot} ${center + 10}, ${x(parent.lane)} ${center + 10}, ${x(parent.lane)} ${height}" fill="none" stroke="${color(parent.lane)}" stroke-width="1.6" stroke-linecap="round"/>`;
+        });
+        if (row.commit.parents.length) {
+          markup += `<line x1="${dot}" y1="${center}" x2="${dot}" y2="${height}" stroke="${color(row.lane)}" stroke-width="1.6" stroke-linecap="round"/>`;
+        }
+        const head = (row.commit.refs || []).includes('HEAD');
+        markup += head
+          ? `<circle cx="${dot}" cy="${center}" r="5.6" fill="none" stroke="${color(row.lane)}" stroke-width="1.3"/><circle cx="${dot}" cy="${center}" r="3.2" fill="${color(row.lane)}"/>`
+          : `<circle cx="${dot}" cy="${center}" r="4.1" fill="${color(row.lane)}"/>`;
+        return `<svg class="history-graph" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" shape-rendering="geometricPrecision" aria-hidden="true">${markup}</svg>`;
+      }
+
+      function gitRefChips(commit) {
+        return (commit.refs || []).filter((ref) => ref !== 'HEAD').map((ref) => {
+          const remote = ref.includes('/') && !ref.startsWith('fix/');
+          const tag = ref.startsWith('v');
+          const cls = tag ? 'tag' : remote ? 'remote' : 'local';
+          return `<span class="ref-chip ${cls}" title="${tag ? 'Tag' : remote ? 'Remote branch' : 'Local branch'}">${esc(ref)}</span>`;
+        }).join('');
+      }
+
+      function renderGitHistory() {
+        const graphHeight = 34;
+        const { rows, maxLanes } = gitLayoutGraph(gitDemo.history);
+        $('historyList').style.setProperty('--graph-w', `${maxLanes * gitLaneSpacing + 6}px`);
+        $('historyList').innerHTML = rows.map((row, index) => {
+          const commit = row.commit;
+          const head = (commit.refs || []).includes('HEAD');
+          return `<button class="history-row${gitState.historyOpen === index ? ' active' : ''}${head ? ' head' : ''}" data-commit="${index}" title="${esc(commit.oid)}">
+            <span class="history-graph-cell">${gitGraphSvg(row, graphHeight, maxLanes)}</span>
+            <span class="history-main"><span class="history-line"><span class="history-subject">${esc(commit.subject)}</span>${gitRefChips(commit)}</span><span class="history-meta">${esc(commit.author)} · ${esc(commit.when)}${commit.parents.length > 1 ? ` · ${commit.parents.length} parents` : ''}</span></span>
+            <span class="history-oid">${esc(commit.oid.slice(0, 7))}</span>
+          </button>`;
+        }).join('') || `<div class="empty-state"><strong>No commits</strong>Chưa có commit nào trong bản demo này.</div>`;
+        const detail = $('commitDetail');
+        const commit = gitState.historyOpen === null ? null : gitDemo.history[gitState.historyOpen];
+        if (!commit) { detail.hidden = true; detail.innerHTML = ''; return; }
+        detail.hidden = false;
+        const parents = commit.parents.map((oid) => `<button class="ref-chip" data-act="commit-parent" data-oid="${esc(oid)}" title="Xem commit cha">${esc(oid.slice(0, 7))}</button>`).join(' ');
+        detail.innerHTML = `<div class="commit-detail-head">
+            <div><h3>${esc(commit.subject)}</h3><div class="meta">${esc(commit.oid)} · ${esc(commit.author)} · ${esc(commit.when)} · <span class="added">+${commit.adds}</span> <span class="removed">−${commit.dels}</span></div>
+              <div class="meta">${commit.parents.length ? `Parents: ${parents}` : 'Root commit'}${(commit.refs || []).length ? ` · ${esc(commit.refs.join(', '))}` : ''}</div></div>
+            <div class="row-actions"><button class="subtle-button" data-act="commit-cherry">Cherry-pick…</button><button class="subtle-button" data-act="commit-revert">Revert…</button></div>
+          </div>
+          <pre class="diff-snippet">${esc(commit.patch || 'Không có patch được lưu cho commit này trong demo.')}</pre>`;
+      }
+
+      function renderGit() {
+        renderGitHead();
+        renderGitOperation();
+        renderGitGroups();
+        renderGitCommitBar();
+        if (gitState.tab === 'diff') renderGitDiff();
+        renderGitHistory();
+      }
+
+      function setChangeTab(name) {
+        gitState.tab = name;
+        ['diff', 'files', 'history'].forEach((tab) => {
+          const button = $(tab + 'Tab'), panel = $(tab + 'Content');
+          const active = tab === name;
+          button.classList.toggle('active', active);
+          button.setAttribute('aria-selected', String(active));
+          panel.hidden = !active;
+        });
+        $('commitBar').hidden = name === 'history';
+        if (name === 'diff') renderGitDiff();
+        if (name === 'files') renderGitGroups();
+        if (name === 'history') renderGitHistory();
+        renderGitCommitBar();
+      }
+
+      function openChanges() {
+        $('app').classList.remove('changes-hidden');
+        $('app').classList.add('show-changes');
+        setChangeTab('diff');
+      }
+
+      // Generic confirmation. The prototype performs no filesystem or Git work,
+      // so every destructive path states that explicitly after the decision.
+      let confirmResolve = null;
+      function gitConfirm({ title, body, extra = '', confirmLabel = 'Confirm' }) {
+        $('confirmTitle').textContent = title;
+        $('confirmBody').innerHTML = body;
+        $('confirmExtra').innerHTML = extra;
+        $('confirmOk').textContent = confirmLabel;
+        $('confirmLayer').hidden = false;
+        return new Promise((resolve) => { confirmResolve = resolve; $('confirmCancel').focus(); });
+      }
+      function settleConfirm(value) {
+        if ($('confirmLayer').hidden) return;
+        $('confirmLayer').hidden = true;
+        const resolve = confirmResolve;
+        confirmResolve = null;
+        if (resolve) resolve(value);
+      }
+      $('confirmCancel').addEventListener('click', () => settleConfirm(false));
+      $('confirmOk').addEventListener('click', () => settleConfirm(true));
+      $('confirmLayer').addEventListener('click', (event) => { if (event.target === $('confirmLayer')) settleConfirm(false); });
+
+      function gitStageHunk(path, index) {
+        const file = gitFindFile(path);
+        if (!file) return;
+        file.hunks[index].staged = true;
+        showToast('Đã stage hunk (UI demo; chưa chạy git add).');
+        renderGit();
+      }
+      function gitUnstageHunk(path, index) {
+        const file = gitFindFile(path);
+        if (!file) return;
+        file.hunks[index].staged = false;
+        showToast('Đã bỏ stage hunk (UI demo).');
+        renderGit();
+      }
+      function gitStageFile(path) {
+        const file = gitFindFile(path);
+        if (!file) return;
+        if (file.untracked) {
+          file.untracked = false;
+          file.kind = 'A';
+          file.hunks = [gitHunk('@@ -0,0 +1,3 @@', [
+            ['+', '', '1', '# Plan'],
+            ['+', '', '2', ''],
+            ['+', '', '3', 'Prototype: untracked file staged in the UI only.']
+          ])];
+          file.hunks[0].staged = true;
+        } else {
+          file.hunks.forEach((hunk) => { hunk.staged = true; });
+        }
+        showToast(`${path}: stage (UI demo).`);
+        renderGit();
+      }
+      function gitUnstageFile(path) {
+        const file = gitFindFile(path);
+        if (!file) return;
+        file.hunks.forEach((hunk) => { hunk.staged = false; });
+        showToast(`${path}: unstage (UI demo).`);
+        renderGit();
+      }
+      async function gitDiscardFile(path) {
+        const file = gitFindFile(path);
+        if (!file) return;
+        const untracked = !!file.untracked;
+        const ok = await gitConfirm({
+          title: untracked ? 'Delete untracked file?' : 'Discard changes?',
+          body: untracked
+            ? 'Prototype: không xoá file thật. Trong app, host sẽ cần verb riêng cho untracked và xác nhận này.'
+            : `Prototype: không hoàn tác file thật. Thao tác thật là <code>git restore --worktree ${esc(path)}</code>, chỉ khi status chưa đổi từ lúc xác nhận.`,
+          confirmLabel: untracked ? 'Delete' : 'Discard'
+        });
+        if (!ok) return;
+        gitDemo.files = gitDemo.files.filter((entry) => entry.path !== path);
+        if (gitState.selectedPath === path) gitState.selectedPath = gitDemo.files[0]?.path || null;
+        gitState.selection.delete(path);
+        showToast(untracked ? 'Deleted (UI demo).' : 'Discarded (UI demo).');
+        renderGit();
+      }
+      async function gitDiscardHunk(path, index) {
+        const file = gitFindFile(path);
+        if (!file) return;
+        const hunk = file.hunks[index];
+        const ok = await gitConfirm({
+          title: 'Discard this hunk?',
+          body: 'Prototype: không hoàn tác file thật. Trong app, host phải kiểm tra <code>expectedStatus</code> và từ chối nếu diff đã đổi.',
+          extra: `<div class="diff-snippet">${esc(hunk.header)}</div>`,
+          confirmLabel: 'Discard hunk'
+        });
+        if (!ok) return;
+        file.hunks.splice(index, 1);
+        if (!file.hunks.length) gitDemo.files = gitDemo.files.filter((entry) => entry.path !== path);
+        showToast('Discarded hunk (UI demo).');
+        renderGit();
+      }
+
+      function gitRecentMessages() {
+        const recent = gitDemo.history.slice(0, 6);
+        openPopup($('messageHistory'),
+          `<div class="pop-caption">Recent commit messages</div>${recent.map((commit) => row(commit.subject, commit.subject, 'clock')).join('')}`,
+          (choice) => { $('commitMessage').value = choice; renderGitCommitBar(); $('commitMessage').focus(); });
+      }
+
+      function gitCommit(push) {
+        const totals = gitStagedTotals();
+        const message = $('commitMessage').value.trim();
+        if (!totals.files || !message) return;
+        const patch = gitDemo.files.flatMap((file) => file.hunks.filter((hunk) => hunk.staged)
+          .map((hunk) => hunk.header + '\n' + hunk.lines.map((line) => line.kind + line.text).join('\n'))).join('\n\n');
+        const amend = $('amendToggle').checked && !$('amendToggle').disabled;
+        const signoff = $('signoffToggle').checked;
+        const head = gitDemo.history[0];
+        const entry = {
+          oid: Array.from({ length: 10 }, () => '0123456789abcdef'[Math.floor(Math.random() * 16)]).join(''),
+          subject: message, author: 'You', when: 'vừa xong', adds: totals.adds, dels: totals.dels, patch,
+          signoff, parents: head ? [head.oid] : [], refs: ['HEAD', 'main']
+        };
+        gitDemo.history.forEach((commit) => { commit.refs = (commit.refs || []).filter((ref) => ref !== 'HEAD' && ref !== 'main' && ref !== 'origin/main'); });
+        if (amend) { gitDemo.history[0] = entry; }
+        else { gitDemo.history.unshift(entry); gitDemo.ahead += 1; }
+        gitDemo.headPushed = false;
+        gitDemo.files.forEach((file) => { file.hunks = file.hunks.filter((hunk) => !hunk.staged); });
+        gitDemo.files = gitDemo.files.filter((file) => file.untracked || file.hunks.length);
+        if (gitState.selectedPath && !gitFindFile(gitState.selectedPath)) {
+          gitState.selectedPath = gitDemo.files[0]?.path || null;
+        }
+        gitState.selection.clear();
+        gitState.reviewed.clear();
+        if (push) {
+          gitDemo.ahead = 0;
+          gitDemo.headPushed = true;
+          gitDemo.history.forEach((commit) => { commit.refs = (commit.refs || []).filter((ref) => ref !== 'origin/main'); });
+          if (!entry.refs.includes('origin/main')) entry.refs.push('origin/main');
+        }
+        $('commitMessage').value = '';
+        $('amendToggle').checked = false;
+        $('signoffToggle').checked = false;
+        showToast(`${amend ? 'Amended' : 'Committed'} (UI demo, không chạy git)${push ? ' · push xếp hàng (demo)' : ''}.`);
+        renderGit();
+      }
+
+      function gitBulk(action) {
+        const paths = Array.from(gitState.selection);
+        if (!paths.length) return;
+        if (action === 'stage') paths.forEach(gitStageFile);
+        if (action === 'unstage') paths.forEach(gitUnstageFile);
+        if (action === 'discard') {
+          gitConfirm({
+            title: `Discard ${paths.length} path${paths.length === 1 ? '' : 's'}?`,
+            body: 'Prototype: không thay đổi file thật.',
+            extra: `<ul class="modal-list">${paths.map((path) => `<li>${esc(path)}</li>`).join('')}</ul>`,
+            confirmLabel: 'Discard selected'
+          }).then((ok) => {
+            if (!ok) return;
+            gitDemo.files = gitDemo.files.filter((file) => !gitState.selection.has(file.path));
+            gitState.selection.clear();
+            if (!gitFindFile(gitState.selectedPath)) gitState.selectedPath = gitDemo.files[0]?.path || null;
+            showToast('Discarded selected paths (UI demo).');
+            renderGit();
+          });
+          return;
+        }
+        gitState.selection.clear();
+        renderGit();
+      }
+
+      function gitConflictChoices(anchor, path) {
+        openPopup(anchor, `<div class="pop-caption">${esc(path)}</div>${row('ours', 'Accept ours', 'check')}${row('theirs', 'Accept theirs', 'check')}${row('base', 'Open base (read-only)', 'file')}`,
+          (choice) => {
+            if (choice === 'base') { showToast('Prototype: không đọc blob :1:' + path + '.'); return; }
+            gitState.op.conflicts = gitState.op.conflicts.filter((item) => item !== path);
+            showToast(`Accepted ${choice} for ${path} (UI demo).`);
+            renderGit();
+          });
+      }
+
+      async function gitAbortOperation() {
+        const ok = await gitConfirm({ title: 'Abort in-progress operation?', body: 'Prototype: không chạy git. Trong app, abort khôi phục trạng thái trước merge/rebase và phải báo lỗi nếu git từ chối.', confirmLabel: 'Abort' });
+        if (!ok) return;
+        gitState.op = null;
+        showToast('Aborted (UI demo).');
+        renderGit();
+      }
+
+      function gitContinueOperation() {
+        if (gitState.op?.conflicts.length) return;
+        gitState.op = null;
+        showToast('Operation continued (UI demo).');
+        renderGit();
+      }
+
+      function gitSyncMenu() {
+        openPopup($('syncButton'),
+          `<div class="pop-caption">Remote · ${esc(gitDemo.upstream)}</div>` +
+          row('fetch', 'Fetch', 'sync') + row('pull', 'Pull (ff-only)', 'sync') +
+          row('push', 'Push', 'send') + row('publish', 'Push and set upstream', 'send'),
+          async (choice) => {
+            if (choice === 'push' || choice === 'publish') {
+              const ok = await gitConfirm({
+                title: choice === 'publish' ? 'Push and set upstream?' : 'Push commits?',
+                body: `Prototype: không chạy git. Thực tế push ${gitDemo.ahead} commit lên <code>${esc(gitDemo.upstream)}</code>${choice === 'publish' ? ' và đặt upstream' : ''}; không bao giờ force.`,
+                confirmLabel: 'Push'
+              });
+              if (!ok) return;
+              gitDemo.ahead = 0;
+              gitDemo.headPushed = true;
+              gitDemo.history.forEach((commit) => { commit.refs = (commit.refs || []).filter((ref) => ref !== 'origin/main'); });
+              gitDemo.history[0]?.refs.push('origin/main');
+              renderGit();
+              showToast('Pushed (UI demo).');
+              return;
+            }
+            showToast(`${choice === 'fetch' ? 'Fetched' : 'Pulled'} (UI demo).`);
+          });
+      }
+
+      function gitBranchMenu() {
+        const branches = ['main', 'feature/ui-refine', 'fix/git-review'];
+        openPopup($('branchButton'),
+          `<div class="pop-caption">Branches</div>` +
+          branches.map((name) => row('checkout:' + name, name, 'branch', name === gitDemo.branch ? '✓' : '')).join('') +
+          `<div class="pop-separator"></div>` +
+          row('create', 'Create branch…', 'plus') + row('merge', 'Merge into ' + gitDemo.branch + '…', 'git') +
+          row('rebase', 'Rebase ' + gitDemo.branch + ' onto…', 'history') + row('stash', 'Stash changes…', 'clock'),
+          async (choice) => {
+            if (choice.startsWith('checkout:')) {
+              gitDemo.branch = choice.slice(9);
+              $('branchName').textContent = gitDemo.branch;
+              showToast(`Checked out ${gitDemo.branch} (UI demo).`);
+              return;
+            }
+            if (choice === 'create') { showToast('Create branch: host chưa có verb; prototype chỉ hiện flow.'); return; }
+            if (choice === 'stash') { showToast('Stash: cần host verb git/stash (chưa có).'); return; }
+            const kind = choice === 'merge' ? 'merge' : 'rebase';
+            const ok = await gitConfirm({
+              title: kind === 'merge' ? `Merge into ${gitDemo.branch}?` : `Rebase ${gitDemo.branch}?`,
+              body: 'Prototype: không chạy git. Trong app, xung đột phải hiện banner với danh sách path và Continue/Abort.',
+              confirmLabel: kind === 'merge' ? 'Merge' : 'Rebase'
+            });
+            if (!ok) return;
+            gitState.op = { kind, conflicts: ['src/runtime/checkpoint.ts', 'configs/train.yaml'] };
+            renderGit();
+            showToast(`${kind} started with 2 conflicts (UI demo).`);
+          });
+      }
+
+      function renderGitMessagesPanel() { gitRecentMessages(); }
+
+      $('diffTab').addEventListener('click', () => setChangeTab('diff'));
+      $('filesTab').addEventListener('click', () => setChangeTab('files'));
+      $('historyTab').addEventListener('click', () => setChangeTab('history'));
+      $('diffSeg').addEventListener('click', (event) => {
+        const button = event.target.closest('[data-side]');
+        if (!button) return;
+        gitState.diffSide = button.dataset.side;
+        renderGit();
+      });
+      $('gitFilter').addEventListener('input', () => { gitState.filter = $('gitFilter').value; renderGitGroups(); });
+      $('gitRefresh').addEventListener('click', () => { showToast('git/status đọc lại (UI demo).'); renderGit(); });
+      $('commitMessage').addEventListener('input', renderGitCommitBar);
+      $('commitButton').addEventListener('click', () => gitCommit(false));
+      $('commitPush').addEventListener('click', () => gitCommit(true));
+      $('messageHistory').addEventListener('click', gitRecentMessages);
+      $('reviewedToggle').addEventListener('change', () => {
+        const file = gitFindFile(gitState.selectedPath);
+        if (!file) return;
+        if ($('reviewedToggle').checked) gitState.reviewed.set(file.path, gitSignature(file));
+        else gitState.reviewed.delete(file.path);
+        renderGit();
+      });
+      $('reviewAll').addEventListener('click', () => {
+        const files = gitDemo.files.filter((file) => file.untracked || file.hunks.length);
+        const allReviewed = files.length > 0 && files.every(gitIsReviewed);
+        files.forEach((file) => allReviewed ? gitState.reviewed.delete(file.path) : gitState.reviewed.set(file.path, gitSignature(file)));
+        showToast(allReviewed ? 'Đã bỏ đánh dấu reviewed (UI demo).' : `Đã đánh dấu ${files.length} file là reviewed (UI demo).`);
+        renderGit();
+      });
+
+      $('changesPane').addEventListener('click', (event) => {
+        const select = event.target.closest('[data-select]');
+        if (select) {
+          const path = select.dataset.select;
+          if (select.checked) gitState.selection.add(path); else gitState.selection.delete(path);
+          renderGitGroups();
+          return;
+        }
+        const bulk = event.target.closest('[data-bulk]');
+        if (bulk) { gitBulk(bulk.dataset.bulk); return; }
+        const commitRow = event.target.closest('[data-commit]');
+        if (commitRow) {
+          const index = Number(commitRow.dataset.commit);
+          gitState.historyOpen = gitState.historyOpen === index ? null : index;
+          renderGitHistory();
+          document.querySelector(`[data-commit="${index}"]`)?.focus();
+          return;
+        }
+        const action = event.target.closest('[data-act]');
+        if (action) {
+          const path = action.dataset.path;
+          const index = Number(action.dataset.hunk);
+          switch (action.dataset.act) {
+            case 'stage-file': gitStageFile(path); return;
+            case 'unstage-file': gitUnstageFile(path); return;
+            case 'discard-file': gitDiscardFile(path); return;
+            case 'stage-hunk': gitStageHunk(path, index); return;
+            case 'unstage-hunk': gitUnstageHunk(path, index); return;
+            case 'discard-hunk': gitDiscardHunk(path, index); return;
+            case 'conflict': gitConflictChoices(action, path); return;
+            case 'op-continue': gitContinueOperation(); return;
+            case 'op-abort': gitAbortOperation(); return;
+            case 'commit-revert': gitConfirm({ title: 'Revert commit?', body: `Prototype: host <code>git/revert</code> sẽ được gọi với commit ${esc(gitDemo.history[gitState.historyOpen]?.oid || '')}.`, confirmLabel: 'Revert' }).then((ok) => { if (ok) showToast('Revert queued (UI demo).'); }); return;
+            case 'commit-parent': {
+              const index = gitDemo.history.findIndex((commit) => commit.oid === action.dataset.oid);
+              if (index >= 0) { gitState.historyOpen = index; renderGitHistory(); document.querySelector(`[data-commit="${index}"]`)?.focus(); }
+              return;
+            }
+            case 'commit-cherry': gitConfirm({ title: 'Cherry-pick commit?', body: `Prototype: host <code>git/cherryPick</code> sẽ được gọi với commit ${esc(gitDemo.history[gitState.historyOpen]?.oid || '')}.`, confirmLabel: 'Cherry-pick' }).then((ok) => { if (ok) showToast('Cherry-pick queued (UI demo).'); }); return;
+            default: return;
+          }
+        }
+        const rowEl = event.target.closest('[data-row-path]');
+        if (rowEl) { gitSelectFile(rowEl.dataset.rowPath, rowEl.dataset.side); return; }
+      });
+      $('changesPane').addEventListener('keydown', (event) => {
+        const rowEl = event.target.closest?.('[data-row-path]');
+        if (rowEl && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault();
+          gitSelectFile(rowEl.dataset.rowPath, rowEl.dataset.side);
+          return;
+        }
+        if (event.key !== 'Escape') return;
+        if (!$('confirmLayer').hidden) { event.preventDefault(); settleConfirm(false); }
+      });
+      $('changesPane').addEventListener('keydown', (event) => {
+        const typing = ['INPUT', 'TEXTAREA'].includes(event.target.tagName) || event.target.isContentEditable;
+        if (gitState.tab === 'history' && (event.key === 'ArrowDown' || event.key === 'ArrowUp') && !typing) {
+          event.preventDefault();
+          const total = gitDemo.history.length;
+          if (!total) return;
+          const current = gitState.historyOpen ?? -1;
+          const next = event.key === 'ArrowDown' ? Math.min(total - 1, current + 1) : Math.max(0, current - 1);
+          gitState.historyOpen = next;
+          renderGitHistory();
+          document.querySelector(`[data-commit="${next}"]`)?.focus();
+          return;
+        }
+        const hunkCards = Array.from(document.querySelectorAll('.hunk-card'));
+        if (event.altKey && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+          if (!hunkCards.length) return;
+          event.preventDefault();
+          const current = document.activeElement?.closest('.hunk-card');
+          let index = current ? hunkCards.indexOf(current) : -1;
+          index = event.key === 'ArrowDown' ? Math.min(hunkCards.length - 1, index + 1) : Math.max(0, index - 1);
+          hunkCards.forEach((card) => card.classList.remove('focused'));
+          hunkCards[index].classList.add('focused');
+          hunkCards[index].querySelector('.hunk-head')?.focus();
+          hunkCards[index].scrollIntoView({ block: 'nearest' });
+          return;
+        }
+        if (typing) return;
+        const path = gitState.selectedPath;
+        if (!path) return;
+        const file = gitFindFile(path);
+        const hunkCard = document.activeElement?.closest('.hunk-card');
+        const hunkIndex = hunkCard ? Number(hunkCard.dataset.hunkCard) : null;
+        if (event.key === 's' || event.key === 'S') {
+          event.preventDefault();
+          if (hunkIndex !== null && file) gitStageHunk(path, hunkIndex); else gitStageFile(path);
+        } else if (event.key === 'u' || event.key === 'U') {
+          event.preventDefault();
+          if (hunkIndex !== null && file) gitUnstageHunk(path, hunkIndex); else gitUnstageFile(path);
+        } else if (event.key === 'd' || event.key === 'D') {
+          event.preventDefault();
+          if (hunkIndex !== null && file) gitDiscardHunk(path, hunkIndex); else gitDiscardFile(path);
+        }
+      });
+      document.addEventListener('keydown', (event) => {
+        const mod = event.ctrlKey || event.metaKey;
+        if (mod && event.shiftKey && (event.key === 'G' || event.key === 'g')) {
+          event.preventDefault();
+          openChanges();
+          return;
+        }
+        if (mod && event.key === 'Enter' && event.target.id === 'commitMessage') {
+          event.preventDefault();
+          if (!$('commitButton').disabled) gitCommit(false);
+        }
+        if (event.key === 'Escape') {
+          if (!$('confirmLayer').hidden) { event.preventDefault(); settleConfirm(false); return; }
+          if (!$('popup').hidden) { event.preventDefault(); closePopup(); }
+        }
+      });
+
+      function showToast(message) {
+        const t = $('toast'); t.textContent = message; t.classList.add('show');
+        clearTimeout(toastHandle); toastHandle = setTimeout(() => t.classList.remove('show'), 2900);
+      }
+      function renderTree() {
+        let html = '';
+        const row = (item, parent, level) => {
+          const path = parent ? `${parent}/${item.name}` : item.name;
+          const folder = Array.isArray(item.children), opened = openFolders.has(path), cls = item.name.split('.').pop().toLowerCase();
+          const fileType = ['ts','js','py','md','json','html'].includes(cls) ? cls : '';
+          html += `<button class="tree-row ${selectedFile===path?'selected':''}" data-tree-path="${esc(path)}" data-folder="${folder}" style="padding-left:${level*17 + 4}px" title="${esc(path)}">${folder ? icon('chevron-right',`chevron ${opened?'open':''}`) : '<span class="chevron-placeholder"></span>'}${icon(folder?'folder':'file',`file-icon ${fileType}`)}<span class="name">${esc(item.name)}</span></button>`;
+          if(folder && opened) item.children.forEach(child => row(child,path,level+1));
+        };
+        data[workspace].files.forEach(file => row(file,'',0));
+        $('fileTree').innerHTML = html;
+      }
+      $('fileTree').addEventListener('click', e => {
+        const btn = e.target.closest('[data-tree-path]'); if (!btn) return;
+        const path = btn.dataset.treePath;
+        selectedFile = path;
+        if(btn.dataset.folder === 'true') {
+          openFolders.has(path) ? openFolders.delete(path) : openFolders.add(path);
+        } else { showFilePreview(path); }
+        renderTree();
+      });
+      function showFilePreview(path) {
+        if (gitFindFile(path)) { gitSelectFile(path, 'changes'); }
+        else { showToast(`${path}: Explorer only — file này không nằm trong change set (demo).`); }
+        if($('app').classList.contains('changes-hidden')) $('app').classList.remove('changes-hidden');
+        if(window.innerWidth <= 950) $('app').classList.add('show-changes');
+      }
+      function switchWorkspace(name) {
+        workspace = name; selectedFile = name;
+        openFolders = new Set([name]);
+        if (name === 'HIS_EMR') ['HIS_EMR/NhiDong','HIS_EMR/NhiDong/UIUX','HIS_EMR/NhiDong/UIUX/prototype','HIS_EMR/NhiDong/UIUX/prototype/tablet'].forEach(p => openFolders.add(p));
+        if (name === 'verdict-next') ['verdict-next/src','verdict-next/src/runtime'].forEach(p => openFolders.add(p));
+        $('workspaceLabel').textContent = name;
+        $('branchName').textContent = data[name].branch;
+        renderTree(); closePopup(); showToast(`Workspace: ${name} (sample tree)`);
+      }
+      $('conversation').addEventListener('click', e => {
+        const toggle=e.target.closest('.activity-toggle'); if(!toggle)return;
+        const section=toggle.closest('.activity');
+        const collapsed=section.classList.toggle('collapsed');
+        toggle.setAttribute('aria-expanded',String(!collapsed));
+        persistSessions();
+      });
+      // A local demonstration store: no remote marketplace, filesystem, or extension execution.
+      const STORE_KEY = 'dsh_ui_prototype_v2';
+      const baseConfig = { theme:'dark', accent:'blue', density:'normal', fontSize:13, keymap:'default', bindings:{}, restoreSession:true, restorePanels:true, installed:{'git-helper':true,'syntax-assist':true,'handoff-kit':true,'review-checklist':false}, enabled:{'git-helper':true,'syntax-assist':true,'handoff-kit':true,'review-checklist':false} };
+      let pref = JSON.parse(JSON.stringify(baseConfig));
+      try {
+        const stored=JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+        if(stored && typeof stored==='object') {
+          pref={...pref,...stored,bindings:{...pref.bindings,...(stored.bindings||{})},installed:{...pref.installed,...(stored.installed||{})},enabled:{...pref.enabled,...(stored.enabled||{})}};
+        }
+      } catch(err) { /* Private / blocked storage: operate for the current page only. */ }
+      let settingsSection='general', marketplaceFilter='all', marketplaceQuery='', libraryQuery='', shortcutRecording=null;
+      const library=[
+        {id:'git-helper',name:'Git Helper',type:'extension',icon:'git',meta:'Workspace',desc:'Branch and change-review actions for the workspace.'},
+        {id:'syntax-assist',name:'Syntax Assist',type:'extension',icon:'code',meta:'Editor',desc:'Language and file-type decorations in the preview.'},
+        {id:'handoff-kit',name:'Session Handoff',type:'skill',icon:'spark',meta:'Workspace skill',desc:'Structured handoff notes to continue work between sessions.'},
+        {id:'review-checklist',name:'Review Checklist',type:'skill',icon:'checklist',meta:'Global skill',desc:'Review a change against acceptance criteria.'},
+        {id:'terminal-tools',name:'Terminal Tools',type:'extension',icon:'terminal',meta:'Utility',desc:'Terminal command helpers and session presets.'},
+        {id:'diff-inspector',name:'Diff Inspector',type:'extension',icon:'code',meta:'Code review',desc:'Inspect and annotate patches before review.'},
+        {id:'test-planner',name:'Test Planner',type:'skill',icon:'checklist',meta:'Workflow skill',desc:'Build concise test plans from modified files and intent.'},
+        {id:'ui-audit',name:'UI Audit',type:'skill',icon:'eye',meta:'Workflow skill',desc:'Inspect layout hierarchy, density, and interaction consistency.'},
+      ];
+      const presetBindings={
+        default:{search:'Ctrl+K',explorer:'Ctrl+B',new:'Ctrl+N',terminal:'Ctrl+J',settings:'Ctrl+,',changes:'Ctrl+Shift+D'},
+        zed:{search:'Ctrl+P',explorer:'Ctrl+Shift+E',new:'Ctrl+N',terminal:'Ctrl+`',settings:'Ctrl+,',changes:'Ctrl+Shift+D'},
+        vscode:{search:'Ctrl+P',explorer:'Ctrl+B',new:'Ctrl+Shift+N',terminal:'Ctrl+`',settings:'Ctrl+,',changes:'Ctrl+Shift+D'}
+      };
+      const actionNames={search:'Quick open',explorer:'Toggle Explorer',new:'New session',terminal:'Toggle Terminal',settings:'Preferences',changes:'Toggle Changes'};
+      const actions={search:openSearch,explorer:toggleExplorer,new:createSession,terminal:toggleTerminal,settings:()=>openSettings('general'),changes:toggleChanges};
+      function getBinding(id) { return pref.bindings[id] || presetBindings[pref.keymap]?.[id] || presetBindings.default[id]; }
+      function persist() { try{localStorage.setItem(STORE_KEY,JSON.stringify(pref));}catch(err){} }
+      function applyPreferences() {
+        document.documentElement.dataset.theme=pref.theme;
+        document.documentElement.dataset.accent=pref.accent;
+        document.documentElement.style.setProperty('--scale',String(Math.max(.85,Math.min(1.2,Number(pref.fontSize)/13))));
+        $('app').classList.toggle('compact',pref.density==='compact');
+        $('terminalToggle').title=`Terminal (${getBinding('terminal')})`;
+        $('searchButton').title=`Quick open (${getBinding('search')})`;
+      }
+      function chordFromEvent(e) {
+        if(e.altKey && e.ctrlKey && !e.shiftKey && e.key==='AltGraph')return null;
+        const parts=[];
+        if(e.ctrlKey||e.metaKey) parts.push('Ctrl');
+        if(e.altKey)parts.push('Alt');
+        if(e.shiftKey)parts.push('Shift');
+        if(parts.length===0)return null;  // Do not steal normal typing from editors.
+        const name=e.code==='Comma'?',':e.code==='Backquote'?'`':e.code.startsWith('Key')?e.code.slice(3):e.code.startsWith('Digit')?e.code.slice(5):e.key.length===1?e.key.toUpperCase():e.key;
+        if(['Control','Alt','Shift','Meta'].includes(name))return null;
+        return [...parts,name].join('+');
+      }
+      function saveShortcut(id,chord) {
+        const other=Object.keys(actionNames).find(a=>a!==id && getBinding(a)===chord);
+        if(other) { showToast(`Trùng phím với ${actionNames[other]}. Hãy chọn tổ hợp khác.`);shortcutRecording=null;renderSettings();return; }
+        pref.bindings[id]=chord;shortcutRecording=null;persist();applyPreferences();renderSettings();showToast(`Đã đặt ${actionNames[id]}: ${chord}`);
+      }
+      function closeSettings(){ $('settingsLayer').hidden=true;shortcutRecording=null; }
+      function openSettings(section='general') {
+        settingsSection=['general','appearance','keymap','extensions','skills','marketplace','about'].includes(section)?section:'general';
+        $('settingsLayer').hidden=false;renderSettings();
+        $('settingsMain').focus({preventScroll:true});
+      }
+      function settingRow(title,desc,control) {return `<div class="prefs-setting"><div><div class="prefs-setting-title">${title}</div><div class="prefs-setting-desc">${desc}</div></div>${control}</div>`;}
+      const sectionIntro={
+        general:['General','Behavior and workspace defaults.'],appearance:['Appearance','Customize how DSH looks without changing the layout.'],
+        keymap:['Keymap','Choose a shortcut preset or override individual commands.'],extensions:['Extensions','Manage locally installed integrations and UI features.'],
+        skills:['Skills','Manage reusable agent workflows independently from extensions.'],marketplace:['Marketplace','Discover sample extensions and skills. No packages are downloaded.'],
+        about:['About DSH','Prototype capabilities and boundaries.']
+      };
+      function pickSelect(id,options,current) {return `<select class="prefs-select" data-pref="${id}" aria-label="${id}">${options.map(([value,label])=>`<option value="${value}" ${current===value?'selected':''}>${label}</option>`).join('')}</select>`;}
+      function toggleButton(id,val) {return `<button type="button" role="switch" aria-label="${esc(id)}" aria-checked="${!!val}" class="prefs-switch" data-toggle-pref="${id}"></button>`;}
+      function libraryCard(item,market=false) {
+        const installed=!!pref.installed[item.id],enabled=!!pref.enabled[item.id];
+        let button;
+        if(market) button=`<button class="prefs-btn ${installed?'':'primary'}" data-install="${item.id}">${installed?'Remove':'Install'}</button>`;
+        else button=`<button type="button" role="switch" aria-label="Enable ${esc(item.name)}" aria-checked="${enabled}" class="prefs-switch" data-library-toggle="${item.id}"></button>`;
+        return `<div class="prefs-card"><div class="prefs-card-icon">${icon(item.icon)}</div><div class="prefs-card-body"><div class="prefs-card-title">${esc(item.name)}<span class="prefs-tag">${item.type}</span></div><div class="prefs-card-desc">${esc(item.desc)}</div><span class="prefs-card-meta">${esc(item.meta)} · ${market?(installed?'Installed locally (demo)':'Demo catalog'):enabled?'Enabled':'Disabled'}</span></div><div class="prefs-card-action">${button}</div></div>`;
+      }
+      function renderSettings(preserveScroll=false) {
+        document.querySelectorAll('[data-settings-section]').forEach(b=>b.classList.toggle('active',b.dataset.settingsSection===settingsSection));
+        $('extensionCount').textContent=String(library.filter(x=>x.type==='extension'&&pref.installed[x.id]).length);
+        $('skillCount').textContent=String(library.filter(x=>x.type==='skill'&&pref.installed[x.id]).length);
+        const main=$('settingsMain'),scroll=preserveScroll?main.scrollTop:0;
+        const intro=sectionIntro[settingsSection];
+        let content=`<div class="prefs-page-head"><h2>${intro[0]}</h2><p>${intro[1]}</p></div>`;
+        if(settingsSection==='general') content+=`<div class="prefs-group"><h3>Startup</h3>${settingRow('Restore last session','Remember your preferred startup behavior in this browser.',toggleButton('restoreSession',pref.restoreSession))}${settingRow('Restore panel visibility','Remember whether Explorer and Changes were open.',toggleButton('restorePanels',pref.restorePanels))}</div><div class="prefs-hint"><strong>Local UI prototype</strong><br>These preferences are stored locally. Agent responses, filesystem access, Git actions and terminal commands are not connected to DSH yet.</div>`;
+        if(settingsSection==='appearance') content+=`<div class="prefs-group"><h3>Color</h3>${settingRow('Theme','Light, dark, or a higher-contrast midnight palette.',pickSelect('theme',[['dark','Dark'],['midnight','Midnight'],['light','Light']],pref.theme))}${settingRow('Accent color','Use the accent for selected rows, focus and active tabs.',`<div class="prefs-swatch-row">${[['blue','#4a99f7'],['teal','#42b7ba'],['violet','#a38df5']].map(([n,c])=>`<button data-accent-choice="${n}" class="prefs-swatch ${pref.accent===n?'selected':''}"><span class="prefs-swatch-dot" style="--swatch:${c}"></span>${n}</button>`).join('')}</div>`)}</div><div class="prefs-group"><h3>Density</h3>${settingRow('Spacing','Adjust the tree and conversation vertical rhythm.',pickSelect('density',[['normal','Comfortable'],['compact','Compact']],pref.density))}${settingRow('UI font scale','Scale the interface text for comfort.',`<input type="range" data-pref="fontSize" min="11" max="16" step="1" value="${pref.fontSize}" aria-label="Font size"><span class="prefs-quiet" id="fontSizeValue">${pref.fontSize}px</span>`)}</div>`;
+        if(settingsSection==='keymap') content+=`<div class="prefs-group"><h3>Preset</h3>${settingRow('Shortcut profile','DSH presets inspired by common editor bindings.',pickSelect('keymap',[['default','DSH Default'],['zed','Zed-inspired'],['vscode','VS Code-inspired']],pref.keymap))}</div><div class="prefs-group"><h3>Commands</h3>${Object.entries(actionNames).map(([id,label])=>`<div class="prefs-keymap-row"><div>${label}<span class="muted">${id}</span></div><button class="prefs-kbd ${shortcutRecording===id?'listening':''}" data-edit-shortcut="${id}" title="Click to record a key combination">${shortcutRecording===id?'Press keys…':esc(getBinding(id))}</button><button class="tool-button" data-reset-shortcut="${id}" title="Reset to profile" aria-label="Reset ${label}">${icon('sync','sm')}</button></div>`).join('')}</div><div class="prefs-hint">Click a shortcut and press a new key combination. Press Esc to cancel. Conflicting bindings are rejected. Browser-reserved combinations may still be unavailable.</div>`;
+        if(settingsSection==='extensions'||settingsSection==='skills') {
+          const type=settingsSection==='extensions'?'extension':'skill';
+          const entries=library.filter(x=>x.type===type&&pref.installed[x.id]&&(`${x.name} ${x.desc}`.toLowerCase().includes(libraryQuery.toLowerCase())));
+          content+=`<div class="prefs-search-row"><input class="prefs-input" type="search" id="librarySearch" value="${esc(libraryQuery)}" placeholder="Filter ${settingsSection}…"><button class="prefs-btn" data-go-market="${type}">Browse marketplace</button></div>`;
+          content+=entries.length?`<div class="prefs-collection">${entries.map(x=>libraryCard(x)).join('')}</div>`:`<div class="prefs-hint">No ${settingsSection} found. Browse the sample marketplace to add one.</div>`;
+          content+=`<p class="prefs-quiet">${settingsSection==='skills'?'Skills are reusable instructions; enabling them here does not run any agent.':'Enabling an extension here only changes prototype state; no plugin code is executed.'}</p>`;
+        }
+        if(settingsSection==='marketplace') {
+          content+=`<div class="prefs-search-row"><input class="prefs-input" id="marketplaceSearch" type="search" placeholder="Search demo catalog…" value="${esc(marketplaceQuery)}"></div>`;
+          content+=`<div class="prefs-filter-row">${[['all','All'],['extension','Extensions'],['skill','Skills']].map(([v,n])=>`<button class="prefs-filter ${marketplaceFilter===v?'active':''}" data-market-filter="${v}">${n}</button>`).join('')}</div>`;
+          const filtered=library.filter(x=>(marketplaceFilter==='all'||x.type===marketplaceFilter)&&(`${x.name} ${x.desc}`.toLowerCase().includes(marketplaceQuery.toLowerCase())));
+          content+=filtered.length?`<div class="prefs-collection">${filtered.map(x=>libraryCard(x,true)).join('')}</div>`:'<div class="prefs-hint">No results for this query.</div>';
+        }
+        if(settingsSection==='about') content+=`<div class="prefs-group"><h3>Prototype information</h3>${settingRow('Version','Single-file interactive HTML prototype.','v2.0')}${settingRow('Runtime','Local browser state; no server connection.','HTML / CSS / JS')}</div><div class="prefs-hint">This prototype cannot install actual extensions or skills, fetch marketplace packages, run terminal commands, or change Git repositories. All sample catalog entries and installation states are local UI simulations.</div>`;
+        main.innerHTML=content;main.scrollTop=scroll;
+      }
+      $('settingsNav').addEventListener('click',e=>{const b=e.target.closest('[data-settings-section]');if(!b)return;settingsSection=b.dataset.settingsSection;shortcutRecording=null;libraryQuery='';renderSettings();});
+      $('settingsMain').addEventListener('change',e=>{
+        const el=e.target,field=el.dataset.pref;
+        if(!field)return;
+        if(field==='keymap'){pref.bindings={};shortcutRecording=null;}
+        pref[field]=field==='fontSize'?Number(el.value):el.value;
+        persist();applyPreferences();renderSettings(true);
+      });
+      $('settingsMain').addEventListener('input',e=>{
+        if(e.target.dataset.pref==='fontSize') {pref.fontSize=Number(e.target.value);applyPreferences();$('fontSizeValue').textContent=`${pref.fontSize}px`;persist();}
+        if(e.target.id==='librarySearch'){libraryQuery=e.target.value;renderSettings(true);const input=$('librarySearch');input?.focus();input?.setSelectionRange(libraryQuery.length,libraryQuery.length);}
+        if(e.target.id==='marketplaceSearch'){marketplaceQuery=e.target.value;renderSettings(true);const input=$('marketplaceSearch');input?.focus();input?.setSelectionRange(marketplaceQuery.length,marketplaceQuery.length);}
+      });
+      $('settingsMain').addEventListener('click',e=>{
+        const sw=e.target.closest('[data-toggle-pref]');
+        if(sw){const id=sw.dataset.togglePref;pref[id]=!pref[id];persist();if(id==='restoreSession'&&pref[id])persistSessions();renderSettings(true);return;}
+        const color=e.target.closest('[data-accent-choice]');
+        if(color){pref.accent=color.dataset.accentChoice;persist();applyPreferences();renderSettings(true);return;}
+        const binding=e.target.closest('[data-edit-shortcut]');
+        if(binding){shortcutRecording=binding.dataset.editShortcut;renderSettings(true);return;}
+        const reset=e.target.closest('[data-reset-shortcut]');
+        if(reset){delete pref.bindings[reset.dataset.resetShortcut];shortcutRecording=null;persist();renderSettings(true);return;}
+        const enabled=e.target.closest('[data-library-toggle]');
+        if(enabled){const id=enabled.dataset.libraryToggle;pref.enabled[id]=!pref.enabled[id];persist();renderSettings(true);return;}
+        const market=e.target.closest('[data-go-market]');
+        if(market){marketplaceFilter=market.dataset.goMarket;settingsSection='marketplace';marketplaceQuery='';renderSettings();return;}
+        const filter=e.target.closest('[data-market-filter]');
+        if(filter){marketplaceFilter=filter.dataset.marketFilter;renderSettings(true);return;}
+        const install=e.target.closest('[data-install]');
+        if(install){const id=install.dataset.install;pref.installed[id]=!pref.installed[id];pref.enabled[id]=pref.installed[id];persist();renderSettings(true);showToast(`${library.find(x=>x.id===id)?.name}: ${pref.installed[id]?'added':'removed'} from demo library.`);}
+      });
+      $('closeSettings').addEventListener('click',closeSettings);
+      $('settingsLayer').addEventListener('click',e=>{if(e.target===$('settingsLayer'))closeSettings();});
+      applyPreferences();
+
+      function positionPopup(target) {
+        const pop=$('popup'), r=target.getBoundingClientRect();
+        pop.hidden=false;
+        const w=pop.offsetWidth, h=pop.offsetHeight;
+        pop.style.left=`${Math.max(8, Math.min(r.left, innerWidth-w-8))}px`;
+        pop.style.top=`${Math.max(8, Math.min(r.bottom+5, innerHeight-h-8))}px`;
+      }
+      function closePopup() { $('popup').hidden=true; popupSource=null; }
+      function openPopup(target,html,onSelect) {
+        if(popupSource===target && !$('popup').hidden) { closePopup(); return; }
+        popupSource=target; $('popup').innerHTML=html; positionPopup(target);
+        $('popup').onclick=e=> { const btn=e.target.closest('[data-choice]'); if(btn) { onSelect(btn.dataset.choice); closePopup(); } };
+      }
+      const row=(choice,label,iconName,end='')=>`<button class="pop-row" data-choice="${esc(choice)}">${icon(iconName)}<span>${esc(label)}</span>${end?`<span class="end">${esc(end)}</span>`:''}</button>`;
+      function openMainMenu() {
+        openPopup($('menuButton'),
+          `<div class="pop-caption">Workspace</div>${row('search','Quick open','search',getBinding('search'))}${row('explorer','Toggle Explorer','panel',getBinding('explorer'))}${row('new','New session','plus',getBinding('new'))}`+
+          `<div class="pop-separator"></div><div class="pop-caption">Customize</div>${row('general','Preferences…','settings',getBinding('settings'))}${row('appearance','Appearance','sun')}${row('keymap','Keymap','keyboard')}${row('extensions','Extensions','puzzle')}${row('skills','Skills','spark')}${row('marketplace','Marketplace','store')}`+
+          `<div class="pop-separator"></div>${row('about','About DSH','info')}`,
+          choice => { if(choice==='search')openSearch();else if(choice==='explorer')toggleExplorer();else if(choice==='new')createSession();else openSettings(choice); });
+      }
+      $('menuButton').addEventListener('click',openMainMenu);
+      $('workspaceButton').addEventListener('click',()=>openPopup($('workspaceButton'),
+        `<div class="pop-caption">Recent workspaces · demo</div>${Object.keys(data).map(n=>row(n,n,'folder',n===workspace?'✓':'' )).join('')}`,
+        switchWorkspace));
+      $('sessionButton').addEventListener('click',()=>openPopup($('sessionButton'),
+        `<div class="pop-caption">Sessions</div>${sessions.map(s=>row(String(s.id),s.name,'chat',s.id===currentSession?'✓':'' )).join('')}<div class="pop-separator"></div>${row('new','New session','plus')}`,
+        (choice)=>choice==='new'?createSession():activateSession(Number(choice))));
+      $('newSession').addEventListener('click',createSession);
+      $('modelButton').addEventListener('click',()=>openPopup($('modelButton'),
+        `<div class="pop-caption">Model · preview selector</div>${['GPT-6 (High)','GPT-6 (Medium)','Claude Sonnet'].map(m=>row(m,m,'check',m===$('modelName').textContent?'✓':'')).join('')}`,
+        choice=>{$('modelName').textContent=choice; showToast('Chỉ thay đổi lựa chọn UI; chưa kết nối model.');}));
+      $('modeButton').addEventListener('click',()=>openPopup($('modeButton'),
+        `<div class="pop-caption">Execution mode</div>${['Plan','Build','Ask'].map(m=>row(m,m,'check',m===$('modeName').textContent?'✓':'')).join('')}`,
+        choice=>{$('modeName').textContent=choice;}));
+      $('branchButton').addEventListener('click', gitBranchMenu);
+      document.addEventListener('pointerdown',e=>{ if(!$('popup').hidden && !$('popup').contains(e.target) && !popupSource?.contains(e.target))closePopup(); });
+
+      function createSession() {
+        const id=++sessionCounter; sessions.unshift({id,name:`New session ${id}`,initial:false}); activateSession(id);
+        persistSessions();
+        $('composerInput').focus(); showToast('Đã tạo session mới trong prototype.');
+      }
+      const originalChat=$('conversationInner').innerHTML;
+      const chatBySession=new Map([[1,originalChat]]);
+      const SESSION_STORE_KEY='dsh_ui_sessions_v2';
+      function persistSessions() {
+        if(!pref.restoreSession)return;
+        try {
+          chatBySession.set(currentSession,$('conversationInner').innerHTML);
+          localStorage.setItem(SESSION_STORE_KEY,JSON.stringify({sessions,currentSession,sessionCounter,chat:Object.fromEntries(chatBySession)}));
+        } catch(err) { /* Private mode or unavailable storage */ }
+      }
+      function restoreSessions() {
+        if(!pref.restoreSession)return;
+        try {
+          const state=JSON.parse(localStorage.getItem(SESSION_STORE_KEY)||'null');
+          if(!state || !Array.isArray(state.sessions) || state.sessions.length===0)return;
+          const valid=state.sessions.filter(s=>Number.isInteger(s.id)&&typeof s.name==='string').slice(0,80);
+          if(!valid.length)return;
+          sessions=valid;
+          sessionCounter=Math.max(...valid.map(s=>s.id),Number(state.sessionCounter)||0);
+          currentSession=valid.some(s=>s.id===state.currentSession)?state.currentSession:valid[0].id;
+          chatBySession.clear();
+          for(const [id,chat] of Object.entries(state.chat||{})) {
+            if(/^\d+$/.test(id) && typeof chat==='string' && chat.length<150000)chatBySession.set(Number(id),chat);
+          }
+          const session=sessions.find(s=>s.id===currentSession);
+          $('sessionName').textContent=session.name;
+          $('conversationInner').innerHTML=chatBySession.get(currentSession)||`<div class="session-empty"><div>${icon('chat','lg')}<h2>${esc(session.name)}</h2><p>Start a conversation in this workspace.</p></div></div>`;
+        }catch(err){}
+      }
+      function activateSession(id) {
+        chatBySession.set(currentSession,$('conversationInner').innerHTML);
+        currentSession=id;
+        const s=sessions.find(x=>x.id===id); if(!s)return;
+        $('sessionName').textContent=s.name;
+        $('conversationInner').innerHTML=chatBySession.get(id) || `<div class="session-empty"><div>${icon('chat','lg')}<h2>${esc(s.name)}</h2><p>Start a conversation in this workspace.</p></div></div>`;
+        persistSessions();
+        $('conversation').scrollTop=0; closePopup();
+      }
+      $('composerForm').addEventListener('submit',e=>{
+        e.preventDefault(); const input=$('composerInput'),value=input.value.trim(); if(!value)return;
+        const inner=$('conversationInner');
+        const empty=inner.querySelector('.session-empty'); if(empty)empty.remove();
+        const now=new Date().toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'});
+        const msg=document.createElement('article'); msg.className='message';
+        msg.innerHTML=`<div class="avatar">U</div><div><div class="speaker"><span>You</span><time>${esc(now)}</time></div><p style="white-space:pre-wrap"></p></div>`;
+        msg.querySelector('p').textContent=value; inner.appendChild(msg);
+        const notice=document.createElement('div');notice.className='demo-msg';notice.textContent='Prototype: tin nhắn đã được thêm vào giao diện, chưa gửi tới model hoặc backend DSH.';inner.appendChild(notice);
+        input.value=''; input.style.height='auto'; $('conversation').scrollTop=$('conversation').scrollHeight;
+        const active=sessions.find(s=>s.id===currentSession);
+        if(active?.name.startsWith('New session')) {active.name=value.slice(0,45);$('sessionName').textContent=active.name;}
+        persistSessions();
+      });
+      $('composerInput').addEventListener('keydown',e=>{ if(e.key==='Enter' && !e.shiftKey && !e.isComposing){e.preventDefault();$('composerForm').requestSubmit();} });
+      $('composerInput').addEventListener('input',()=>{const el=$('composerInput');el.style.height='auto';el.style.height=`${Math.min(el.scrollHeight,130)}px`;});
+      $('attachButton').addEventListener('click',()=>showToast('Đính kèm file: UI demo. Chưa truy cập filesystem.'));
+      $('mentionButton').addEventListener('click',()=>{$('composerInput').value+='@';$('composerInput').focus();});
+
+      function toggleExplorer() { $('app').classList.toggle('explorer-hidden'); if(pref.restorePanels)persistPanelState(); }
+      function toggleChanges() { $('app').classList.toggle('changes-hidden'); $('app').classList.toggle('show-changes',!$('app').classList.contains('changes-hidden')); if(pref.restorePanels)persistPanelState(); }
+      function toggleTerminal() { const open=$('terminalPanel').hidden; $('terminalPanel').hidden=!open;$('terminalToggle').classList.toggle('active',open);if(open)$('terminalInput').focus(); }
+      $('toggleChangesTop').addEventListener('click',toggleChanges);
+      $('gitButton').addEventListener('click', openChanges);
+      $('branchName').textContent = gitDemo.branch;
+      $('terminalToggle').addEventListener('click',toggleTerminal);
+      $('closeTerminal').addEventListener('click',toggleTerminal);
+      $('problemsButton').addEventListener('click',()=>showToast('2 Problems (mock): no diagnostics service connected.'));
+      $('syncButton').addEventListener('click', gitSyncMenu);
+      $('terminalForm').addEventListener('submit',e=>{
+        e.preventDefault(); const val=$('terminalInput').value.trim(),out=$('terminalOutput');if(!val)return;
+        const mock={help:'Available demo commands: help, pwd, ls, clear',pwd:`~/projects/${workspace}`,ls:'NhiDong  README.md  package.json  tests',clear:''};
+        out.textContent=val==='clear'?'':`${out.textContent}\n❯ ${val}\n${Object.hasOwn(mock,val)?mock[val]:'Preview terminal: command not executed.'}`;
+        $('terminalInput').value='';out.scrollTop=out.scrollHeight;
+      });
+
+      function getFiles(nodes,prefix='',out=[]) { for(const n of nodes){const path=prefix?`${prefix}/${n.name}`:n.name;if(n.children)getFiles(n.children,path,out);else out.push(path);}return out; }
+      function openSearch() { $('commandLayer').hidden=false;$('commandInput').value='';renderSearch();$('commandInput').focus(); }
+      function closeSearch() { $('commandLayer').hidden=true; }
+      $('searchButton').addEventListener('click',openSearch);
+      $('commandLayer').addEventListener('click',e=>{if(e.target===$('commandLayer'))closeSearch();});
+      function renderSearch() {
+        const q=$('commandInput').value.toLowerCase();
+        const candidates=[...getFiles(data[workspace].files).map(p=>({label:p,type:'file'})),
+          {label:'Toggle Terminal',type:'command'},{label:'Toggle Explorer',type:'command'},
+          {label:'New Session',type:'command'},{label:'Settings',type:'command'},
+          {label:'Appearance',type:'command'},{label:'Keymap',type:'command'},
+          {label:'Extensions',type:'command'},{label:'Skills',type:'command'},
+          {label:'Marketplace',type:'command'}];
+        const found=candidates.filter(x=>x.label.toLowerCase().includes(q)).slice(0,12);
+        $('commandResults').innerHTML=found.map((x,i)=>`<button class="pop-row" data-search-index="${i}">${icon(x.type==='file'?'file':'search','sm')}<span>${esc(x.label)}</span><span class="end">${x.type}</span></button>`).join('')||'<div class="pop-caption">No results</div>';
+        $('commandResults')._results=found;
+      }
+      $('commandInput').addEventListener('input',renderSearch);
+      $('commandResults').addEventListener('click',e=>{
+        const btn=e.target.closest('[data-search-index]');if(!btn)return;
+        const item=$('commandResults')._results[Number(btn.dataset.searchIndex)];closeSearch();
+        if(item.type==='file'){selectedFile=item.label;renderTree();showFilePreview(item.label);}else{
+          if(item.label==='Toggle Terminal')toggleTerminal(); if(item.label==='Toggle Explorer')toggleExplorer();
+          if(item.label==='New Session')createSession();
+          if(['Settings','Appearance','Keymap','Extensions','Skills','Marketplace'].includes(item.label))openSettings(item.label==='Settings'?'general':item.label.toLowerCase());
+        }
+      });
+      $('commandInput').addEventListener('keydown',e=>{if(e.key==='Enter'){$('commandResults').querySelector('button')?.click();}});
+      document.addEventListener('keydown',e=>{
+        if(shortcutRecording) {
+          if(e.key==='Escape') { e.preventDefault();shortcutRecording=null;renderSettings();return; }
+          const chord=chordFromEvent(e);
+          if(chord) { e.preventDefault(); saveShortcut(shortcutRecording,chord); }
+          return;
+        }
+        if(e.key==='Escape') { closePopup();closeSearch();closeSettings(); return; }
+        const chord=chordFromEvent(e); if(!chord)return;
+        const matches=Object.keys(actions).find(id=>getBinding(id)===chord);
+        if(matches) { e.preventDefault(); actions[matches](); }
+      });
+      function enableSplitter(id,side) {
+        const grip=$(id); let start=0, orig=0;
+        grip.addEventListener('pointerdown',e=>{
+          if(innerWidth<950)return;
+          start=e.clientX;orig=parseFloat(getComputedStyle(document.documentElement).getPropertyValue(side==='left'?'--left-w':'--right-w'));
+          document.body.classList.add('dragging-ui');grip.classList.add('dragging');grip.setPointerCapture(e.pointerId);
+        });
+        grip.addEventListener('pointermove',e=>{
+          if(!grip.hasPointerCapture(e.pointerId))return;
+          const delta=e.clientX-start;
+          const max=side==='left'?Math.min(450,innerWidth-700):Math.min(750,innerWidth-620);
+          const size=Math.round(Math.max(side==='left'?195:300,Math.min(max,orig+(side==='left'?delta:-delta))));
+          document.documentElement.style.setProperty(side==='left'?'--left-w':'--right-w',`${size}px`);
+        });
+        for(const ev of ['pointerup','pointercancel'])grip.addEventListener(ev,()=>{document.body.classList.remove('dragging-ui');grip.classList.remove('dragging');});
+      }
+      enableSplitter('leftSplitter','left');enableSplitter('rightSplitter','right');
+      function persistPanelState() {
+        try { localStorage.setItem('dsh_ui_panels_v2',JSON.stringify({explorer:!$('app').classList.contains('explorer-hidden'),changes:!$('app').classList.contains('changes-hidden')})); } catch(err){}
+      }
+      if(pref.restorePanels) {
+        try {const p=JSON.parse(localStorage.getItem('dsh_ui_panels_v2')||'null');if(p){$('app').classList.toggle('explorer-hidden',!p.explorer);$('app').classList.toggle('changes-hidden',!p.changes)}}catch(err){}
+      }
+      restoreSessions();renderTree();renderGit();setChangeTab('diff');
+    })();
+  </script>
+</body>
+</html>

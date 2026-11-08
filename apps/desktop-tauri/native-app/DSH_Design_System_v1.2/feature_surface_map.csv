@@ -1,0 +1,9 @@
+surface,location,spec,historical_host_capability,priority,UX_guardrail
+Application Menu,☰ top left,V2 `openMainMenu()`,commands/list + commands/execute,P0,Separate from palette
+Workspace selector,top left next to ☰,WS-01..07,workspaceFiles/*,P0,Open Folder needs live route
+Session picker,Explorer foot,SES,session/*,P0,No permanent sidebar
+Agent & approval,center,AG/CMP,session/follow + requestId,P0,Allowed-once / Deny only
+Changes,right,CHG/GIT,git/status/diff/stage/...,P0,Diff/Files/Branches
+Terminal,bottom dock,TER,terminal/*,P0,Detach is not kill
+Preferences,one window,PREF/APP/KEY,settings/* + local schema v5,P0,No scattered Settings icons
+Skills/Plugins/Marketplace,Preferences,SKL/EXT/MKT,skills/* pluginManager/* pluginMarket/*,P1,Real trust facts only

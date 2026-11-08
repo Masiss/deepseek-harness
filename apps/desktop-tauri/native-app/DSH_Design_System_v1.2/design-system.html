@@ -1,0 +1,1109 @@
+<!doctype html>
+<html lang="vi" data-theme="dark" data-accent="blue" data-density="standard">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>DSH — Quiet Precision / Design System 1.2</title>
+<style>
+/* Generated semantic tokens from tokens.json */
+html[data-theme="dark"]{--canvas:#0d1721;--chrome:#0d1720;--surface:#101b26;--surfaceDeep:#0c1620;--surfaceRaised:#14212d;--border:#263544;--borderSubtle:#1c2a37;--text:#d8e0e9;--textSecondary:#8b9aac;--textTertiary:#8899aa;--selection:#18324b;--focusRing:#4a99f7;--success:#53d49b;--danger:#f17c80;--warning:#e9b46b;--info:#4a99f7;--successSurface:#153b34;--dangerSurface:#44272c;--warningSurface:#3b3021;--primaryFill:#1968bd;--primaryFillHover:#1d76d3;--onPrimary:#ffffff;--shadow:rgba(0,0,0,.4);color-scheme:dark}
+html[data-theme="light"]{--canvas:#f6f8fb;--chrome:#f4f7fb;--surface:#ffffff;--surfaceDeep:#f8fafc;--surfaceRaised:#edf3f9;--border:#d8e0e9;--borderSubtle:#e6ecf2;--text:#273544;--textSecondary:#5d6b7e;--textTertiary:#607083;--selection:#e1eefb;--focusRing:#176dbd;--success:#19865a;--danger:#be4249;--warning:#91601f;--info:#176dbd;--successSurface:#e0f2e9;--dangerSurface:#fae7e8;--warningSurface:#faf0df;--primaryFill:#176dbd;--primaryFillHover:#105a9f;--onPrimary:#ffffff;--shadow:rgba(35,49,72,.16);color-scheme:light}
+html[data-theme="midnight"]{--canvas:#080e16;--chrome:#090f18;--surface:#0c1420;--surfaceDeep:#090f18;--surfaceRaised:#121f30;--border:#233346;--borderSubtle:#152333;--text:#dbe6f6;--textSecondary:#95a8be;--textTertiary:#8d9fb4;--selection:#172d45;--focusRing:#64abff;--success:#53d49b;--danger:#f17c80;--warning:#e9b46b;--info:#64abff;--successSurface:#102f2b;--dangerSurface:#382127;--warningSurface:#352b1e;--primaryFill:#1968bd;--primaryFillHover:#1d76d3;--onPrimary:#ffffff;--shadow:rgba(0,0,0,.48);color-scheme:dark}
+html[data-theme="dark"][data-accent="blue"]{--accent:#4a99f7;--primaryFill:#1968bd;--focusRing:#4a99f7;--primaryFillHover:#1968bd}
+html[data-theme="dark"][data-accent="teal"]{--accent:#42b7ba;--primaryFill:#0b6e71;--focusRing:#42b7ba;--primaryFillHover:#0b6e71}
+html[data-theme="dark"][data-accent="violet"]{--accent:#a38df5;--primaryFill:#6248b2;--focusRing:#a38df5;--primaryFillHover:#6248b2}
+html[data-theme="light"][data-accent="blue"]{--accent:#176dbd;--primaryFill:#176dbd;--focusRing:#176dbd;--primaryFillHover:#176dbd}
+html[data-theme="light"][data-accent="teal"]{--accent:#137a7d;--primaryFill:#116f71;--focusRing:#137a7d;--primaryFillHover:#116f71}
+html[data-theme="light"][data-accent="violet"]{--accent:#775bd1;--primaryFill:#6248b2;--focusRing:#775bd1;--primaryFillHover:#6248b2}
+html[data-theme="midnight"][data-accent="blue"]{--accent:#64abff;--primaryFill:#1968bd;--focusRing:#64abff;--primaryFillHover:#1968bd}
+html[data-theme="midnight"][data-accent="teal"]{--accent:#57c7ca;--primaryFill:#0b6e71;--focusRing:#57c7ca;--primaryFillHover:#0b6e71}
+html[data-theme="midnight"][data-accent="violet"]{--accent:#b4a3ff;--primaryFill:#6248b2;--focusRing:#b4a3ff;--primaryFillHover:#6248b2}
+:root{--accent:var(--accent-blue);--target-row:27px;--control-h:32px;--list-row:34px;--font-ui:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;--font-mono:JetBrains Mono,ui-monospace,SFMono-Regular,Consolas,monospace}
+html[data-density=compact]{--target-row:23px;--control-h:28px;--list-row:30px}
+html[data-density=comfortable]{--target-row:32px;--control-h:36px;--list-row:40px}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--canvas);color:var(--text);font:13px/1.48 var(--font-ui);-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}button,input,select,textarea{font:inherit}button{cursor:pointer}button:disabled{cursor:not-allowed;opacity:.45}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,a:focus-visible{outline:2px solid var(--focusRing);outline-offset:2px}
+.shell{display:grid;grid-template-columns:226px minmax(0,1fr);min-height:100vh}.side{position:sticky;top:0;height:100vh;overflow:auto;padding:27px 15px 20px;background:var(--surfaceDeep);border-right:1px solid var(--border)}
+.logo{display:flex;align-items:center;gap:11px;padding:4px 9px 30px}.logo-mark{height:34px;width:34px;display:grid;place-items:center;border-radius:10px;background:var(--selection);border:1px solid var(--border);font:bold 14px var(--font-mono);color:var(--accent)}.logo-name{font-weight:680;font-size:14px;letter-spacing:.015em}.logo-version{font:11px var(--font-mono);color:var(--textSecondary);margin-top:4px}
+.side-eyebrow,.eyebrow{font:600 10px/1.4 var(--font-ui);text-transform:uppercase;letter-spacing:.16em;color:var(--textTertiary)}.side-eyebrow{padding:15px 11px 8px}.nav{display:grid;gap:3px}.nav a{display:flex;align-items:center;gap:11px;padding:9px 11px;min-height:36px;border-radius:6px;color:var(--textSecondary);font-size:12.5px}.nav a:hover{color:var(--text);background:var(--surfaceRaised)}.nav a.current{color:var(--text);background:var(--selection);box-shadow:inset 2px 0 var(--accent)}.nav b{margin-left:auto;font:10px var(--font-mono);color:var(--textTertiary);font-weight:400}.nav .glyph{font-size:15px;width:17px;text-align:center;color:var(--accent)}.side-note{font-size:11px;color:var(--textTertiary);line-height:1.6;border-top:1px solid var(--borderSubtle);padding:17px 11px;margin-top:25px}
+.main{min-width:0}.mast{position:sticky;top:0;z-index:15;display:flex;align-items:center;gap:16px;justify-content:space-between;flex-wrap:wrap;min-height:60px;padding:9px clamp(20px,3vw,48px);border-bottom:1px solid var(--border);background:var(--chrome);backdrop-filter:blur(18px)}.crumb{display:flex;gap:9px;align-items:center;font-size:11.5px;color:var(--textSecondary)}.crumb strong{color:var(--text);font-weight:600}.toolbar{display:flex;align-items:center;gap:9px;flex-wrap:wrap}.divider-v{height:19px;width:1px;background:var(--border);margin:0 3px}.mini-label{font:10px var(--font-mono);color:var(--textTertiary)}.seg{display:inline-flex;padding:3px;gap:2px;border:1px solid var(--border);border-radius:7px;background:var(--surfaceDeep)}.seg button{border:0;border-radius:4px;background:transparent;color:var(--textSecondary);padding:5px 9px;font:11px var(--font-ui);min-height:26px}.seg button[aria-pressed=true]{background:var(--selection);color:var(--accent);box-shadow:0 0 0 1px var(--border)}.color-dot{width:15px;height:15px;border-radius:50%;border:1px solid var(--border);display:inline-block;vertical-align:-3px}.color-dot.blue{background:#4a99f7}.color-dot.teal{background:#42b7ba}.color-dot.violet{background:#a38df5}.seg .dot-button{padding:4px 6px;min-width:25px}
+.content{max-width:1760px;margin:auto;padding:0 clamp(20px,3vw,48px) 100px}.intro{padding:60px 0 43px;display:grid;grid-template-columns:minmax(0,1fr) 270px;align-items:end;gap:35px;border-bottom:1px solid var(--border)}.intro .eyebrow{color:var(--accent)}h1{font-size:clamp(34px,4.2vw,58px);line-height:1.04;letter-spacing:-.055em;font-weight:660;margin:14px 0 19px}h1 em{font-style:normal;color:var(--accent)}.lead{font-size:14.5px;line-height:1.8;color:var(--textSecondary);max-width:620px;margin:0}.intro-aside{border-left:1px solid var(--border);padding-left:20px;display:grid;gap:17px}.intro-aside strong{display:block;font:600 20px var(--font-ui)}.intro-aside span{font-size:11.5px;color:var(--textSecondary)}.intro-aside .version{font-family:var(--font-mono);letter-spacing:.06em}
+.section{padding-top:54px;scroll-margin-top:73px}.section-top{display:flex;align-items:end;justify-content:space-between;gap:22px;margin-bottom:24px}.section-num{color:var(--accent);font:11px var(--font-mono);margin-right:10px}.section h2{font-size:22px;letter-spacing:-.035em;line-height:1.2;font-weight:650;margin:0}.section-description{font-size:12.5px;color:var(--textSecondary);max-width:610px;line-height:1.7;margin:8px 0 0}.section-hint{font:11px var(--font-mono);color:var(--textTertiary)}
+.foundations{display:grid;grid-template-columns:1.4fr 1fr;gap:15px}.surface{border:1px solid var(--border);border-radius:10px;background:var(--surface);overflow:hidden}.block-head{border-bottom:1px solid var(--borderSubtle);padding:16px 18px;display:flex;align-items:center;justify-content:space-between;gap:15px}.block-head strong{font-size:12.5px;font-weight:620}.block-head small{font:10px var(--font-mono);color:var(--textTertiary)}.palette{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;padding:20px}.swatch .swatch-color{height:64px;border:1px solid var(--border);border-radius:6px;margin-bottom:8px}.swatch label{display:block;color:var(--text);font-size:11px;font-weight:560}.swatch code{display:block;font:10px var(--font-mono);color:var(--textTertiary);margin-top:3px}.typography{padding:22px 22px 23px}.type-row{display:flex;align-items:baseline;justify-content:space-between;gap:15px;padding:12px 0;border-bottom:1px solid var(--borderSubtle)}.type-row:last-child{border-bottom:0}.type-row small{color:var(--textTertiary);font:10px var(--font-mono)}.type-title{font-size:25px;font-weight:650;letter-spacing:-.04em}.type-body{font-size:14px}.type-code{font:12px var(--font-mono)}.type-meta{font-size:11.5px;color:var(--textSecondary)}
+.preview-frame{border:1px solid var(--border);border-radius:11px;background:var(--surface);overflow:hidden;box-shadow:0 12px 44px var(--shadow)}.specimen-actions{display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0}.specimen-actions .section-hint{font-size:10px}.preview-controls{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}.preview-controls .plain-btn{height:26px;min-height:26px;padding:3px 8px;font-size:10.5px}.preview-controls select.plain-btn{max-width:150px}.plain-btn{border:1px solid var(--border);background:var(--surfaceDeep);color:var(--textSecondary);border-radius:5px;padding:5px 10px;font-size:11px;min-height:27px}.plain-btn:hover{background:var(--surfaceRaised);color:var(--text)}.plain-btn[aria-pressed=true]{background:var(--selection);color:var(--accent);border-color:var(--accent)}
+.app-outer{overflow:auto;background:var(--canvas)}.app-demo{height:515px;min-width:880px;display:flex;flex-direction:column;color:var(--text);font-size:12px}.app-top{height:30px;min-height:30px;display:flex;justify-content:space-between;align-items:center;background:var(--chrome);border-bottom:1px solid var(--border)}.app-top .start,.app-top .end{display:flex;align-items:center;height:100%}.chrome-btn{height:100%;min-width:34px;padding:0 10px;border:0;background:none;color:var(--textSecondary);display:inline-grid;place-items:center}.chrome-btn:hover{color:var(--text);background:var(--surfaceRaised)}.app-top .workspace{padding:0 10px;font-weight:550;border-left:1px solid var(--borderSubtle);font-size:11px}.app-workarea{flex:1;min-height:0;display:flex}.app-explorer{width:205px;flex:0 0 205px;display:flex;flex-direction:column;background:var(--surfaceDeep);border-right:1px solid var(--border)}.tree{flex:1;overflow:auto;padding:9px 6px}.tree-entry{height:var(--target-row);width:100%;display:flex;align-items:center;gap:6px;padding:0 9px;border-radius:4px;color:var(--textSecondary);font:11.3px var(--font-ui);white-space:nowrap;border:0;background:none;text-align:left}.tree-entry:hover{background:var(--surfaceRaised)}.tree-entry.selected{color:var(--text);background:var(--selection);box-shadow:inset 2px 0 var(--accent)}.tree-entry b{color:var(--textTertiary);font-weight:400;flex:0 0 8px}.tree-entry em{color:var(--warning);font-style:normal}.tree-entry .tree-icon{color:var(--accent)}.tree-depth-1{padding-left:23px}.tree-depth-2{padding-left:38px}.tree-depth-3{padding-left:52px}.session-foot{padding:7px;display:flex;gap:5px;border-top:1px solid var(--borderSubtle)}.session-foot button{border:1px solid var(--border);background:var(--surface);border-radius:5px;color:var(--textSecondary);height:29px}.session-plus{width:29px}.session-select{flex:1;padding:0 8px;text-align:left;font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.app-agent{display:flex;flex:1;min-width:0;flex-direction:column;background:var(--canvas)}.agent-tabline{height:34px;min-height:34px;display:flex;align-items:stretch;padding-left:10px;border-bottom:1px solid var(--border)}.agent-tab{border:0;background:var(--surface);border-bottom:2px solid var(--accent);padding:0 15px;font-size:11px;color:var(--text)}.agent-scroll{flex:1;overflow:auto;padding:18px 24px 15px}.agent-inner{max-width:660px;margin:auto}.task-title{font-size:15px;font-weight:650;margin:0 0 5px;letter-spacing:-.012em}.task-meta{font-size:10.5px;color:var(--textTertiary);margin-bottom:17px;padding-bottom:15px;border-bottom:1px solid var(--borderSubtle)}.msg{display:grid;grid-template-columns:25px 1fr;gap:11px;margin-bottom:17px}.avatar{width:25px;height:25px;border-radius:50%;background:#50627b;display:grid;place-items:center;font-size:10px;color:white;font-weight:650}.avatar.ai{background:#91c4f2;color:#142538}.msg .head{display:flex;justify-content:space-between;align-items:center;gap:8px;font-weight:620;font-size:11.5px}.msg .head time{font:10px var(--font-mono);color:var(--textTertiary);font-weight:400}.msg p{font-size:11.6px;line-height:1.7;margin:7px 0 0}.tool-box{border-top:1px solid var(--border);padding:10px 0 0 36px}.tool-toggle{border:0;background:none;color:var(--text);font-size:11px;padding:3px 0 8px;text-align:left}.tool-list{border-left:1px solid var(--border);padding-left:16px;margin-left:4px}.tool-row{display:grid;grid-template-columns:14px 47px minmax(0,1fr) auto;gap:6px;align-items:center;padding:5px 0;color:var(--textSecondary);font-size:10.4px}.tool-row .result{font-weight:700;color:var(--success)}.tool-row .name{color:var(--text)}.tool-row .detail{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tool-row .duration{color:var(--textTertiary);font:9px var(--font-mono)}.run-notice{display:none;background:var(--selection);border:1px solid var(--border);border-radius:6px;margin:8px 0 13px 36px;padding:8px 11px;font-size:11px}.run-notice strong{display:block}.run-notice span{color:var(--textSecondary);font-size:10px}.run-notice.error{background:var(--dangerSurface)}.run-notice.approval{background:var(--warningSurface)}.run-notice button{margin-top:7px}.app-composer-wrap{padding:0 14px 12px}.app-composer{border:1px solid var(--border);background:var(--surfaceRaised);border-radius:7px;padding:9px 10px 7px;max-width:720px;margin:auto}.app-composer textarea{width:100%;height:36px;min-height:36px;max-height:68px;resize:vertical;color:var(--text);background:none;border:0;outline:0;font:11px/1.55 var(--font-ui)}.app-composer textarea::placeholder{color:var(--textSecondary)}.composer-meta{display:flex;justify-content:space-between;align-items:center;gap:7px}.composer-left,.composer-right{display:flex;align-items:center;gap:5px}.mini-icon{border:0;background:transparent;color:var(--textSecondary);font-size:13px;padding:3px;min-width:22px;height:23px;border-radius:4px}.mini-icon:hover{background:var(--selection);color:var(--text)}.mini-select{font-size:10px;padding:4px 6px;border:1px solid var(--border);color:var(--textSecondary);border-radius:4px;background:var(--surfaceDeep)}.mini-send{border:0;border-radius:4px;background:var(--primaryFill);color:var(--onPrimary);height:24px;min-width:25px}
+.app-changes{width:310px;flex:0 0 310px;display:flex;flex-direction:column;background:var(--surfaceDeep);border-left:1px solid var(--border)}.changes-head{height:40px;min-height:40px;display:flex;align-items:center;justify-content:space-between;padding:0 12px;gap:10px}.changes-head strong{font-size:12px}.changes-head span{font-size:10px;color:var(--textTertiary);margin-left:7px}.right-tabs{height:31px;display:flex;gap:15px;border-bottom:1px solid var(--border);padding-left:11px}.right-tabs button{border:0;background:none;color:var(--textSecondary);border-bottom:2px solid transparent;padding:0 4px;font-size:11px}.right-tabs button[aria-selected=true]{color:var(--accent);border-color:var(--accent)}.diff-filehead{height:31px;display:flex;align-items:center;justify-content:space-between;padding:0 11px;font:10px var(--font-mono);border-bottom:1px solid var(--borderSubtle);color:var(--text)}.diff-filehead em{font-style:normal;color:var(--success)}.diff-filehead b{color:var(--danger);font-weight:400}.diff-viewport{overflow:auto;flex:1;padding-top:7px}.code-row{min-width:320px;display:grid;grid-template-columns:30px 16px 1fr;white-space:pre;font:10px/1.85 var(--font-mono);color:var(--text)}.code-row .ln{text-align:right;padding-right:6px;color:var(--textTertiary)}.code-row .mark{text-align:center;color:var(--textSecondary)}.code-row.add{background:var(--successSurface)}.code-row.del{background:var(--dangerSurface)}.code-row.add .mark{color:var(--success)}.code-row.del .mark{color:var(--danger)}.code-row.hunk{background:var(--selection);color:var(--textSecondary)}.diff-actions{display:flex;gap:6px;padding:8px;border-top:1px solid var(--border)}.button-primary{border:1px solid transparent;border-radius:5px;padding:7px 11px;background:var(--primaryFill);color:var(--onPrimary);font-size:11.5px;font-weight:570}.button-primary:hover{background:var(--primaryFillHover)}.button-secondary{border:1px solid var(--border);border-radius:5px;padding:7px 11px;background:var(--surfaceDeep);color:var(--text);font-size:11.5px}.button-secondary:hover{background:var(--surfaceRaised)}.button-danger{border:1px solid var(--danger);border-radius:5px;padding:7px 11px;background:var(--dangerSurface);color:var(--text);font-size:11.5px}.filetab{padding:11px}.filetab .item{display:flex;justify-content:space-between;align-items:center;padding:10px 5px;font:10px var(--font-mono);border-bottom:1px solid var(--borderSubtle)}.filetab .file-status{color:var(--warning)}
+.app-status{display:flex;justify-content:space-between;align-items:center;height:26px;min-height:26px;background:var(--chrome);border-top:1px solid var(--border);font:10px var(--font-mono);color:var(--textSecondary);padding:0 10px}.app-status .left,.app-status .right{display:flex;align-items:center;gap:14px}.live-dot{height:6px;width:6px;border-radius:50%;display:inline-block;background:var(--success)}.app-demo.hide-left .app-explorer,.app-demo.hide-right .app-changes{display:none}.app-demo.hide-left .app-agent,.app-demo.hide-right .app-agent{flex:1}
+.components-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px}.component-body{padding:20px;min-height:195px}.component-body .hint{font-size:11.5px;color:var(--textSecondary);line-height:1.65;margin:13px 0 0}.button-row{display:flex;gap:7px;flex-wrap:wrap;align-items:center}.component-body .field-label{display:block;color:var(--textSecondary);font-size:11px;margin-bottom:6px}.field{border:1px solid var(--border);background:var(--surfaceDeep);border-radius:5px;padding:8px 10px;color:var(--text);width:100%;min-height:var(--control-h)}.field::placeholder{color:var(--textTertiary)}.field.error{border-color:var(--danger)}.field-error{font-size:10.5px;color:var(--danger);margin-top:7px}.component-stack{display:grid;gap:10px}.badge{display:inline-block;border:1px solid var(--border);color:var(--textSecondary);padding:3px 7px;border-radius:4px;font-size:10px}.badge.success{border-color:var(--success);color:var(--success)}.badge.warn{border-color:var(--warning);color:var(--warning)}.badge.danger{border-color:var(--danger);color:var(--danger)}.badge-row{display:flex;flex-wrap:wrap;gap:7px}.state-line{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--borderSubtle)}.state-line:last-child{border-bottom:0}.state-line small{font-size:11px;color:var(--textSecondary)}.switch{display:inline-flex;align-items:center;width:35px;height:20px;border:0;border-radius:15px;background:var(--border);padding:2px}.switch i{width:16px;height:16px;border-radius:50%;background:var(--text);transition:transform .15s}.switch[aria-checked=true]{background:var(--primaryFill)}.switch[aria-checked=true] i{transform:translateX(15px);background:var(--onPrimary)}.notice{padding:11px 13px;border:1px solid var(--border);border-radius:6px;background:var(--surfaceDeep);display:flex;gap:10px;font-size:11px}.notice-icon{color:var(--warning)}.notice strong{display:block;font-weight:610;margin-bottom:3px}.notice span{color:var(--textSecondary)}.skeleton{display:grid;gap:9px}.skeleton span{display:block;height:9px;border-radius:4px;background:var(--surfaceRaised)}.skeleton span:nth-child(2){width:84%}.skeleton span:nth-child(3){width:60%}.kbd{display:inline-block;border:1px solid var(--border);border-bottom-width:2px;background:var(--surfaceDeep);border-radius:4px;padding:3px 6px;font:10px var(--font-mono);color:var(--textSecondary)}
+.patterns{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:15px}.pattern{padding:19px 20px;min-height:205px}.pattern .step{display:flex;align-items:center;gap:9px;padding:9px 0;color:var(--textSecondary);font-size:11px;border-bottom:1px solid var(--borderSubtle)}.pattern .step:last-child{border-bottom:0}.pattern .index{display:grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--surfaceRaised);color:var(--text);font:10px var(--font-mono)}.pattern strong{font-size:12.5px}.checklist{border:1px solid var(--border);border-radius:9px;padding:20px;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:20px;background:var(--surface)}.checklist .metric{border-left:2px solid var(--accent);padding-left:12px}.checklist b{font:620 17px var(--font-ui);display:block}.checklist span{display:block;color:var(--textSecondary);font-size:11px;line-height:1.6;margin-top:7px}.footer{border-top:1px solid var(--border);padding-top:22px;margin-top:40px;color:var(--textTertiary);font-size:11px;display:flex;justify-content:space-between;gap:12px}
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.62);display:none;place-items:center;z-index:40;padding:16px}.overlay.open{display:grid}.modal{width:min(450px,100%);background:var(--surface);border:1px solid var(--border);box-shadow:0 20px 70px var(--shadow);border-radius:11px;padding:22px}.modal .modal-label{color:var(--accent);font:10px var(--font-mono);letter-spacing:.09em;text-transform:uppercase}.modal h3{font-size:19px;letter-spacing:-.025em;margin:10px 0}.modal p{color:var(--textSecondary);font-size:12.5px;line-height:1.7}.modal code{font:11px var(--font-mono);color:var(--text);background:var(--surfaceDeep);border:1px solid var(--border);padding:4px 6px;border-radius:4px}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:24px}.toast{position:fixed;right:25px;bottom:22px;z-index:55;background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:7px;box-shadow:0 14px 48px var(--shadow);padding:12px 14px;font-size:11.5px;max-width:360px;display:none}.toast.show{display:block}.toast b{display:block;margin-bottom:5px}.toast span{color:var(--textSecondary)}
+.palette-modal{width:min(540px,100%);background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden}.palette-modal .search{width:100%;background:var(--surfaceDeep);border:0;border-bottom:1px solid var(--border);height:49px;padding:0 18px;color:var(--text);font-size:13px}.palette-result{display:flex;justify-content:space-between;align-items:center;padding:12px 18px;border-bottom:1px solid var(--borderSubtle);font-size:12px}.palette-result small{color:var(--textTertiary)}
+@media(max-width:1160px){.components-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.foundations{grid-template-columns:1fr}.intro{grid-template-columns:1fr}.intro-aside{display:flex;border-left:0;border-top:1px solid var(--border);padding:17px 0 0;gap:35px}}
+@media(max-width:940px){.shell{grid-template-columns:1fr}.side{display:none}.content{padding:0 19px 65px}.mast{padding:10px 18px}.patterns{grid-template-columns:1fr}.checklist{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:650px){.specimen-actions{align-items:flex-start}.preview-controls{justify-content:flex-start}.intro{padding-top:38px}.components-grid{grid-template-columns:1fr}.palette{grid-template-columns:repeat(2,1fr)}.section-top{align-items:start;flex-direction:column}.toolbar .mini-label,.toolbar .divider-v{display:none}.mast{justify-content:center}.checklist{grid-template-columns:1fr}.intro-aside{flex-wrap:wrap}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*::before,*::after{animation-duration:.01ms!important;transition-duration:0ms!important}}
+
+/* v1.2: the approved DSH V2 is the live visual source, not a re-created generic shell. */
+.reference-preview{padding:0!important;overflow:hidden!important;min-width:0;border:1px solid var(--border);border-radius:5px;background:var(--canvas);height:690px}
+.reference-preview iframe{display:block;border:0;width:100%;height:100%;background:#0d1721}
+.specimen-reference{color:var(--textTertiary);font:10px/1.4 var(--font-mono);letter-spacing:.03em;white-space:nowrap}
+.reference-footnote{display:flex;flex-wrap:wrap;justify-content:space-between;gap:9px;padding-top:9px;color:var(--textTertiary);font:10.5px/1.45 var(--font-mono)}
+@media(max-width:950px){.reference-preview{height:690px}}
+</style>
+</head>
+<body>
+<div class="shell">
+<aside class="side">
+  <div class="logo"><div class="logo-mark">D/</div><div><div class="logo-name">DSH Design</div><div class="logo-version">SYSTEM / v1.2</div></div></div>
+  <div class="side-eyebrow">Foundation</div>
+  <nav class="nav" aria-label="Design system navigation">
+    <a href="#overview" class="current"><span class="glyph">◈</span> Overview <b>01</b></a>
+    <a href="#foundations"><span class="glyph">◫</span> Foundations <b>02</b></a>
+    <a href="#shell"><span class="glyph">▣</span> App shell <b>03</b></a>
+    <a href="#components"><span class="glyph">◧</span> Components <b>04</b></a>
+    <a href="#patterns"><span class="glyph">◎</span> UX patterns <b>05</b></a>
+    <a href="#quality"><span class="glyph">◇</span> Quality gates <b>06</b></a>
+  </nav>
+  <div class="side-note"><div class="eyebrow">SOURCE OF TRUTH</div><p>Đây là HTML reference, không phải GPUI runtime. Phần shell chạy nguyên prototype V2.</p><p>Các mục menu, picker và navigation được giữ nguyên từ bản V2. Chức năng thật phải kiểm tra trong repo.</p></div>
+</aside>
+<main class="main" id="overview">
+<header class="mast"><div class="crumb"><strong>DSH / UI</strong><span>›</span> Quiet Precision <span>›</span> <strong>1.2</strong></div><div class="toolbar">
+  <span class="mini-label">Theme</span><div class="seg" role="group" aria-label="Theme">
+    <button type="button" data-theme-btn="dark" aria-pressed="true">Dark</button><button type="button" data-theme-btn="midnight" aria-pressed="false">Midnight</button><button type="button" data-theme-btn="light" aria-pressed="false">Light</button>
+  </div><span class="divider-v"></span><span class="mini-label">Accent</span><div class="seg" role="group" aria-label="Accent">
+    <button class="dot-button" type="button" data-accent-btn="blue" aria-label="Blue accent" title="Blue" aria-pressed="true"><span class="color-dot blue"></span></button><button class="dot-button" type="button" data-accent-btn="teal" aria-label="Teal accent" title="Teal" aria-pressed="false"><span class="color-dot teal"></span></button><button class="dot-button" type="button" data-accent-btn="violet" aria-label="Violet accent" title="Violet" aria-pressed="false"><span class="color-dot violet"></span></button>
+  </div><span class="divider-v"></span><span class="mini-label">Density</span><div class="seg" role="group" aria-label="Density">
+    <button type="button" data-density-btn="compact" aria-pressed="false">C</button><button type="button" data-density-btn="standard" aria-pressed="true">S</button><button type="button" data-density-btn="comfortable" aria-pressed="false">L</button>
+  </div>
+</div></header>
+<div class="content">
+<section class="intro"><div><div class="eyebrow">Native agent desktop · Rust / GPUI · 2026</div><h1>Quiet by default.<br><em>Precise by design.</em></h1><p class="lead">DSH là coding agent desktop, không phải IDE thu nhỏ. Shell V2 đã duyệt là chuẩn thị giác; mọi bổ sung đều phải bám capability Host và ưu tiên luồng Agent → Tool → Review → Terminal/Git.</p></div><div class="intro-aside"><div><strong>03</strong><span>Theme modes</span></div><div><strong>03</strong><span>Density tiers</span></div><div><strong>01</strong><span>Clear interaction language</span></div><div><strong class="version">v1.2</strong><span>Implementation reference</span></div></div></section>
+<section class="section" id="foundations"><div class="section-top"><div><h2><span class="section-num">01 /</span> Foundations</h2><p class="section-description">Semantic colors, typography và density dùng để định nghĩa component mới. Đây là style playground; theme của DSH V2 được chỉnh trong Preferences của chính UI V2.</p></div><div class="section-hint">TOKENS.JSON → SEMANTIC ROLES</div></div>
+<div class="foundations"><div class="surface"><div class="block-head"><strong>Color roles</strong><small>Brand as accent · State as meaning</small></div><div class="palette">
+<div class="swatch"><div class="swatch-color" style="background:var(--canvas)"></div><label>Canvas</label><code data-token-color="canvas"></code></div>
+<div class="swatch"><div class="swatch-color" style="background:var(--surfaceDeep)"></div><label>Panel / deep</label><code data-token-color="surfaceDeep"></code></div>
+<div class="swatch"><div class="swatch-color" style="background:var(--surfaceRaised)"></div><label>Raised</label><code data-token-color="surfaceRaised"></code></div>
+<div class="swatch"><div class="swatch-color" style="background:var(--accent)"></div><label>Accent</label><code data-token-color="accent"></code></div>
+<div class="swatch"><div class="swatch-color" style="background:var(--border)"></div><label>Border</label><code data-token-color="border"></code></div>
+<div class="swatch"><div class="swatch-color" style="background:var(--text)"></div><label>Text</label><code data-token-color="text"></code></div>
+<div class="swatch"><div class="swatch-color" style="background:var(--success)"></div><label>Success</label><code data-token-color="success"></code></div>
+<div class="swatch"><div class="swatch-color" style="background:var(--danger)"></div><label>Danger</label><code data-token-color="danger"></code></div>
+</div></div><div class="surface"><div class="block-head"><strong>Type scale</strong><small>Inter / system + JetBrains Mono</small></div><div class="typography"><div class="type-row"><span class="type-title">Focus on clarity.</span><small>22 / Title</small></div><div class="type-row"><span class="type-body">Agent output should be easy to read.</span><small>14 / Reading</small></div><div class="type-row"><span class="type-code">cargo check --workspace</span><small>12 / Mono</small></div><div class="type-row"><span class="type-meta">2 files modified · 14:26</span><small>11.5 / Meta</small></div></div></div></div></section>
+<section class="section" id="shell"><div class="section-top"><div><h2><span class="section-num">02 /</span> The DSH shell</h2><p class="section-description">Reference V2 gốc được nhúng trực tiếp bên dưới. ☰ mở Application Menu (không phải Command Palette); workspace và session có picker riêng. Bấm trực tiếp vào UI để thử.</p></div><div class="specimen-reference">APPROVED V2 · DIRECT INTERACTION</div></div>
+<div class="preview-frame reference-preview" role="group" aria-label="Approved DSH V2 interactive app reference"><iframe id="approvedV2" title="DSH V2 approved interactive UI" srcdoc="&lt;!doctype html&gt;
+&lt;html lang=&quot;vi&quot;&gt;
+&lt;head&gt;
+  &lt;meta charset=&quot;utf-8&quot; /&gt;
+  &lt;meta name=&quot;viewport&quot; content=&quot;width=device-width, initial-scale=1&quot; /&gt;
+  &lt;meta name=&quot;color-scheme&quot; content=&quot;dark light&quot; /&gt;
+  &lt;title&gt;DSH — Interactive UI prototype v2&lt;/title&gt;
+  &lt;style&gt;
+    :root {
+      --bg: #0d1721;
+      --top: #0d1720;
+      --panel: #101b26;
+      --panel-deep: #0c1620;
+      --panel-soft: #14212d;
+      --border: #263544;
+      --border-faint: #1c2a37;
+      --text: #d8e0e9;
+      --muted: #8b9aac;
+      --faint: #65788a;
+      --blue: #4a99f7;
+      --blue-wash: #18324b;
+      --accent-rgb: 74,153,247;
+      --scale: 1;
+      --green: #53d49b;
+      --red: #f17c80;
+      --orange: #e9b46b;
+      --green-wash: #153b34;
+      --red-wash: #44272c;
+      --shadow: 0 18px 52px rgba(0, 0, 0, .4);
+      --top-h: 30px;
+      --bottom-h: 26px;
+      --left-w: 300px;
+      --right-w: 565px;
+      --tree-row: 27px;
+      --ui: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, &#x27;Segoe UI&#x27;, sans-serif;
+      --mono: &#x27;JetBrains Mono&#x27;, &#x27;Cascadia Code&#x27;, &#x27;SFMono-Regular&#x27;, Consolas, monospace;
+    }
+    :root[data-theme=&quot;light&quot;] {
+      color-scheme: light;
+      --bg: #f6f8fb; --top: #f4f7fb; --panel: #ffffff; --panel-deep: #f8fafc;
+      --panel-soft: #edf3f9; --border: #d8e0e9; --border-faint: #e6ecf2;
+      --text: #273544; --muted: #667487; --faint: #8894a3;
+      --blue: #257fd3; --blue-wash: #e1eefb; --green: #19865a; --red: #be4249;
+      --orange: #ad7a32; --green-wash: #e0f2e9; --red-wash: #fae7e8;
+      --shadow: 0 18px 52px rgba(35, 49, 72, .16);
+    }
+    :root[data-theme=&quot;midnight&quot;] {
+      --bg: #080e16; --top: #090f18; --panel: #0c1420; --panel-deep: #090f18;
+      --panel-soft: #121f30; --border: #233346; --border-faint: #152333;
+      --text: #dbe6f6; --muted: #8195b0; --faint: #5a718b;
+      --green-wash: #102f2b; --red-wash: #382127;
+    }
+    :root[data-theme=&quot;light&quot;] .pop, :root[data-theme=&quot;light&quot;] .prefs-window { color: var(--text); }
+    :root[data-accent=&quot;teal&quot;] { --blue: #42b7ba; --blue-wash: #13373b; --accent-rgb: 66,183,186; }
+    :root[data-accent=&quot;violet&quot;] { --blue: #a38df5; --blue-wash: #2a2450; --accent-rgb: 163,141,245; }
+    :root[data-theme=&quot;light&quot;][data-accent=&quot;teal&quot;] { --blue: #168b8e; --blue-wash: #e1f4f3; }
+    :root[data-theme=&quot;light&quot;][data-accent=&quot;violet&quot;] { --blue: #775bd1; --blue-wash: #eeebfc; }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body { overflow: hidden; font: calc(13px * var(--scale))/1.48 var(--ui); background: var(--bg); color: var(--text); -webkit-font-smoothing: antialiased; }
+    button, textarea, input { font: inherit; }
+    button { color: inherit; cursor: pointer; border: 0; background: none; }
+    button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
+    .icon { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; vertical-align: -3px; flex: 0 0 auto; }
+    .icon.sm { width: 13px; height: 13px; }
+    .icon.md { width: 17px; height: 17px; }
+    .icon.lg { width: 19px; height: 19px; }
+    .muted { color: var(--muted); }
+    .faint { color: var(--faint); }
+    .app { display: flex; flex-direction: column; height: 100dvh; min-height: 500px; min-width: 750px; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; height: var(--top-h); min-height: var(--top-h); border-bottom: 1px solid var(--border); background: var(--top); }
+    .top-left, .top-right { display: flex; align-items: center; height: 100%; }
+    .top-left &gt; * + * { border-left: 1px solid var(--border-faint); }
+    .top-button { height: 100%; min-width: 35px; padding: 0 10px; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); }
+    .top-button:hover, .workspace-button:hover { color: var(--text); background: var(--panel-soft); }
+    .workspace-button { height: 100%; display: inline-flex; gap: 9px; padding: 0 12px; align-items: center; font-size: 12.5px; font-weight: 560; min-width: 122px; }
+    .workspace-button .icon { color: var(--muted); }
+    .top-right { gap: 2px; padding-right: 4px; }
+    .workarea { display: flex; flex: 1; min-height: 0; min-width: 0; position: relative; }
+    .explorer { width: var(--left-w); flex: 0 0 var(--left-w); min-width: 0; background: var(--panel-deep); display: flex; flex-direction: column; border-right: 1px solid var(--border); position: relative; }
+    .tree-scroll { flex: 1; overflow: auto; padding: 7px 5px 4px 8px; scrollbar-width: thin; scrollbar-color: #354656 transparent; }
+    .tree-row { width: 100%; height: var(--tree-row); display: flex; align-items: center; padding-right: 8px; gap: 6px; text-align: left; color: #becbd9; border-radius: 3px; white-space: nowrap; font-size: 12.6px; }
+    .tree-row .chevron { width: 13px; height: 13px; color: #8696a8; transition: transform .12s ease; }
+    .tree-row .chevron.open { transform: rotate(90deg); }
+    .tree-row .chevron-placeholder { flex: 0 0 13px; }
+    .tree-row .name { overflow: hidden; text-overflow: ellipsis; }
+    .tree-row:hover { background: rgba(108, 148, 187, .1); }
+    .tree-row.selected { background: var(--blue-wash); color: #dceafa; box-shadow: inset 2px 0 var(--blue); }
+    .tree-row.selected .file-icon { color: var(--blue); }
+    .file-icon { color: #8fa8c3; }
+    .file-icon.js { color: #c7a953; }
+    .file-icon.ts { color: #58a4e7; }
+    .file-icon.md { color: #acc7de; }
+    .file-icon.py { color: #9ecb75; }
+    .file-icon.json { color: #e1b36f; }
+    .file-icon.html { color: #db9474; }
+    .tree-ghost { width: 100%; height: 1px; }
+    .sidebar-foot { border-top: 1px solid var(--border-faint); padding: 7px 9px; display: flex; gap: 6px; align-items: center; }
+    .session-name { min-width: 0; flex: 1; text-align: left; height: 30px; display: flex; align-items: center; gap: 7px; padding: 0 9px; border: 1px solid var(--border); border-radius: 5px; color: var(--muted); font-size: 12px; }
+    .session-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .session-name:hover, .small-button:hover { background: var(--panel-soft); color: var(--text); }
+    .small-button { height: 30px; width: 30px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 5px; color: var(--muted); }
+    .agent-pane { flex: 1 1 auto; min-width: 320px; background: var(--bg); display: flex; flex-direction: column; position: relative; }
+    .buffer-line { height: 34px; flex: 0 0 34px; display: flex; align-items: stretch; padding-left: 10px; border-bottom: 1px solid var(--border); }
+    .buffer-tab { display: inline-flex; align-items: center; gap: 7px; padding: 0 13px; height: 100%; position: relative; font-size: 12.5px; color: var(--text); background: rgba(124, 163, 202, .045); }
+    .buffer-tab.active::after { content: &#x27;&#x27;; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--blue); }
+    .conversation { overflow: auto; flex: 1; padding: 21px clamp(20px, 2.25vw, 36px) 24px; scrollbar-width: thin; scrollbar-color: #314454 transparent; }
+    .conversation-inner { max-width: 790px; margin: 0 auto; }
+    .task-heading { padding-bottom: 14px; margin-bottom: 19px; border-bottom: 1px solid var(--border-faint); }
+    .task-heading h1 { margin: 0 0 5px; font-size: 16px; line-height: 1.3; letter-spacing: -.012em; font-weight: 620; }
+    .task-heading .meta { font-size: 11.5px; color: var(--muted); }
+    .message { display: grid; grid-template-columns: 31px minmax(0, 1fr); gap: 13px; margin-bottom: 23px; }
+    .avatar { width: 29px; height: 29px; border-radius: 50%; background: linear-gradient(135deg, #626f89, #3d506a); color: #fff; display: grid; place-items: center; font-weight: 650; font-size: 12px; }
+    .avatar.agent { color: #172b3c; background: linear-gradient(135deg, #b5dfff, #81b9ef); }
+    .speaker { display: flex; align-items: baseline; justify-content: space-between; font-size: 12.5px; font-weight: 620; margin-bottom: 8px; }
+    .speaker time { font-size: 11px; font-weight: 400; color: var(--faint); }
+    .message p { margin: 0 0 13px; font-size: 12.6px; line-height: 1.68; color: var(--text); }
+    .message h2 { font-size: 12.6px; line-height: 1.2; margin: 16px 0 7px; font-weight: 650; }
+    .message ul, .message ol { margin: 0 0 12px; padding-left: 19px; font-size: 12.6px; line-height: 1.65; }
+    .message li { padding-left: 2px; margin: 1px 0; }
+    .message code { font: 11.8px/1.45 var(--mono); color: #bdd3e7; }
+    .activity { margin: 22px 0 0 44px; padding-top: 10px; border-top: 1px solid var(--border); }
+    .activity-toggle { display: flex; align-items: center; width: 100%; padding: 4px 0 8px; gap: 9px; text-align: left; font-size: 12.5px; }
+    .activity-toggle:hover { color: var(--blue); }
+    .activity-toggle .arrow { transition: transform .14s; }
+    .activity.collapsed .arrow { transform: rotate(-90deg); }
+    .activity.collapsed .activity-list { display: none; }
+    .activity-list { position: relative; margin-left: 5px; padding: 0 0 0 20px; border-left: 1px solid var(--border); }
+    .activity-row { display: grid; grid-template-columns: 17px 47px minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 5px 0 5px; font-size: 11.6px; }
+    .activity-row .ok { color: var(--green); }
+    .activity-row .running { color: var(--blue); }
+    .activity-row .verb { color: #d5e0e9; }
+    .activity-row .detail { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .activity-row .duration { color: var(--faint); font-variant-numeric: tabular-nums; }
+    .activity-row .icon { width: 14px; height: 14px; }
+    .composer-shell { padding: 0 18px 13px; flex: 0 0 auto; }
+    .composer { border: 1px solid #38546e; background: var(--panel-soft); border-radius: 7px; padding: 7px 8px 7px 12px; box-shadow: 0 0 0 1px rgba(26, 89, 152, .05); max-width: 826px; margin: auto; }
+    .composer textarea { width: 100%; min-height: 25px; max-height: 130px; resize: none; display: block; border: 0; padding: 3px 3px 0; background: transparent; color: var(--text); font: 12.5px/1.55 var(--ui); outline: 0; scrollbar-width: thin; }
+    .composer textarea::placeholder { color: #92a4b6; }
+    .composer-bottom { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 26px; }
+    .composer-tools, .composer-right { display: flex; gap: 4px; align-items: center; }
+    .tool-button { width: 27px; height: 27px; display: grid; place-items: center; color: var(--muted); border-radius: 4px; }
+    .tool-button:hover { background: rgba(129, 167, 206, .12); color: var(--text); }
+    .selector { height: 27px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 5px; padding: 0 9px; color: #d0deea; font-size: 11.7px; white-space: nowrap; }
+    .selector:hover { border-color: #4b647d; background: rgba(118, 148, 180, .07); }
+    .send-button { display: grid; place-items: center; height: 28px; width: 30px; border-radius: 5px; background: #2b88f4; color: white; }
+    .send-button:hover { background: #50a2ff; }
+    .send-button:disabled { opacity: .55; cursor: default; }
+    .changes-pane { width: var(--right-w); flex: 0 0 var(--right-w); min-width: 0; display: flex; flex-direction: column; background: var(--panel-deep); border-left: 1px solid var(--border); position: relative; }
+    .changes-head { height: 43px; min-height: 43px; padding: 0 17px; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .changes-title { display: flex; align-items: baseline; gap: 13px; min-width: 0; }
+    .changes-title strong { font-weight: 620; font-size: 14px; }
+    .changes-title span { color: var(--muted); font-size: 11.7px; }
+    .outlined-button { border: 1px solid var(--border); border-radius: 5px; padding: 5px 10px; font-size: 11px; color: #cfdae5; white-space: nowrap; }
+    .outlined-button:hover { border-color: #4c6580; background: var(--panel-soft); }
+    .right-tabs { display: flex; gap: 3px; height: 33px; min-height: 33px; padding-left: 10px; border-bottom: 1px solid var(--border); }
+    .right-tab { min-width: 57px; padding: 0 13px; font-size: 12px; color: var(--muted); position: relative; }
+    .right-tab:hover { color: var(--text); }
+    .right-tab.active { color: #8ec1fc; }
+    .right-tab.active::after { content: &#x27;&#x27;; height: 2px; background: var(--blue); bottom: -1px; left: 2px; right: 2px; position: absolute; }
+    .diff-content, .files-content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .files-content[hidden], .diff-content[hidden] { display: none; }
+    .diff-filebar { height: 33px; min-height: 33px; padding: 0 15px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border-faint); gap: 12px; }
+    .filename { display: inline-flex; gap: 7px; align-items: center; overflow: hidden; min-width: 0; font: 11.8px/1.4 var(--mono); color: #cfdae5; }
+    .filename span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .diff-stats { display: flex; gap: 11px; flex: 0 0 auto; font: 11.2px var(--mono); }
+    .added { color: var(--green); }
+    .removed { color: var(--red); }
+    .diff-scroll { flex: 1; overflow: auto; scrollbar-width: thin; scrollbar-color: #34495c transparent; }
+    .diff-code { min-width: max-content; font: 11px/1.72 var(--mono); font-variant-ligatures: none; tab-size: 2; }
+    .diff-line { min-height: 19px; display: grid; grid-template-columns: 36px 18px minmax(420px, 1fr); align-items: stretch; white-space: pre; }
+    .diff-line .line-no { text-align: right; padding-right: 8px; color: #6f8498; user-select: none; }
+    .diff-line .mark { text-align: center; color: #70859a; user-select: none; }
+    .diff-line .code-text { padding: 0 10px; white-space: pre; }
+    .diff-line.plus { background: var(--green-wash); }
+    .diff-line.minus { background: var(--red-wash); }
+    .diff-line.plus .mark { color: #56d99d; }
+    .diff-line.minus .mark { color: #f08082; }
+    .diff-line.hunk { background: #192b3d; color: #7992a9; font-size: 10px; }
+    .diff-line.hunk .code-text { color: #8499ad; }
+    .syntax-comment { color: #718da0; }
+    .syntax-key { color: #a5c5f4; }
+    .syntax-str { color: #e8a275; }
+    .syntax-fn { color: #80c7d4; }
+    .diff-bottom { padding: 8px 12px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 7px; }
+    .primary-button { background: #2786ef; color: white; font-size: 11.4px; border-radius: 5px; padding: 7px 12px; }
+    .primary-button:hover { background: #48a2ff; }
+    .subtle-button { padding: 7px 11px; border: 1px solid var(--border); border-radius: 5px; color: var(--muted); font-size: 11.3px; }
+    .subtle-button:hover { color: var(--text); background: var(--panel-soft); }
+    .files-list { overflow: auto; padding: 10px; }
+    .file-item { width: 100%; padding: 9px 10px; display: flex; align-items: center; gap: 10px; text-align: left; border-radius: 5px; font: 11.7px var(--mono); }
+    .file-item:hover, .file-item.active { background: var(--blue-wash); }
+    .file-item .file-item-stat { margin-left: auto; color: var(--green); }
+    .file-preview { border-top: 1px solid var(--border); padding: 14px 17px; font: 11.7px/1.7 var(--mono); color: var(--muted); white-space: pre-wrap; overflow: auto; flex: 1; }
+    .statusbar { height: var(--bottom-h); min-height: var(--bottom-h); background: var(--top); border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; padding: 0 10px 0 14px; color: var(--muted); }
+    .status-left, .status-right { display: flex; align-items: center; height: 100%; gap: 4px; }
+    .status-action { height: 100%; padding: 0 7px; display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+    .status-action:hover, .status-action.active { color: var(--text); background: var(--panel-soft); }
+    .status-icon { height: 100%; min-width: 27px; padding: 0 6px; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+    .status-icon:hover, .status-icon.active { color: var(--text); background: var(--panel-soft); }
+    .status-dot { width: 7px; height: 7px; margin: 0 9px; border-radius: 50%; background: var(--green); box-shadow: 0 0 5px rgba(77, 207, 149, .15); }
+    .splitter { position: absolute; top: 0; right: -3px; bottom: 0; width: 6px; cursor: col-resize; z-index: 4; }
+    .splitter:hover, .splitter.dragging { background: rgba(74, 153, 247, .35); }
+    .changes-pane .splitter { right: auto; left: -3px; }
+    .pop { position: fixed; z-index: 40; min-width: 238px; padding: 6px; background: var(--panel-soft); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); color: var(--text); }
+    .pop[hidden], .modal-layer[hidden], .terminal-panel[hidden] { display: none; }
+    .pop-row { display: flex; align-items: center; width: 100%; min-height: 32px; padding: 5px 9px; border-radius: 5px; gap: 9px; text-align: left; font-size: 12px; }
+    .pop-row:hover, .pop-row.active { background: var(--blue-wash); }
+    .pop-row .end { margin-left: auto; color: var(--faint); font: 10.5px var(--mono); }
+    .pop-separator { height: 1px; background: var(--border); margin: 5px 4px; }
+    .pop-caption { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: .08em; padding: 6px 9px 4px; }
+    .modal-layer { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, .52); display: grid; place-items: center; padding: 15px; }
+    .modal { width: min(460px, 90vw); background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); padding: 20px; }
+    .modal h2 { margin: 0 0 6px; font-size: 16px; }
+    .modal p { margin: 0 0 16px; font-size: 12px; color: var(--muted); }
+    .setting-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 14px 0; font-size: 12px; }
+    .setting-line select { font: inherit; padding: 6px; background: var(--panel-soft); color: var(--text); border: 1px solid var(--border); border-radius: 5px; }
+    .modal-actions { display: flex; justify-content: flex-end; margin-top: 22px; }
+    .command-box { width: min(620px, 92vw); background: #162432; border: 1px solid #365775; border-radius: 9px; box-shadow: var(--shadow); padding: 9px; }
+    .command-input { width: 100%; background: #0d1b29; color: #e0e9f2; border: 1px solid #34516d; border-radius: 5px; padding: 10px 12px; outline: none; }
+    .command-results { margin-top: 6px; max-height: 300px; overflow: auto; }
+    .toast { position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%); z-index: 70; background: #25394c; padding: 9px 13px; border: 1px solid #45607a; box-shadow: var(--shadow); border-radius: 6px; font-size: 12px; color: #e4edf7; max-width: min(600px, 90vw); text-align: center; opacity: 0; pointer-events: none; transition: opacity .18s; }
+    .toast.show { opacity: 1; }
+    .terminal-panel { height: 225px; flex: 0 0 225px; background: #0a121b; border-top: 1px solid #324657; display: flex; flex-direction: column; }
+    .terminal-head { height: 30px; display: flex; justify-content: space-between; align-items: center; padding: 0 14px; border-bottom: 1px solid #253544; color: #9bacbc; font-size: 11.7px; }
+    .terminal-body { overflow: auto; padding: 11px 19px; flex: 1; color: #b1c9c6; font: 11.5px/1.7 var(--mono); white-space: pre-wrap; }
+    .terminal-input-row { display: flex; align-items: center; gap: 8px; padding: 5px 17px 10px; font: 11.5px var(--mono); color: var(--green); }
+    .terminal-input-row input { flex: 1; border: 0; outline: 0; background: transparent; color: #dbe9ed; font: 11.5px var(--mono); }
+    .session-empty { display: flex; align-items: center; justify-content: center; min-height: 300px; height: 90%; color: var(--muted); text-align: center; }
+    .session-empty h2 { color: var(--text); font-size: 16px; font-weight: 560; margin: 0 0 6px; }
+    .session-empty p { margin: 0; font-size: 12px; }
+    .demo-msg { margin-left: 44px; margin-top: 8px; border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-size: 12px; color: var(--muted); }
+    .dragging-ui, .dragging-ui * { user-select: none !important; }
+    /* Preferences is launched from the hamburger menu, not another toolbar. */
+    .prefs-layer { z-index: 56; }
+    .prefs-window { width: min(910px, calc(100vw - 60px)); height: min(680px, calc(100dvh - 70px)); min-height: 400px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; box-shadow: var(--shadow); overflow: hidden; }
+    .prefs-header { height: 47px; flex: 0 0 47px; display: flex; align-items: center; padding: 0 16px; gap: 10px; border-bottom: 1px solid var(--border); font-weight: 620; font-size: 13px; }
+    .prefs-title { display: flex; color: var(--blue); }
+    .prefs-demo-label { color: var(--faint); font-size: 9px; letter-spacing: .09em; font-weight: 550; border: 1px solid var(--border); padding: 2px 5px; border-radius: 3px; }
+    .prefs-close { margin-left: auto; width: 25px; height: 25px; color: var(--muted); display: grid; place-items: center; border-radius: 4px; }
+    .prefs-close:hover { background: var(--panel-soft); color: var(--text); }
+    .prefs-body { display: flex; min-height: 0; flex: 1; }
+    .prefs-nav { width: 198px; min-width: 198px; background: var(--panel-deep); border-right: 1px solid var(--border); padding: 13px 9px; display: flex; flex-direction: column; gap: 2px; }
+    .prefs-nav-caption { font-size: 9px; color: var(--faint); font-weight: 650; letter-spacing: .11em; padding: 20px 11px 5px; }
+    .prefs-nav-item { height: 35px; display: flex; align-items: center; gap: 10px; text-align: left; padding: 0 11px; width: 100%; border-radius: 5px; font-size: 12px; color: var(--muted); }
+    .prefs-nav-item.active { background: var(--blue-wash); color: var(--text); box-shadow: inset 2px 0 var(--blue); }
+    .prefs-nav-item:hover:not(.active) { background: var(--panel-soft); color: var(--text); }
+    .prefs-mini-count { font: 10px var(--mono); margin-left: auto; color: var(--faint); }
+    .prefs-main { flex: 1; overflow: auto; padding: 26px 32px 40px; scrollbar-width: thin; scrollbar-color: var(--border) transparent; outline: 0; }
+    .prefs-footer { display: flex; justify-content: space-between; border-top: 1px solid var(--border); padding: 8px 15px; font-size: 10px; color: var(--faint); }
+    .prefs-page-head { margin-bottom: 24px; }
+    .prefs-page-head h2 { margin: 0 0 5px; font-size: 18px; font-weight: 620; letter-spacing: -.02em; }
+    .prefs-page-head p { margin: 0; color: var(--muted); font-size: 12px; }
+    .prefs-group { margin: 0 0 27px; }
+    .prefs-group h3 { font-size: 11px; font-weight: 650; letter-spacing: .04em; color: var(--faint); text-transform: uppercase; margin: 0 0 9px; }
+    .prefs-setting { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 12px 0; min-height: 58px; border-bottom: 1px solid var(--border-faint); }
+    .prefs-setting-title { font-size: 12.5px; font-weight: 540; color: var(--text); }
+    .prefs-setting-desc { margin-top: 3px; font-size: 11.3px; color: var(--muted); max-width: 385px; }
+    .prefs-select { min-width: 146px; max-width: 220px; padding: 7px 10px; border: 1px solid var(--border); background: var(--panel-deep); color: var(--text); border-radius: 5px; font-size: 12px; }
+    .prefs-input { min-width: 0; padding: 8px 10px; border: 1px solid var(--border); color: var(--text); background: var(--panel-deep); border-radius: 5px; }
+    .prefs-switch { display: inline-flex; width: 34px; height: 19px; border-radius: 99px; background: var(--border); padding: 2px; align-items: center; transition: background .15s; }
+    .prefs-switch:before { content:&#x27;&#x27;; display:block; width:15px; height:15px; background: #e1e8ee; border-radius: 50%; transition: transform .15s; }
+    .prefs-switch[aria-checked=&quot;true&quot;] { background: var(--blue); }
+    .prefs-switch[aria-checked=&quot;true&quot;]:before { transform: translateX(15px); }
+    .prefs-btn { border: 1px solid var(--border); border-radius: 5px; padding: 7px 10px; font-size: 11.5px; color: var(--text); background: var(--panel-soft); white-space: nowrap; }
+    .prefs-btn:hover { border-color: var(--blue); }
+    .prefs-btn.primary { background: var(--blue-wash); border-color: var(--blue); }
+    .prefs-btn:disabled { opacity: .55; cursor: default; }
+    .prefs-hint { font-size: 11px; color: var(--muted); padding: 11px 13px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-deep); line-height: 1.6; }
+    .prefs-hint strong { color: var(--text); }
+    .prefs-swatch-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .prefs-swatch { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; border: 1px solid var(--border); background: var(--panel-deep); border-radius: 5px; color: var(--muted); font-size: 11px; }
+    .prefs-swatch.selected { border-color: var(--blue); color: var(--text); }
+    .prefs-swatch-dot { height: 10px; width: 10px; border-radius: 50%; background: var(--swatch); }
+    .prefs-search-row { display: flex; align-items: center; gap: 9px; margin-bottom: 15px; }
+    .prefs-search-row .prefs-input { flex: 1; width: 100%; }
+    .prefs-collection { display: flex; flex-direction: column; }
+    .prefs-card { display: flex; gap: 12px; align-items: flex-start; padding: 13px 0; border-bottom: 1px solid var(--border-faint); }
+    .prefs-card-icon { display: grid; place-items: center; width: 31px; height: 31px; min-width: 31px; background: var(--panel-soft); border: 1px solid var(--border); border-radius: 7px; color: var(--blue); }
+    .prefs-card-body { min-width: 0; flex: 1; }
+    .prefs-card-title { font-size: 12.5px; font-weight: 610; display:flex; gap:8px; align-items: center; flex-wrap: wrap; }
+    .prefs-card-desc { font-size: 11.3px; color: var(--muted); margin-top: 4px; line-height: 1.5; }
+    .prefs-card-meta { display: inline-flex; font-size: 10px; color: var(--faint); margin-top: 5px; }
+    .prefs-card-action { align-self: center; }
+    .prefs-tag { border: 1px solid var(--border); border-radius: 4px; color: var(--muted); padding: 1px 5px; font-size: 9px; font-weight: 450; }
+    .prefs-filter-row { display: flex; gap: 6px; margin-bottom: 16px; }
+    .prefs-filter { border: 1px solid var(--border); padding: 5px 10px; border-radius: 4px; font-size: 11px; color: var(--muted); }
+    .prefs-filter.active { color: var(--text); background: var(--blue-wash); border-color: var(--blue); }
+    .prefs-kbd { font: 11px var(--mono); border: 1px solid var(--border); background: var(--panel-deep); border-radius: 4px; padding: 5px 7px; color: var(--text); white-space: nowrap; }
+    .prefs-kbd.listening { color: var(--blue); border-color: var(--blue); }
+    .prefs-keymap-row { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 9px; padding: 11px 0; border-bottom: 1px solid var(--border-faint); }
+    .prefs-keymap-row &gt; div:first-child { font-size: 12px; }
+    .prefs-keymap-row .muted { display: block; font-size: 10px; }
+    .prefs-quiet { color: var(--muted); font-size: 11.5px; }
+    @media (max-width: 700px) { .prefs-window {width:calc(100vw - 30px)} .prefs-nav {width:155px;min-width:155px} .prefs-main {padding:17px} .prefs-nav-item {padding:0 7px;gap:6px} .prefs-footer{font-size:9px} }
+    .mobile-panel-switch { display: none; }
+    @media (min-width: 1171px) and (max-width: 1450px) {
+      :root { --left-w: 258px; --right-w: 485px; }
+    }
+    @media (max-width: 1170px) {
+      :root { --left-w: 245px; --right-w: 420px; }
+      .conversation { padding-left: 17px; padding-right: 17px; }
+      .changes-head { padding: 0 11px; }
+      .message { gap: 9px; }
+    }
+    @media (max-width: 950px) {
+      .changes-pane { display: none; }
+      .app.show-changes .changes-pane { display: flex; width: 45%; flex-basis: 45%; }
+      .app.show-changes .agent-pane { min-width: 260px; }
+      .mobile-panel-switch { display: flex; }
+    }
+    .app.explorer-hidden .explorer { display: none; }
+    .app.changes-hidden .changes-pane { display: none; }
+    .app.compact { --tree-row: 23px; }
+    .app.compact .conversation { padding-top: 14px; }
+    .app.compact .message { margin-bottom: 14px; }
+  &lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+  &lt;svg aria-hidden=&quot;true&quot; style=&quot;position:absolute;width:0;height:0;overflow:hidden&quot; xmlns=&quot;http://www.w3.org/2000/svg&quot;&gt;
+    &lt;symbol id=&quot;i-menu&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;M4 6h16M4 12h16M4 18h16&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-chevron-down&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;m6 9 6 6 6-6&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-chevron-right&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;m9 6 6 6-6 6&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-folder&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;M3 7a2 2 0 0 1 2-2h5l2.2 2H19a2 2 0 0 1 2 2v10H3z&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-file&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;M6 3h8l5 5v13H6zM14 3v6h5&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-code&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;m8 8-4 4 4 4m8-8 4 4-4 4m-3-11-2 14&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-git&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;circle cx=&quot;6&quot; cy=&quot;4&quot; r=&quot;2&quot;/&gt;&lt;circle cx=&quot;6&quot; cy=&quot;20&quot; r=&quot;2&quot;/&gt;&lt;circle cx=&quot;18&quot; cy=&quot;7&quot; r=&quot;2&quot;/&gt;&lt;path d=&quot;M6 6v12M18 9v3a4 4 0 0 1-4 4h-4a4 4 0 0 0-4 4&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-terminal&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;rect x=&quot;3&quot; y=&quot;4&quot; width=&quot;18&quot; height=&quot;16&quot; rx=&quot;2&quot;/&gt;&lt;path d=&quot;m7 9 3 3-3 3m6 0h4&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-search&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;circle cx=&quot;11&quot; cy=&quot;11&quot; r=&quot;7&quot;/&gt;&lt;path d=&quot;m16 16 5 5&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-panel&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;rect x=&quot;3&quot; y=&quot;3&quot; width=&quot;18&quot; height=&quot;18&quot; rx=&quot;2&quot;/&gt;&lt;path d=&quot;M9 3v18&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-settings&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;circle cx=&quot;12&quot; cy=&quot;12&quot; r=&quot;3&quot;/&gt;&lt;path d=&quot;M10 2h4l1 3 2 1 3-1 2 4-2 2v2l2 2-2 4-3-1-2 1-1 3h-4l-1-3-2-1-3 1-2-4 2-2v-2L2 9l2-4 3 1 2-1z&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-plus&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;M12 5v14M5 12h14&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-check&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;circle cx=&quot;12&quot; cy=&quot;12&quot; r=&quot;9&quot;/&gt;&lt;path d=&quot;m7.5 12 3 3 6-6&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-clock&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;circle cx=&quot;12&quot; cy=&quot;12&quot; r=&quot;9&quot;/&gt;&lt;path d=&quot;M12 7v5l4 2&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-send&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;m4 4 17 8-17 8 3-8zM7 12h14&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-paperclip&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;m7 13 7-7a4 4 0 0 1 6 6l-9 9a6 6 0 0 1-8-9l8-8&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-at&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;circle cx=&quot;12&quot; cy=&quot;12&quot; r=&quot;9&quot;/&gt;&lt;path d=&quot;M16 8v7c0 2 3 2 4-1M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-chat&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 3V6a2 2 0 0 1 1-2z&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-sync&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;M20 7V3l-4 4h4A8 8 0 0 0 5 9M4 17v4l4-4H4a8 8 0 0 0 15-2&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-ellipsis&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;circle cx=&quot;5&quot; cy=&quot;12&quot; r=&quot;1&quot;/&gt;&lt;circle cx=&quot;12&quot; cy=&quot;12&quot; r=&quot;1&quot;/&gt;&lt;circle cx=&quot;19&quot; cy=&quot;12&quot; r=&quot;1&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-branch&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;circle cx=&quot;6&quot; cy=&quot;5&quot; r=&quot;2&quot;/&gt;&lt;circle cx=&quot;18&quot; cy=&quot;5&quot; r=&quot;2&quot;/&gt;&lt;circle cx=&quot;6&quot; cy=&quot;19&quot; r=&quot;2&quot;/&gt;&lt;path d=&quot;M6 7v10M18 7v3a5 5 0 0 1-5 5H6&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-checklist&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;m3 6 2 2 3-3m4 2h9M3 13l2 2 3-3m4 2h9M3 20l2 2 3-3m4 2h9&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-warning&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;M12 3 2 21h20zM12 9v5m0 4h.01&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-eye&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z&quot;/&gt;&lt;circle cx=&quot;12&quot; cy=&quot;12&quot; r=&quot;3&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-history&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;M4 7v5h5M4.5 12a8 8 0 1 1 3 6M12 7v5l3 2&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-x&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;M5 5 19 19M19 5 5 19&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-keyboard&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;rect x=&quot;2&quot; y=&quot;5&quot; width=&quot;20&quot; height=&quot;14&quot; rx=&quot;2&quot;/&gt;&lt;path d=&quot;M6 9h.01M10 9h.01M14 9h.01M18 9h.01M6 13h.01M10 13h.01M14 13h.01M18 13h.01M7 16h10&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-puzzle&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;M3 9h4a2 2 0 1 1 4 0h4V5a2 2 0 1 1 4 0h2v6h-4a2 2 0 1 0 0 4h4v6h-6v-4a2 2 0 1 0-4 0v4H3z&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-spark&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;m12 2 2.3 7.7L22 12l-7.7 2.3L12 22l-2.3-7.7L2 12l7.7-2.3z&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-store&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;M3 9h18l-2-6H5zM5 9v12h14V9M9 21v-8h6v8&quot;/&gt;&lt;path d=&quot;M3 9c0 3 4 3 4 0 0 3 4 3 4 0 0 3 4 3 4 0 0 3 6 3 6 0&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-info&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;circle cx=&quot;12&quot; cy=&quot;12&quot; r=&quot;9&quot;/&gt;&lt;path d=&quot;M12 11v6M12 7h.01&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-sliders&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;M4 6h16M4 12h16M4 18h16&quot;/&gt;&lt;circle cx=&quot;9&quot; cy=&quot;6&quot; r=&quot;2&quot; fill=&quot;var(--panel-soft)&quot;/&gt;&lt;circle cx=&quot;16&quot; cy=&quot;12&quot; r=&quot;2&quot; fill=&quot;var(--panel-soft)&quot;/&gt;&lt;circle cx=&quot;7&quot; cy=&quot;18&quot; r=&quot;2&quot; fill=&quot;var(--panel-soft)&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-moon&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;path d=&quot;M20 15a8 8 0 0 1-11-11A8 8 0 1 0 20 15z&quot;/&gt;&lt;/symbol&gt;
+    &lt;symbol id=&quot;i-sun&quot; viewBox=&quot;0 0 24 24&quot;&gt;&lt;circle cx=&quot;12&quot; cy=&quot;12&quot; r=&quot;4&quot;/&gt;&lt;path d=&quot;M12 2v2M12 20v2M2 12h2M20 12h2M5 5l2 2m10 10 2 2M19 5l-2 2M7 17l-2 2&quot;/&gt;&lt;/symbol&gt;
+  &lt;/svg&gt;
+
+  &lt;div class=&quot;app&quot; id=&quot;app&quot;&gt;
+    &lt;header class=&quot;topbar&quot;&gt;
+      &lt;div class=&quot;top-left&quot;&gt;
+        &lt;button class=&quot;top-button&quot; id=&quot;menuButton&quot; title=&quot;Menu&quot; aria-label=&quot;Mở menu&quot;&gt;&lt;svg class=&quot;icon md&quot;&gt;&lt;use href=&quot;#i-menu&quot;/&gt;&lt;/svg&gt;&lt;/button&gt;
+        &lt;button class=&quot;workspace-button&quot; id=&quot;workspaceButton&quot; title=&quot;Chọn workspace&quot;&gt;&lt;span id=&quot;workspaceLabel&quot;&gt;HIS_EMR&lt;/span&gt;&lt;svg class=&quot;icon sm&quot;&gt;&lt;use href=&quot;#i-chevron-down&quot;/&gt;&lt;/svg&gt;&lt;/button&gt;
+      &lt;/div&gt;
+      &lt;div class=&quot;top-right&quot;&gt;
+        &lt;button class=&quot;top-button&quot; id=&quot;searchButton&quot; title=&quot;Tìm file / lệnh (Ctrl+K)&quot; aria-label=&quot;Tìm kiếm&quot;&gt;&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-search&quot;/&gt;&lt;/svg&gt;&lt;/button&gt;
+        &lt;button class=&quot;top-button&quot; id=&quot;toggleChangesTop&quot; title=&quot;Ẩn/hiện Changes&quot; aria-label=&quot;Ẩn hiện Changes&quot;&gt;&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-panel&quot;/&gt;&lt;/svg&gt;&lt;/button&gt;
+      &lt;/div&gt;
+    &lt;/header&gt;
+
+    &lt;div class=&quot;workarea&quot; id=&quot;workarea&quot;&gt;
+      &lt;aside class=&quot;explorer&quot; id=&quot;explorer&quot; aria-label=&quot;Explorer&quot;&gt;
+        &lt;div class=&quot;tree-scroll&quot; id=&quot;treeScroll&quot;&gt;&lt;div id=&quot;fileTree&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+        &lt;div class=&quot;sidebar-foot&quot;&gt;
+          &lt;button class=&quot;small-button&quot; id=&quot;newSession&quot; aria-label=&quot;Tạo session&quot; title=&quot;Session mới (Ctrl+N)&quot;&gt;&lt;svg class=&quot;icon md&quot;&gt;&lt;use href=&quot;#i-plus&quot;/&gt;&lt;/svg&gt;&lt;/button&gt;
+          &lt;button class=&quot;session-name&quot; id=&quot;sessionButton&quot; title=&quot;Chuyển session&quot;&gt;&lt;svg class=&quot;icon sm&quot;&gt;&lt;use href=&quot;#i-history&quot;/&gt;&lt;/svg&gt;&lt;span id=&quot;sessionName&quot;&gt;Training resume&lt;/span&gt;&lt;svg class=&quot;icon sm&quot; style=&quot;margin-left:auto&quot;&gt;&lt;use href=&quot;#i-chevron-down&quot;/&gt;&lt;/svg&gt;&lt;/button&gt;
+        &lt;/div&gt;
+        &lt;div class=&quot;splitter&quot; id=&quot;leftSplitter&quot; aria-label=&quot;Thay đổi độ rộng Explorer&quot;&gt;&lt;/div&gt;
+      &lt;/aside&gt;
+
+      &lt;main class=&quot;agent-pane&quot; id=&quot;agentPane&quot;&gt;
+        &lt;div class=&quot;buffer-line&quot;&gt;&lt;button class=&quot;buffer-tab active&quot; aria-current=&quot;page&quot;&gt;&lt;svg class=&quot;icon sm&quot;&gt;&lt;use href=&quot;#i-chat&quot;/&gt;&lt;/svg&gt; Agent&lt;/button&gt;&lt;/div&gt;
+        &lt;div class=&quot;conversation&quot; id=&quot;conversation&quot;&gt;
+          &lt;div class=&quot;conversation-inner&quot; id=&quot;conversationInner&quot;&gt;
+            &lt;div class=&quot;task-heading&quot;&gt;
+              &lt;h1&gt;Training resume and checkpoint&lt;/h1&gt;
+              &lt;div class=&quot;meta&quot;&gt;HIS_EMR &lt;span aria-hidden=&quot;true&quot;&gt;·&lt;/span&gt; GPT-6 (High) &lt;span aria-hidden=&quot;true&quot;&gt;·&lt;/span&gt; Session preview&lt;/div&gt;
+            &lt;/div&gt;
+            &lt;article class=&quot;message&quot;&gt;
+              &lt;div class=&quot;avatar&quot;&gt;U&lt;/div&gt;
+              &lt;div&gt;&lt;div class=&quot;speaker&quot;&gt;&lt;span&gt;You&lt;/span&gt;&lt;time&gt;14:22&lt;/time&gt;&lt;/div&gt;
+              &lt;p&gt;Validate the latest Kaggle checkpoint and make sure we can resume training from it. Check configs, tokenizer, and optimizer state.&lt;/p&gt;&lt;/div&gt;
+            &lt;/article&gt;
+            &lt;article class=&quot;message&quot;&gt;
+              &lt;div class=&quot;avatar agent&quot;&gt;D&lt;/div&gt;
+              &lt;div&gt;&lt;div class=&quot;speaker&quot;&gt;&lt;span&gt;DSH&lt;/span&gt;&lt;time&gt;14:23&lt;/time&gt;&lt;/div&gt;
+              &lt;p&gt;I&#x27;ve validated the latest Kaggle checkpoint and confirmed we can resume training from it. The model weights, tokenizer, and optimizer state are all compatible with the current codebase. I also found a small config mismatch and have patched the resume logic to handle it.&lt;/p&gt;
+              &lt;h2&gt;Summary&lt;/h2&gt;
+              &lt;ul&gt;
+                &lt;li&gt;Checkpoint is complete and loadable (model, tokenizer, optimizer, scheduler).&lt;/li&gt;
+                &lt;li&gt;Config mismatch in &lt;code&gt;rope_scaling&lt;/code&gt; (checkpoint uses &lt;code&gt;type: linear&lt;/code&gt;, current config expects &lt;code&gt;type: dynamic&lt;/code&gt;). Added backward compatibility handling.&lt;/li&gt;
+                &lt;li&gt;Verified training can resume from step 12,480 without loss spike.&lt;/li&gt;
+              &lt;/ul&gt;
+              &lt;h2&gt;Plan&lt;/h2&gt;
+              &lt;ol&gt;
+                &lt;li&gt;Inspect checkpoint structure and configs&lt;/li&gt;
+                &lt;li&gt;Fix config mismatch and update resume logic&lt;/li&gt;
+                &lt;li&gt;Run a short validation to confirm training resumes correctly&lt;/li&gt;
+              &lt;/ol&gt;&lt;/div&gt;
+            &lt;/article&gt;
+            &lt;section class=&quot;activity&quot; id=&quot;activity&quot;&gt;
+              &lt;button class=&quot;activity-toggle&quot; id=&quot;activityToggle&quot; aria-expanded=&quot;true&quot;&gt;&lt;svg class=&quot;icon sm arrow&quot;&gt;&lt;use href=&quot;#i-chevron-down&quot;/&gt;&lt;/svg&gt; Tool activity &lt;span class=&quot;faint&quot;&gt;· 5&lt;/span&gt;&lt;/button&gt;
+              &lt;div class=&quot;activity-list&quot;&gt;
+                &lt;div class=&quot;activity-row&quot;&gt;&lt;svg class=&quot;icon ok&quot;&gt;&lt;use href=&quot;#i-check&quot;/&gt;&lt;/svg&gt;&lt;span class=&quot;verb&quot;&gt;read&lt;/span&gt;&lt;span class=&quot;detail&quot;&gt;Read checkpoint config &lt;span class=&quot;faint&quot;&gt;· config.json&lt;/span&gt;&lt;/span&gt;&lt;span class=&quot;duration&quot;&gt;1.2s&lt;/span&gt;&lt;/div&gt;
+                &lt;div class=&quot;activity-row&quot;&gt;&lt;svg class=&quot;icon ok&quot;&gt;&lt;use href=&quot;#i-check&quot;/&gt;&lt;/svg&gt;&lt;span class=&quot;verb&quot;&gt;grep&lt;/span&gt;&lt;span class=&quot;detail&quot;&gt;Search for rope_scaling usage &lt;span class=&quot;faint&quot;&gt;· 5 files&lt;/span&gt;&lt;/span&gt;&lt;span class=&quot;duration&quot;&gt;0.8s&lt;/span&gt;&lt;/div&gt;
+                &lt;div class=&quot;activity-row&quot;&gt;&lt;svg class=&quot;icon ok&quot;&gt;&lt;use href=&quot;#i-check&quot;/&gt;&lt;/svg&gt;&lt;span class=&quot;verb&quot;&gt;read&lt;/span&gt;&lt;span class=&quot;detail&quot;&gt;Inspect resume logic &lt;span class=&quot;faint&quot;&gt;· src/train/resume.py&lt;/span&gt;&lt;/span&gt;&lt;span class=&quot;duration&quot;&gt;0.6s&lt;/span&gt;&lt;/div&gt;
+                &lt;div class=&quot;activity-row&quot;&gt;&lt;svg class=&quot;icon ok&quot;&gt;&lt;use href=&quot;#i-check&quot;/&gt;&lt;/svg&gt;&lt;span class=&quot;verb&quot;&gt;bash&lt;/span&gt;&lt;span class=&quot;detail&quot;&gt;Validate checkpoint with a dry run&lt;/span&gt;&lt;span class=&quot;duration&quot;&gt;4.3s&lt;/span&gt;&lt;/div&gt;
+                &lt;div class=&quot;activity-row&quot;&gt;&lt;svg class=&quot;icon ok&quot;&gt;&lt;use href=&quot;#i-check&quot;/&gt;&lt;/svg&gt;&lt;span class=&quot;verb&quot;&gt;bash&lt;/span&gt;&lt;span class=&quot;detail&quot;&gt;Run short training resume (100 steps)&lt;/span&gt;&lt;span class=&quot;duration&quot;&gt;12.6s&lt;/span&gt;&lt;/div&gt;
+              &lt;/div&gt;
+            &lt;/section&gt;
+          &lt;/div&gt;
+        &lt;/div&gt;
+        &lt;div class=&quot;composer-shell&quot;&gt;
+          &lt;form class=&quot;composer&quot; id=&quot;composerForm&quot;&gt;
+            &lt;textarea id=&quot;composerInput&quot; rows=&quot;1&quot; placeholder=&quot;Ask DSH to change, inspect, or explain…&quot; aria-label=&quot;Nhập tin nhắn&quot;&gt;&lt;/textarea&gt;
+            &lt;div class=&quot;composer-bottom&quot;&gt;
+              &lt;div class=&quot;composer-tools&quot;&gt;
+                &lt;button type=&quot;button&quot; class=&quot;tool-button&quot; id=&quot;attachButton&quot; title=&quot;Đính kèm file (demo)&quot; aria-label=&quot;Đính kèm&quot;&gt;&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-paperclip&quot;/&gt;&lt;/svg&gt;&lt;/button&gt;
+                &lt;button type=&quot;button&quot; class=&quot;tool-button&quot; id=&quot;mentionButton&quot; title=&quot;Nhắc tới file&quot; aria-label=&quot;Chèn mention&quot;&gt;&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-at&quot;/&gt;&lt;/svg&gt;&lt;/button&gt;
+              &lt;/div&gt;
+              &lt;div class=&quot;composer-right&quot;&gt;
+                &lt;button type=&quot;button&quot; class=&quot;selector&quot; id=&quot;modelButton&quot;&gt;&lt;span id=&quot;modelName&quot;&gt;GPT-6 (High)&lt;/span&gt;&lt;svg class=&quot;icon sm&quot;&gt;&lt;use href=&quot;#i-chevron-down&quot;/&gt;&lt;/svg&gt;&lt;/button&gt;
+                &lt;button type=&quot;button&quot; class=&quot;selector&quot; id=&quot;modeButton&quot;&gt;&lt;span id=&quot;modeName&quot;&gt;Plan&lt;/span&gt;&lt;svg class=&quot;icon sm&quot;&gt;&lt;use href=&quot;#i-chevron-down&quot;/&gt;&lt;/svg&gt;&lt;/button&gt;
+                &lt;button class=&quot;send-button&quot; type=&quot;submit&quot; title=&quot;Gửi (Enter)&quot; aria-label=&quot;Gửi&quot;&gt;&lt;svg class=&quot;icon md&quot;&gt;&lt;use href=&quot;#i-send&quot;/&gt;&lt;/svg&gt;&lt;/button&gt;
+              &lt;/div&gt;
+            &lt;/div&gt;
+          &lt;/form&gt;
+        &lt;/div&gt;
+      &lt;/main&gt;
+
+      &lt;section class=&quot;changes-pane&quot; id=&quot;changesPane&quot; aria-label=&quot;Changes&quot;&gt;
+        &lt;div class=&quot;splitter&quot; id=&quot;rightSplitter&quot; aria-label=&quot;Thay đổi độ rộng Changes&quot;&gt;&lt;/div&gt;
+        &lt;div class=&quot;changes-head&quot;&gt;
+          &lt;div class=&quot;changes-title&quot;&gt;&lt;strong&gt;Changes&lt;/strong&gt;&lt;span&gt;3 files&lt;/span&gt;&lt;/div&gt;
+          &lt;button class=&quot;outlined-button&quot; id=&quot;reviewAll&quot; title=&quot;Xem và đánh dấu đã review&quot;&gt;Review all&lt;/button&gt;
+        &lt;/div&gt;
+        &lt;div class=&quot;right-tabs&quot;&gt;&lt;button class=&quot;right-tab active&quot; id=&quot;diffTab&quot; aria-current=&quot;page&quot;&gt;Diff&lt;/button&gt;&lt;button class=&quot;right-tab&quot; id=&quot;filesTab&quot;&gt;Files&lt;/button&gt;&lt;/div&gt;
+        &lt;div class=&quot;diff-content&quot; id=&quot;diffContent&quot;&gt;
+          &lt;div class=&quot;diff-filebar&quot;&gt;&lt;span class=&quot;filename&quot;&gt;&lt;svg class=&quot;icon sm&quot;&gt;&lt;use href=&quot;#i-file&quot;/&gt;&lt;/svg&gt;&lt;span id=&quot;diffFilename&quot;&gt;src/runtime/checkpoint.ts&lt;/span&gt;&lt;/span&gt;&lt;div class=&quot;diff-stats&quot;&gt;&lt;span class=&quot;added&quot;&gt;+24&lt;/span&gt;&lt;span class=&quot;removed&quot;&gt;−12&lt;/span&gt;&lt;/div&gt;&lt;/div&gt;
+          &lt;div class=&quot;diff-scroll&quot;&gt;&lt;div class=&quot;diff-code&quot; id=&quot;diffCode&quot;&gt;&lt;/div&gt;&lt;/div&gt;
+          &lt;div class=&quot;diff-bottom&quot;&gt;&lt;button class=&quot;primary-button&quot; id=&quot;reviewChanges&quot;&gt;Review changes&lt;/button&gt;&lt;button class=&quot;subtle-button&quot; id=&quot;discardButton&quot;&gt;Discard&lt;/button&gt;&lt;/div&gt;
+        &lt;/div&gt;
+        &lt;div class=&quot;files-content&quot; id=&quot;filesContent&quot; hidden&gt;
+          &lt;div class=&quot;files-list&quot; id=&quot;changedFilesList&quot;&gt;&lt;/div&gt;
+          &lt;pre class=&quot;file-preview&quot; id=&quot;filePreview&quot;&gt;Select a file to preview.&lt;/pre&gt;
+        &lt;/div&gt;
+      &lt;/section&gt;
+    &lt;/div&gt;
+
+    &lt;div class=&quot;terminal-panel&quot; id=&quot;terminalPanel&quot; hidden&gt;
+      &lt;div class=&quot;terminal-head&quot;&gt;&lt;span&gt;&lt;svg class=&quot;icon sm&quot;&gt;&lt;use href=&quot;#i-terminal&quot;/&gt;&lt;/svg&gt; Terminal &lt;span class=&quot;faint&quot;&gt;· preview shell&lt;/span&gt;&lt;/span&gt;&lt;button class=&quot;tool-button&quot; id=&quot;closeTerminal&quot; aria-label=&quot;Đóng terminal&quot;&gt;&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-x&quot;/&gt;&lt;/svg&gt;&lt;/button&gt;&lt;/div&gt;
+      &lt;div class=&quot;terminal-body&quot; id=&quot;terminalOutput&quot;&gt;DSH prototype shell — demo only, no commands are executed.\nType help to see supported mock commands.&lt;/div&gt;
+      &lt;form class=&quot;terminal-input-row&quot; id=&quot;terminalForm&quot;&gt;&lt;span&gt;❯&lt;/span&gt;&lt;input id=&quot;terminalInput&quot; autocomplete=&quot;off&quot; spellcheck=&quot;false&quot; aria-label=&quot;Terminal preview&quot; placeholder=&quot;help&quot; /&gt;&lt;/form&gt;
+    &lt;/div&gt;
+
+    &lt;footer class=&quot;statusbar&quot;&gt;
+      &lt;div class=&quot;status-left&quot;&gt;&lt;button class=&quot;status-action&quot; id=&quot;branchButton&quot; title=&quot;Git branch&quot;&gt;&lt;svg class=&quot;icon sm&quot;&gt;&lt;use href=&quot;#i-branch&quot;/&gt;&lt;/svg&gt;&lt;span id=&quot;branchName&quot;&gt;main&lt;/span&gt;&lt;svg class=&quot;icon sm&quot;&gt;&lt;use href=&quot;#i-chevron-down&quot;/&gt;&lt;/svg&gt;&lt;/button&gt;&lt;button class=&quot;status-icon&quot; id=&quot;gitButton&quot; title=&quot;Git / Changes&quot; aria-label=&quot;Git&quot;&gt;&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-git&quot;/&gt;&lt;/svg&gt;&lt;/button&gt;&lt;button class=&quot;status-icon&quot; id=&quot;syncButton&quot; title=&quot;Đồng bộ trạng thái (demo)&quot; aria-label=&quot;Sync&quot;&gt;&lt;svg class=&quot;icon sm&quot;&gt;&lt;use href=&quot;#i-sync&quot;/&gt;&lt;/svg&gt;&lt;/button&gt;&lt;/div&gt;
+      &lt;div class=&quot;status-right&quot;&gt;&lt;button class=&quot;status-icon&quot; id=&quot;terminalToggle&quot; title=&quot;Terminal (Ctrl+J)&quot; aria-label=&quot;Terminal&quot;&gt;&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-terminal&quot;/&gt;&lt;/svg&gt;&lt;/button&gt;&lt;button class=&quot;status-icon&quot; id=&quot;problemsButton&quot; title=&quot;Problems: 2 (demo)&quot; aria-label=&quot;Problems&quot;&gt;&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-warning&quot;/&gt;&lt;/svg&gt;&lt;/button&gt;&lt;span class=&quot;status-dot&quot; title=&quot;UI prototype · no backend connection&quot; aria-label=&quot;Prototype status&quot;&gt;&lt;/span&gt;&lt;/div&gt;
+    &lt;/footer&gt;
+  &lt;/div&gt;
+
+  &lt;div class=&quot;pop&quot; id=&quot;popup&quot; hidden&gt;&lt;/div&gt;
+  &lt;div class=&quot;modal-layer prefs-layer&quot; id=&quot;settingsLayer&quot; hidden&gt;
+    &lt;section class=&quot;prefs-window&quot; role=&quot;dialog&quot; aria-modal=&quot;true&quot; aria-labelledby=&quot;settingsTitle&quot;&gt;
+      &lt;header class=&quot;prefs-header&quot;&gt;&lt;div class=&quot;prefs-title&quot;&gt;&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-settings&quot;/&gt;&lt;/svg&gt;&lt;/div&gt;&lt;span id=&quot;settingsTitle&quot;&gt;Preferences&lt;/span&gt;&lt;span class=&quot;prefs-demo-label&quot;&gt;LOCAL DEMO&lt;/span&gt;&lt;button class=&quot;prefs-close&quot; id=&quot;closeSettings&quot; aria-label=&quot;Đóng Preferences&quot; title=&quot;Close (Esc)&quot;&gt;&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-x&quot;/&gt;&lt;/svg&gt;&lt;/button&gt;&lt;/header&gt;
+      &lt;div class=&quot;prefs-body&quot;&gt;
+        &lt;nav class=&quot;prefs-nav&quot; id=&quot;settingsNav&quot; aria-label=&quot;Settings sections&quot;&gt;
+          &lt;button class=&quot;prefs-nav-item active&quot; data-settings-section=&quot;general&quot;&gt;&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-sliders&quot;/&gt;&lt;/svg&gt; General&lt;/button&gt;
+          &lt;button class=&quot;prefs-nav-item&quot; data-settings-section=&quot;appearance&quot;&gt;&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-sun&quot;/&gt;&lt;/svg&gt; Appearance&lt;/button&gt;
+          &lt;button class=&quot;prefs-nav-item&quot; data-settings-section=&quot;keymap&quot;&gt;&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-keyboard&quot;/&gt;&lt;/svg&gt; Keymap&lt;/button&gt;
+          &lt;div class=&quot;prefs-nav-caption&quot;&gt;EXTEND&lt;/div&gt;
+          &lt;button class=&quot;prefs-nav-item&quot; data-settings-section=&quot;extensions&quot;&gt;&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-puzzle&quot;/&gt;&lt;/svg&gt; Extensions &lt;span class=&quot;prefs-mini-count&quot; id=&quot;extensionCount&quot;&gt;&lt;/span&gt;&lt;/button&gt;
+          &lt;button class=&quot;prefs-nav-item&quot; data-settings-section=&quot;skills&quot;&gt;&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-spark&quot;/&gt;&lt;/svg&gt; Skills &lt;span class=&quot;prefs-mini-count&quot; id=&quot;skillCount&quot;&gt;&lt;/span&gt;&lt;/button&gt;
+          &lt;button class=&quot;prefs-nav-item&quot; data-settings-section=&quot;marketplace&quot;&gt;&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-store&quot;/&gt;&lt;/svg&gt; Marketplace&lt;/button&gt;
+          &lt;div class=&quot;prefs-nav-caption&quot;&gt;MORE&lt;/div&gt;
+          &lt;button class=&quot;prefs-nav-item&quot; data-settings-section=&quot;about&quot;&gt;&lt;svg class=&quot;icon&quot;&gt;&lt;use href=&quot;#i-info&quot;/&gt;&lt;/svg&gt; About&lt;/button&gt;
+        &lt;/nav&gt;
+        &lt;div class=&quot;prefs-main&quot; id=&quot;settingsMain&quot; tabindex=&quot;-1&quot;&gt;&lt;/div&gt;
+      &lt;/div&gt;
+      &lt;footer class=&quot;prefs-footer&quot;&gt;&lt;span&gt;Preferences are stored locally in this browser.&lt;/span&gt;&lt;span&gt;Esc to close&lt;/span&gt;&lt;/footer&gt;
+    &lt;/section&gt;
+  &lt;/div&gt;
+  &lt;div class=&quot;modal-layer&quot; id=&quot;commandLayer&quot; hidden&gt;&lt;div class=&quot;command-box&quot; role=&quot;dialog&quot; aria-modal=&quot;true&quot; aria-label=&quot;Quick open&quot;&gt;&lt;input class=&quot;command-input&quot; id=&quot;commandInput&quot; placeholder=&quot;Search files or commands…&quot; autocomplete=&quot;off&quot; /&gt;&lt;div class=&quot;command-results&quot; id=&quot;commandResults&quot;&gt;&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;
+  &lt;div class=&quot;toast&quot; id=&quot;toast&quot; aria-live=&quot;polite&quot;&gt;&lt;/div&gt;
+
+  &lt;script&gt;
+    (() =&gt; {
+      &#x27;use strict&#x27;;
+      const $ = (id) =&gt; document.getElementById(id);
+      const icon = (name, cls = &#x27;&#x27;) =&gt; `&lt;svg class=&quot;icon ${cls}&quot;&gt;&lt;use href=&quot;#i-${name}&quot;/&gt;&lt;/svg&gt;`;
+      const esc = (s) =&gt; String(s).replace(/[&amp;&lt;&gt;&quot;&#x27;]/g, (c) =&gt; ({ &#x27;&amp;&#x27;:&#x27;&amp;amp;&#x27;,&#x27;&lt;&#x27;:&#x27;&amp;lt;&#x27;,&#x27;&gt;&#x27;:&#x27;&amp;gt;&#x27;,&#x27;&quot;&#x27;:&#x27;&amp;quot;&#x27;, &quot;&#x27;&quot;:&#x27;&amp;#39;&#x27; }[c]));
+      const data = {
+        HIS_EMR: {
+          files: [
+            { name:&#x27;HIS_EMR&#x27;, children:[
+              { name:&#x27;NhiDong&#x27;, children:[
+                { name:&#x27;UIUX&#x27;, children:[
+                  { name:&#x27;prototype&#x27;, children:[
+                    { name:&#x27;tablet&#x27;, children:[{name:&#x27;css&#x27;,children:[{name:&#x27;app.css&#x27;}]},{name:&#x27;js&#x27;,children:[{name:&#x27;app.js&#x27;}]},{name:&#x27;index.html&#x27;},{name:&#x27;PLAN.md&#x27;},{name:&#x27;README.md&#x27;}] },
+                    { name:&#x27;tablet-old&#x27;,children:[{name:&#x27;index.html&#x27;}]},
+                    { name:&#x27;tablet-plan-css-preview&#x27;,children:[{name:&#x27;css&#x27;,children:[{name:&#x27;style.css&#x27;}]},{name:&#x27;js&#x27;,children:[{name:&#x27;app.js&#x27;}]},{name:&#x27;index.html&#x27;},{name:&#x27;README.md&#x27;}]}
+                  ] },
+                  {name:&#x27;web&#x27;,children:[]}
+                ]},
+                ...[&#x27;configs&#x27;,&#x27;scripts&#x27;,&#x27;tests&#x27;,&#x27;docs&#x27;].map(name =&gt; ({ name,children:[]})),
+                {name:&#x27;.gitignore&#x27;},{name:&#x27;package.json&#x27;},{name:&#x27;README.md&#x27;},{name:&#x27;tsconfig.json&#x27;}
+              ]}
+            ]}
+          ], branch:&#x27;main&#x27;
+        },
+        openJev: { files:[{name:&#x27;openJev&#x27;,children:[{name:&#x27;src&#x27;,children:[{name:&#x27;broker.rs&#x27;},{name:&#x27;runtime.rs&#x27;},{name:&#x27;main.rs&#x27;}]},{name:&#x27;scripts&#x27;,children:[]},{name:&#x27;tests&#x27;,children:[]},{name:&#x27;Cargo.toml&#x27;},{name:&#x27;README.md&#x27;}]}],branch:&#x27;main&#x27; },
+        &#x27;verdict-next&#x27;: { files:[{name:&#x27;verdict-next&#x27;,children:[{name:&#x27;src&#x27;,children:[{name:&#x27;runtime&#x27;,children:[{name:&#x27;checkpoint.ts&#x27;},{name:&#x27;trainer.ts&#x27;},{name:&#x27;resume.py&#x27;}]},{name:&#x27;train&#x27;,children:[{name:&#x27;resume.py&#x27;}]}]},{name:&#x27;configs&#x27;,children:[{name:&#x27;config.json&#x27;}]},{name:&#x27;scripts&#x27;,children:[]},{name:&#x27;docs&#x27;,children:[{name:&#x27;PLAN.md&#x27;}]},{name:&#x27;README.md&#x27;}]}],branch:&#x27;main&#x27; }
+      };
+      let workspace = &#x27;HIS_EMR&#x27;;
+      let selectedFile = &#x27;HIS_EMR/NhiDong/UIUX/prototype/tablet&#x27;;
+      let openFolders = new Set([&#x27;HIS_EMR&#x27;,&#x27;HIS_EMR/NhiDong&#x27;,&#x27;HIS_EMR/NhiDong/UIUX&#x27;,&#x27;HIS_EMR/NhiDong/UIUX/prototype&#x27;,&#x27;HIS_EMR/NhiDong/UIUX/prototype/tablet&#x27;]);
+      let sessions = [{id:1,name:&#x27;Training resume&#x27;,initial:true},{id:2,name:&#x27;Audit proposal recall&#x27;,initial:false},{id:3,name:&#x27;Review inference broker&#x27;,initial:false}];
+      let currentSession = 1, sessionCounter = 3;
+      let popupSource = null, toastHandle = null;
+      const diffEntries = [
+        [&#x27;hunk&#x27;,&#x27;&#x27;, &#x27;@@ -120,18 +120,30 @@ export async function loadCheckpoint(&#x27;],
+        [&#x27;normal&#x27;,&#x27;120&#x27;,&#x27;  ): Promise&lt;Checkpoint&gt; {&#x27;],
+        [&#x27;normal&#x27;,&#x27;121&#x27;,&#x27;  const metaPath = path.join(checkpointPath, &quot;meta.json&quot;);&#x27;],
+        [&#x27;normal&#x27;,&#x27;122&#x27;,&#x27;  const configPath = path.join(checkpointPath, &quot;config.json&quot;);&#x27;],
+        [&#x27;minus&#x27;,&#x27;123&#x27;,&#x27;  const config = JSON.parse(&#x27;],
+        [&#x27;minus&#x27;,&#x27;124&#x27;,&#x27;    await fs.readFile(configPath, &quot;utf-8&quot;)&#x27;],
+        [&#x27;minus&#x27;,&#x27;125&#x27;,&#x27;  ) as TrainingConfig;&#x27;],
+        [&#x27;plus&#x27;,&#x27;123&#x27;,&#x27;  let config = JSON.parse(&#x27;],
+        [&#x27;plus&#x27;,&#x27;124&#x27;,&#x27;    await fs.readFile(configPath, &quot;utf-8&quot;)&#x27;],
+        [&#x27;plus&#x27;,&#x27;125&#x27;,&#x27;  ) as TrainingConfig;&#x27;],
+        [&#x27;plus&#x27;,&#x27;126&#x27;,&#x27;&#x27;],
+        [&#x27;plus&#x27;,&#x27;127&#x27;,&#x27;  // Backward compatibility for older checkpoints&#x27;],
+        [&#x27;plus&#x27;,&#x27;128&#x27;,&#x27;  if (config.rope_scaling?.type === &quot;linear&quot;) {&#x27;],
+        [&#x27;plus&#x27;,&#x27;129&#x27;,&#x27;    config = {&#x27;],
+        [&#x27;plus&#x27;,&#x27;130&#x27;,&#x27;      ...config,&#x27;],
+        [&#x27;plus&#x27;,&#x27;131&#x27;,&#x27;      rope_scaling: {&#x27;],
+        [&#x27;plus&#x27;,&#x27;132&#x27;,&#x27;        type: &quot;dynamic&quot;,&#x27;],
+        [&#x27;plus&#x27;,&#x27;133&#x27;,&#x27;        factor: config.rope_scaling.factor ?? 1.0,&#x27;],
+        [&#x27;plus&#x27;,&#x27;134&#x27;,&#x27;      },&#x27;],
+        [&#x27;plus&#x27;,&#x27;135&#x27;,&#x27;    };&#x27;],
+        [&#x27;plus&#x27;,&#x27;136&#x27;,&#x27;    console.warn(&#x27;],
+        [&#x27;plus&#x27;,&#x27;137&#x27;,&#x27;      &quot;[checkpoint] Converted rope_scaling.type for compatibility&quot;&#x27;],
+        [&#x27;plus&#x27;,&#x27;138&#x27;,&#x27;    );&#x27;],
+        [&#x27;plus&#x27;,&#x27;139&#x27;,&#x27;  }&#x27;],
+        [&#x27;normal&#x27;,&#x27;140&#x27;,&#x27;&#x27;],
+        [&#x27;normal&#x27;,&#x27;141&#x27;,&#x27;  const modelPath = path.join(checkpointPath, &quot;model.safetensors&quot;);&#x27;],
+        [&#x27;normal&#x27;,&#x27;142&#x27;,&#x27;  const optimPath = path.join(checkpointPath, &quot;optimizer.pt&quot;);&#x27;],
+        [&#x27;hunk&#x27;,&#x27;&#x27;,&#x27;@@ -160,7 +172,11 @@ export async function loadCheckpoint(&#x27;],
+        [&#x27;normal&#x27;,&#x27;160&#x27;,&#x27;  const state: Checkpoint = {&#x27;],
+        [&#x27;normal&#x27;,&#x27;161&#x27;,&#x27;    config,&#x27;],
+        [&#x27;normal&#x27;,&#x27;162&#x27;,&#x27;    model: await loadModel(modelPath),&#x27;],
+        [&#x27;minus&#x27;,&#x27;163&#x27;,&#x27;    optimizer: await loadOptimizer(optimPath),&#x27;],
+        [&#x27;plus&#x27;,&#x27;163&#x27;,&#x27;    optimizer: optimPath&#x27;],
+        [&#x27;plus&#x27;,&#x27;164&#x27;,&#x27;      ? await loadOptimizer(optimPath)&#x27;],
+        [&#x27;plus&#x27;,&#x27;165&#x27;,&#x27;      : undefined,&#x27;],
+        [&#x27;normal&#x27;,&#x27;166&#x27;,&#x27;    scheduler: await loadScheduler(checkpointPath),&#x27;],
+        [&#x27;normal&#x27;,&#x27;167&#x27;,&#x27;    step: metadata.step,&#x27;],
+        [&#x27;normal&#x27;,&#x27;168&#x27;,&#x27;  };&#x27;]
+      ];
+      const changedFiles = [
+        {path:&#x27;src/runtime/checkpoint.ts&#x27;,adds:24,dels:12,summary:&#x27;Checkpoint loading and rope_scaling backward compatibility.&#x27;},
+        {path:&#x27;src/train/resume.py&#x27;,adds:12,dels:4,summary:&#x27;Add validation and resume state check.&#x27;},
+        {path:&#x27;configs/train.yaml&#x27;,adds:2,dels:1,summary:&#x27;Align rope scaling with runtime configuration.&#x27;}
+      ];
+
+      function showToast(message) {
+        const t = $(&#x27;toast&#x27;); t.textContent = message; t.classList.add(&#x27;show&#x27;);
+        clearTimeout(toastHandle); toastHandle = setTimeout(() =&gt; t.classList.remove(&#x27;show&#x27;), 2900);
+      }
+      function renderTree() {
+        let html = &#x27;&#x27;;
+        const row = (item, parent, level) =&gt; {
+          const path = parent ? `${parent}/${item.name}` : item.name;
+          const folder = Array.isArray(item.children), opened = openFolders.has(path), cls = item.name.split(&#x27;.&#x27;).pop().toLowerCase();
+          const fileType = [&#x27;ts&#x27;,&#x27;js&#x27;,&#x27;py&#x27;,&#x27;md&#x27;,&#x27;json&#x27;,&#x27;html&#x27;].includes(cls) ? cls : &#x27;&#x27;;
+          html += `&lt;button class=&quot;tree-row ${selectedFile===path?&#x27;selected&#x27;:&#x27;&#x27;}&quot; data-tree-path=&quot;${esc(path)}&quot; data-folder=&quot;${folder}&quot; style=&quot;padding-left:${level*17 + 4}px&quot; title=&quot;${esc(path)}&quot;&gt;${folder ? icon(&#x27;chevron-right&#x27;,`chevron ${opened?&#x27;open&#x27;:&#x27;&#x27;}`) : &#x27;&lt;span class=&quot;chevron-placeholder&quot;&gt;&lt;/span&gt;&#x27;}${icon(folder?&#x27;folder&#x27;:&#x27;file&#x27;,`file-icon ${fileType}`)}&lt;span class=&quot;name&quot;&gt;${esc(item.name)}&lt;/span&gt;&lt;/button&gt;`;
+          if(folder &amp;&amp; opened) item.children.forEach(child =&gt; row(child,path,level+1));
+        };
+        data[workspace].files.forEach(file =&gt; row(file,&#x27;&#x27;,0));
+        $(&#x27;fileTree&#x27;).innerHTML = html;
+      }
+      $(&#x27;fileTree&#x27;).addEventListener(&#x27;click&#x27;, e =&gt; {
+        const btn = e.target.closest(&#x27;[data-tree-path]&#x27;); if (!btn) return;
+        const path = btn.dataset.treePath;
+        selectedFile = path;
+        if(btn.dataset.folder === &#x27;true&#x27;) {
+          openFolders.has(path) ? openFolders.delete(path) : openFolders.add(path);
+        } else { showFilePreview(path); }
+        renderTree();
+      });
+      function showFilePreview(path) {
+        $(&#x27;filesTab&#x27;).click();
+        $(&#x27;filePreview&#x27;).textContent = `// ${path}\n\nFile selected in Explorer.\nIn the real DSH app this area will show file content.\nThis prototype does not access your filesystem.`;
+        if($(&#x27;app&#x27;).classList.contains(&#x27;changes-hidden&#x27;)) $(&#x27;app&#x27;).classList.remove(&#x27;changes-hidden&#x27;);
+        if(window.innerWidth &lt;= 950) $(&#x27;app&#x27;).classList.add(&#x27;show-changes&#x27;);
+      }
+      function switchWorkspace(name) {
+        workspace = name; selectedFile = name;
+        openFolders = new Set([name]);
+        if (name === &#x27;HIS_EMR&#x27;) [&#x27;HIS_EMR/NhiDong&#x27;,&#x27;HIS_EMR/NhiDong/UIUX&#x27;,&#x27;HIS_EMR/NhiDong/UIUX/prototype&#x27;,&#x27;HIS_EMR/NhiDong/UIUX/prototype/tablet&#x27;].forEach(p =&gt; openFolders.add(p));
+        if (name === &#x27;verdict-next&#x27;) [&#x27;verdict-next/src&#x27;,&#x27;verdict-next/src/runtime&#x27;].forEach(p =&gt; openFolders.add(p));
+        $(&#x27;workspaceLabel&#x27;).textContent = name;
+        $(&#x27;branchName&#x27;).textContent = data[name].branch;
+        renderTree(); closePopup(); showToast(`Workspace: ${name} (sample tree)`);
+      }
+      function renderDiff() {
+        const markup = (content) =&gt; {
+          // all source snippets are fixed demo strings; escape before syntax highlighting
+          return esc(content)
+            .replace(/(\/\/[^\n]*)/g,&#x27;&lt;span class=&quot;syntax-comment&quot;&gt;$1&lt;/span&gt;&#x27;)
+            .replace(/(&amp;quot;[^&amp;]*?&amp;quot;)/g,&#x27;&lt;span class=&quot;syntax-str&quot;&gt;$1&lt;/span&gt;&#x27;)
+            .replace(/\b(const|let|await|return|if|undefined)\b/g,&#x27;&lt;span class=&quot;syntax-key&quot;&gt;$1&lt;/span&gt;&#x27;);
+        };
+        $(&#x27;diffCode&#x27;).innerHTML = diffEntries.map(([kind,line,code]) =&gt; `&lt;div class=&quot;diff-line ${kind}&quot;&gt;&lt;span class=&quot;line-no&quot;&gt;${esc(line)}&lt;/span&gt;&lt;span class=&quot;mark&quot;&gt;${kind===&#x27;plus&#x27;?&#x27;+&#x27;:kind===&#x27;minus&#x27;?&#x27;−&#x27;:&#x27; &#x27;}&lt;/span&gt;&lt;span class=&quot;code-text&quot;&gt;${markup(code)}&lt;/span&gt;&lt;/div&gt;`).join(&#x27;&#x27;);
+        $(&#x27;changedFilesList&#x27;).innerHTML = changedFiles.map((f,i) =&gt; `&lt;button class=&quot;file-item ${i===0?&#x27;active&#x27;:&#x27;&#x27;}&quot; data-change-index=&quot;${i}&quot;&gt;${icon(&#x27;file&#x27;,&#x27;sm&#x27;)}&lt;span&gt;${esc(f.path)}&lt;/span&gt;&lt;span class=&quot;file-item-stat&quot;&gt;+${f.adds} −${f.dels}&lt;/span&gt;&lt;/button&gt;`).join(&#x27;&#x27;);
+        $(&#x27;filePreview&#x27;).textContent = `${changedFiles[0].path}\n\n${changedFiles[0].summary}`;
+      }
+      function setChangeTab(name) {
+        const diff = name === &#x27;diff&#x27;;
+        $(&#x27;diffTab&#x27;).classList.toggle(&#x27;active&#x27;,diff); $(&#x27;filesTab&#x27;).classList.toggle(&#x27;active&#x27;,!diff);
+        $(&#x27;diffContent&#x27;).hidden = !diff; $(&#x27;filesContent&#x27;).hidden = diff;
+        $(&#x27;diffTab&#x27;).setAttribute(&#x27;aria-current&#x27;, diff?&#x27;page&#x27;:&#x27;false&#x27;); $(&#x27;filesTab&#x27;).setAttribute(&#x27;aria-current&#x27;,diff?&#x27;false&#x27;:&#x27;page&#x27;);
+      }
+      $(&#x27;diffTab&#x27;).addEventListener(&#x27;click&#x27;,() =&gt; setChangeTab(&#x27;diff&#x27;));
+      $(&#x27;filesTab&#x27;).addEventListener(&#x27;click&#x27;,() =&gt; setChangeTab(&#x27;files&#x27;));
+      $(&#x27;changedFilesList&#x27;).addEventListener(&#x27;click&#x27;,(e) =&gt; {
+        const btn=e.target.closest(&#x27;[data-change-index]&#x27;); if(!btn)return;
+        document.querySelectorAll(&#x27;.file-item&#x27;).forEach(x=&gt;x.classList.remove(&#x27;active&#x27;)); btn.classList.add(&#x27;active&#x27;);
+        const f=changedFiles[Number(btn.dataset.changeIndex)];
+        $(&#x27;filePreview&#x27;).textContent = `${f.path}\n\n${f.summary}\n\n+${f.adds} additions   −${f.dels} deletions\n\nSwitch to Diff to review the main checkpoint.ts patch.`;
+      });
+      $(&#x27;conversation&#x27;).addEventListener(&#x27;click&#x27;, e =&gt; {
+        const toggle=e.target.closest(&#x27;.activity-toggle&#x27;); if(!toggle)return;
+        const section=toggle.closest(&#x27;.activity&#x27;);
+        const collapsed=section.classList.toggle(&#x27;collapsed&#x27;);
+        toggle.setAttribute(&#x27;aria-expanded&#x27;,String(!collapsed));
+        persistSessions();
+      });
+      // A local demonstration store: no remote marketplace, filesystem, or extension execution.
+      const STORE_KEY = &#x27;dsh_ui_prototype_v2&#x27;;
+      const baseConfig = { theme:&#x27;dark&#x27;, accent:&#x27;blue&#x27;, density:&#x27;normal&#x27;, fontSize:13, keymap:&#x27;default&#x27;, bindings:{}, restoreSession:true, restorePanels:true, installed:{&#x27;git-helper&#x27;:true,&#x27;syntax-assist&#x27;:true,&#x27;handoff-kit&#x27;:true,&#x27;review-checklist&#x27;:false}, enabled:{&#x27;git-helper&#x27;:true,&#x27;syntax-assist&#x27;:true,&#x27;handoff-kit&#x27;:true,&#x27;review-checklist&#x27;:false} };
+      let pref = JSON.parse(JSON.stringify(baseConfig));
+      try {
+        const stored=JSON.parse(localStorage.getItem(STORE_KEY) || &#x27;null&#x27;);
+        if(stored &amp;&amp; typeof stored===&#x27;object&#x27;) {
+          pref={...pref,...stored,bindings:{...pref.bindings,...(stored.bindings||{})},installed:{...pref.installed,...(stored.installed||{})},enabled:{...pref.enabled,...(stored.enabled||{})}};
+        }
+      } catch(err) { /* Private / blocked storage: operate for the current page only. */ }
+      let settingsSection=&#x27;general&#x27;, marketplaceFilter=&#x27;all&#x27;, marketplaceQuery=&#x27;&#x27;, libraryQuery=&#x27;&#x27;, shortcutRecording=null;
+      const library=[
+        {id:&#x27;git-helper&#x27;,name:&#x27;Git Helper&#x27;,type:&#x27;extension&#x27;,icon:&#x27;git&#x27;,meta:&#x27;Workspace&#x27;,desc:&#x27;Branch and change-review actions for the workspace.&#x27;},
+        {id:&#x27;syntax-assist&#x27;,name:&#x27;Syntax Assist&#x27;,type:&#x27;extension&#x27;,icon:&#x27;code&#x27;,meta:&#x27;Editor&#x27;,desc:&#x27;Language and file-type decorations in the preview.&#x27;},
+        {id:&#x27;handoff-kit&#x27;,name:&#x27;Session Handoff&#x27;,type:&#x27;skill&#x27;,icon:&#x27;spark&#x27;,meta:&#x27;Workspace skill&#x27;,desc:&#x27;Structured handoff notes to continue work between sessions.&#x27;},
+        {id:&#x27;review-checklist&#x27;,name:&#x27;Review Checklist&#x27;,type:&#x27;skill&#x27;,icon:&#x27;checklist&#x27;,meta:&#x27;Global skill&#x27;,desc:&#x27;Review a change against acceptance criteria.&#x27;},
+        {id:&#x27;terminal-tools&#x27;,name:&#x27;Terminal Tools&#x27;,type:&#x27;extension&#x27;,icon:&#x27;terminal&#x27;,meta:&#x27;Utility&#x27;,desc:&#x27;Terminal command helpers and session presets.&#x27;},
+        {id:&#x27;diff-inspector&#x27;,name:&#x27;Diff Inspector&#x27;,type:&#x27;extension&#x27;,icon:&#x27;code&#x27;,meta:&#x27;Code review&#x27;,desc:&#x27;Inspect and annotate patches before review.&#x27;},
+        {id:&#x27;test-planner&#x27;,name:&#x27;Test Planner&#x27;,type:&#x27;skill&#x27;,icon:&#x27;checklist&#x27;,meta:&#x27;Workflow skill&#x27;,desc:&#x27;Build concise test plans from modified files and intent.&#x27;},
+        {id:&#x27;ui-audit&#x27;,name:&#x27;UI Audit&#x27;,type:&#x27;skill&#x27;,icon:&#x27;eye&#x27;,meta:&#x27;Workflow skill&#x27;,desc:&#x27;Inspect layout hierarchy, density, and interaction consistency.&#x27;},
+      ];
+      const presetBindings={
+        default:{search:&#x27;Ctrl+K&#x27;,explorer:&#x27;Ctrl+B&#x27;,new:&#x27;Ctrl+N&#x27;,terminal:&#x27;Ctrl+J&#x27;,settings:&#x27;Ctrl+,&#x27;,changes:&#x27;Ctrl+Shift+D&#x27;},
+        zed:{search:&#x27;Ctrl+P&#x27;,explorer:&#x27;Ctrl+Shift+E&#x27;,new:&#x27;Ctrl+N&#x27;,terminal:&#x27;Ctrl+`&#x27;,settings:&#x27;Ctrl+,&#x27;,changes:&#x27;Ctrl+Shift+D&#x27;},
+        vscode:{search:&#x27;Ctrl+P&#x27;,explorer:&#x27;Ctrl+B&#x27;,new:&#x27;Ctrl+Shift+N&#x27;,terminal:&#x27;Ctrl+`&#x27;,settings:&#x27;Ctrl+,&#x27;,changes:&#x27;Ctrl+Shift+D&#x27;}
+      };
+      const actionNames={search:&#x27;Quick open&#x27;,explorer:&#x27;Toggle Explorer&#x27;,new:&#x27;New session&#x27;,terminal:&#x27;Toggle Terminal&#x27;,settings:&#x27;Preferences&#x27;,changes:&#x27;Toggle Changes&#x27;};
+      const actions={search:openSearch,explorer:toggleExplorer,new:createSession,terminal:toggleTerminal,settings:()=&gt;openSettings(&#x27;general&#x27;),changes:toggleChanges};
+      function getBinding(id) { return pref.bindings[id] || presetBindings[pref.keymap]?.[id] || presetBindings.default[id]; }
+      function persist() { try{localStorage.setItem(STORE_KEY,JSON.stringify(pref));}catch(err){} }
+      function applyPreferences() {
+        document.documentElement.dataset.theme=pref.theme;
+        document.documentElement.dataset.accent=pref.accent;
+        document.documentElement.style.setProperty(&#x27;--scale&#x27;,String(Math.max(.85,Math.min(1.2,Number(pref.fontSize)/13))));
+        $(&#x27;app&#x27;).classList.toggle(&#x27;compact&#x27;,pref.density===&#x27;compact&#x27;);
+        $(&#x27;terminalToggle&#x27;).title=`Terminal (${getBinding(&#x27;terminal&#x27;)})`;
+        $(&#x27;searchButton&#x27;).title=`Quick open (${getBinding(&#x27;search&#x27;)})`;
+      }
+      function chordFromEvent(e) {
+        if(e.altKey &amp;&amp; e.ctrlKey &amp;&amp; !e.shiftKey &amp;&amp; e.key===&#x27;AltGraph&#x27;)return null;
+        const parts=[];
+        if(e.ctrlKey||e.metaKey) parts.push(&#x27;Ctrl&#x27;);
+        if(e.altKey)parts.push(&#x27;Alt&#x27;);
+        if(e.shiftKey)parts.push(&#x27;Shift&#x27;);
+        if(parts.length===0)return null;  // Do not steal normal typing from editors.
+        const name=e.code===&#x27;Comma&#x27;?&#x27;,&#x27;:e.code===&#x27;Backquote&#x27;?&#x27;`&#x27;:e.code.startsWith(&#x27;Key&#x27;)?e.code.slice(3):e.code.startsWith(&#x27;Digit&#x27;)?e.code.slice(5):e.key.length===1?e.key.toUpperCase():e.key;
+        if([&#x27;Control&#x27;,&#x27;Alt&#x27;,&#x27;Shift&#x27;,&#x27;Meta&#x27;].includes(name))return null;
+        return [...parts,name].join(&#x27;+&#x27;);
+      }
+      function saveShortcut(id,chord) {
+        const other=Object.keys(actionNames).find(a=&gt;a!==id &amp;&amp; getBinding(a)===chord);
+        if(other) { showToast(`Trùng phím với ${actionNames[other]}. Hãy chọn tổ hợp khác.`);shortcutRecording=null;renderSettings();return; }
+        pref.bindings[id]=chord;shortcutRecording=null;persist();applyPreferences();renderSettings();showToast(`Đã đặt ${actionNames[id]}: ${chord}`);
+      }
+      function closeSettings(){ $(&#x27;settingsLayer&#x27;).hidden=true;shortcutRecording=null; }
+      function openSettings(section=&#x27;general&#x27;) {
+        settingsSection=[&#x27;general&#x27;,&#x27;appearance&#x27;,&#x27;keymap&#x27;,&#x27;extensions&#x27;,&#x27;skills&#x27;,&#x27;marketplace&#x27;,&#x27;about&#x27;].includes(section)?section:&#x27;general&#x27;;
+        $(&#x27;settingsLayer&#x27;).hidden=false;renderSettings();
+        $(&#x27;settingsMain&#x27;).focus({preventScroll:true});
+      }
+      function settingRow(title,desc,control) {return `&lt;div class=&quot;prefs-setting&quot;&gt;&lt;div&gt;&lt;div class=&quot;prefs-setting-title&quot;&gt;${title}&lt;/div&gt;&lt;div class=&quot;prefs-setting-desc&quot;&gt;${desc}&lt;/div&gt;&lt;/div&gt;${control}&lt;/div&gt;`;}
+      const sectionIntro={
+        general:[&#x27;General&#x27;,&#x27;Behavior and workspace defaults.&#x27;],appearance:[&#x27;Appearance&#x27;,&#x27;Customize how DSH looks without changing the layout.&#x27;],
+        keymap:[&#x27;Keymap&#x27;,&#x27;Choose a shortcut preset or override individual commands.&#x27;],extensions:[&#x27;Extensions&#x27;,&#x27;Manage locally installed integrations and UI features.&#x27;],
+        skills:[&#x27;Skills&#x27;,&#x27;Manage reusable agent workflows independently from extensions.&#x27;],marketplace:[&#x27;Marketplace&#x27;,&#x27;Discover sample extensions and skills. No packages are downloaded.&#x27;],
+        about:[&#x27;About DSH&#x27;,&#x27;Prototype capabilities and boundaries.&#x27;]
+      };
+      function pickSelect(id,options,current) {return `&lt;select class=&quot;prefs-select&quot; data-pref=&quot;${id}&quot; aria-label=&quot;${id}&quot;&gt;${options.map(([value,label])=&gt;`&lt;option value=&quot;${value}&quot; ${current===value?&#x27;selected&#x27;:&#x27;&#x27;}&gt;${label}&lt;/option&gt;`).join(&#x27;&#x27;)}&lt;/select&gt;`;}
+      function toggleButton(id,val) {return `&lt;button type=&quot;button&quot; role=&quot;switch&quot; aria-label=&quot;${esc(id)}&quot; aria-checked=&quot;${!!val}&quot; class=&quot;prefs-switch&quot; data-toggle-pref=&quot;${id}&quot;&gt;&lt;/button&gt;`;}
+      function libraryCard(item,market=false) {
+        const installed=!!pref.installed[item.id],enabled=!!pref.enabled[item.id];
+        let button;
+        if(market) button=`&lt;button class=&quot;prefs-btn ${installed?&#x27;&#x27;:&#x27;primary&#x27;}&quot; data-install=&quot;${item.id}&quot;&gt;${installed?&#x27;Remove&#x27;:&#x27;Install&#x27;}&lt;/button&gt;`;
+        else button=`&lt;button type=&quot;button&quot; role=&quot;switch&quot; aria-label=&quot;Enable ${esc(item.name)}&quot; aria-checked=&quot;${enabled}&quot; class=&quot;prefs-switch&quot; data-library-toggle=&quot;${item.id}&quot;&gt;&lt;/button&gt;`;
+        return `&lt;div class=&quot;prefs-card&quot;&gt;&lt;div class=&quot;prefs-card-icon&quot;&gt;${icon(item.icon)}&lt;/div&gt;&lt;div class=&quot;prefs-card-body&quot;&gt;&lt;div class=&quot;prefs-card-title&quot;&gt;${esc(item.name)}&lt;span class=&quot;prefs-tag&quot;&gt;${item.type}&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;prefs-card-desc&quot;&gt;${esc(item.desc)}&lt;/div&gt;&lt;span class=&quot;prefs-card-meta&quot;&gt;${esc(item.meta)} · ${market?(installed?&#x27;Installed locally (demo)&#x27;:&#x27;Demo catalog&#x27;):enabled?&#x27;Enabled&#x27;:&#x27;Disabled&#x27;}&lt;/span&gt;&lt;/div&gt;&lt;div class=&quot;prefs-card-action&quot;&gt;${button}&lt;/div&gt;&lt;/div&gt;`;
+      }
+      function renderSettings(preserveScroll=false) {
+        document.querySelectorAll(&#x27;[data-settings-section]&#x27;).forEach(b=&gt;b.classList.toggle(&#x27;active&#x27;,b.dataset.settingsSection===settingsSection));
+        $(&#x27;extensionCount&#x27;).textContent=String(library.filter(x=&gt;x.type===&#x27;extension&#x27;&amp;&amp;pref.installed[x.id]).length);
+        $(&#x27;skillCount&#x27;).textContent=String(library.filter(x=&gt;x.type===&#x27;skill&#x27;&amp;&amp;pref.installed[x.id]).length);
+        const main=$(&#x27;settingsMain&#x27;),scroll=preserveScroll?main.scrollTop:0;
+        const intro=sectionIntro[settingsSection];
+        let content=`&lt;div class=&quot;prefs-page-head&quot;&gt;&lt;h2&gt;${intro[0]}&lt;/h2&gt;&lt;p&gt;${intro[1]}&lt;/p&gt;&lt;/div&gt;`;
+        if(settingsSection===&#x27;general&#x27;) content+=`&lt;div class=&quot;prefs-group&quot;&gt;&lt;h3&gt;Startup&lt;/h3&gt;${settingRow(&#x27;Restore last session&#x27;,&#x27;Remember your preferred startup behavior in this browser.&#x27;,toggleButton(&#x27;restoreSession&#x27;,pref.restoreSession))}${settingRow(&#x27;Restore panel visibility&#x27;,&#x27;Remember whether Explorer and Changes were open.&#x27;,toggleButton(&#x27;restorePanels&#x27;,pref.restorePanels))}&lt;/div&gt;&lt;div class=&quot;prefs-hint&quot;&gt;&lt;strong&gt;Local UI prototype&lt;/strong&gt;&lt;br&gt;These preferences are stored locally. Agent responses, filesystem access, Git actions and terminal commands are not connected to DSH yet.&lt;/div&gt;`;
+        if(settingsSection===&#x27;appearance&#x27;) content+=`&lt;div class=&quot;prefs-group&quot;&gt;&lt;h3&gt;Color&lt;/h3&gt;${settingRow(&#x27;Theme&#x27;,&#x27;Light, dark, or a higher-contrast midnight palette.&#x27;,pickSelect(&#x27;theme&#x27;,[[&#x27;dark&#x27;,&#x27;Dark&#x27;],[&#x27;midnight&#x27;,&#x27;Midnight&#x27;],[&#x27;light&#x27;,&#x27;Light&#x27;]],pref.theme))}${settingRow(&#x27;Accent color&#x27;,&#x27;Use the accent for selected rows, focus and active tabs.&#x27;,`&lt;div class=&quot;prefs-swatch-row&quot;&gt;${[[&#x27;blue&#x27;,&#x27;#4a99f7&#x27;],[&#x27;teal&#x27;,&#x27;#42b7ba&#x27;],[&#x27;violet&#x27;,&#x27;#a38df5&#x27;]].map(([n,c])=&gt;`&lt;button data-accent-choice=&quot;${n}&quot; class=&quot;prefs-swatch ${pref.accent===n?&#x27;selected&#x27;:&#x27;&#x27;}&quot;&gt;&lt;span class=&quot;prefs-swatch-dot&quot; style=&quot;--swatch:${c}&quot;&gt;&lt;/span&gt;${n}&lt;/button&gt;`).join(&#x27;&#x27;)}&lt;/div&gt;`)}&lt;/div&gt;&lt;div class=&quot;prefs-group&quot;&gt;&lt;h3&gt;Density&lt;/h3&gt;${settingRow(&#x27;Spacing&#x27;,&#x27;Adjust the tree and conversation vertical rhythm.&#x27;,pickSelect(&#x27;density&#x27;,[[&#x27;normal&#x27;,&#x27;Comfortable&#x27;],[&#x27;compact&#x27;,&#x27;Compact&#x27;]],pref.density))}${settingRow(&#x27;UI font scale&#x27;,&#x27;Scale the interface text for comfort.&#x27;,`&lt;input type=&quot;range&quot; data-pref=&quot;fontSize&quot; min=&quot;11&quot; max=&quot;16&quot; step=&quot;1&quot; value=&quot;${pref.fontSize}&quot; aria-label=&quot;Font size&quot;&gt;&lt;span class=&quot;prefs-quiet&quot; id=&quot;fontSizeValue&quot;&gt;${pref.fontSize}px&lt;/span&gt;`)}&lt;/div&gt;`;
+        if(settingsSection===&#x27;keymap&#x27;) content+=`&lt;div class=&quot;prefs-group&quot;&gt;&lt;h3&gt;Preset&lt;/h3&gt;${settingRow(&#x27;Shortcut profile&#x27;,&#x27;DSH presets inspired by common editor bindings.&#x27;,pickSelect(&#x27;keymap&#x27;,[[&#x27;default&#x27;,&#x27;DSH Default&#x27;],[&#x27;zed&#x27;,&#x27;Zed-inspired&#x27;],[&#x27;vscode&#x27;,&#x27;VS Code-inspired&#x27;]],pref.keymap))}&lt;/div&gt;&lt;div class=&quot;prefs-group&quot;&gt;&lt;h3&gt;Commands&lt;/h3&gt;${Object.entries(actionNames).map(([id,label])=&gt;`&lt;div class=&quot;prefs-keymap-row&quot;&gt;&lt;div&gt;${label}&lt;span class=&quot;muted&quot;&gt;${id}&lt;/span&gt;&lt;/div&gt;&lt;button class=&quot;prefs-kbd ${shortcutRecording===id?&#x27;listening&#x27;:&#x27;&#x27;}&quot; data-edit-shortcut=&quot;${id}&quot; title=&quot;Click to record a key combination&quot;&gt;${shortcutRecording===id?&#x27;Press keys…&#x27;:esc(getBinding(id))}&lt;/button&gt;&lt;button class=&quot;tool-button&quot; data-reset-shortcut=&quot;${id}&quot; title=&quot;Reset to profile&quot; aria-label=&quot;Reset ${label}&quot;&gt;${icon(&#x27;sync&#x27;,&#x27;sm&#x27;)}&lt;/button&gt;&lt;/div&gt;`).join(&#x27;&#x27;)}&lt;/div&gt;&lt;div class=&quot;prefs-hint&quot;&gt;Click a shortcut and press a new key combination. Press Esc to cancel. Conflicting bindings are rejected. Browser-reserved combinations may still be unavailable.&lt;/div&gt;`;
+        if(settingsSection===&#x27;extensions&#x27;||settingsSection===&#x27;skills&#x27;) {
+          const type=settingsSection===&#x27;extensions&#x27;?&#x27;extension&#x27;:&#x27;skill&#x27;;
+          const entries=library.filter(x=&gt;x.type===type&amp;&amp;pref.installed[x.id]&amp;&amp;(`${x.name} ${x.desc}`.toLowerCase().includes(libraryQuery.toLowerCase())));
+          content+=`&lt;div class=&quot;prefs-search-row&quot;&gt;&lt;input class=&quot;prefs-input&quot; type=&quot;search&quot; id=&quot;librarySearch&quot; value=&quot;${esc(libraryQuery)}&quot; placeholder=&quot;Filter ${settingsSection}…&quot;&gt;&lt;button class=&quot;prefs-btn&quot; data-go-market=&quot;${type}&quot;&gt;Browse marketplace&lt;/button&gt;&lt;/div&gt;`;
+          content+=entries.length?`&lt;div class=&quot;prefs-collection&quot;&gt;${entries.map(x=&gt;libraryCard(x)).join(&#x27;&#x27;)}&lt;/div&gt;`:`&lt;div class=&quot;prefs-hint&quot;&gt;No ${settingsSection} found. Browse the sample marketplace to add one.&lt;/div&gt;`;
+          content+=`&lt;p class=&quot;prefs-quiet&quot;&gt;${settingsSection===&#x27;skills&#x27;?&#x27;Skills are reusable instructions; enabling them here does not run any agent.&#x27;:&#x27;Enabling an extension here only changes prototype state; no plugin code is executed.&#x27;}&lt;/p&gt;`;
+        }
+        if(settingsSection===&#x27;marketplace&#x27;) {
+          content+=`&lt;div class=&quot;prefs-search-row&quot;&gt;&lt;input class=&quot;prefs-input&quot; id=&quot;marketplaceSearch&quot; type=&quot;search&quot; placeholder=&quot;Search demo catalog…&quot; value=&quot;${esc(marketplaceQuery)}&quot;&gt;&lt;/div&gt;`;
+          content+=`&lt;div class=&quot;prefs-filter-row&quot;&gt;${[[&#x27;all&#x27;,&#x27;All&#x27;],[&#x27;extension&#x27;,&#x27;Extensions&#x27;],[&#x27;skill&#x27;,&#x27;Skills&#x27;]].map(([v,n])=&gt;`&lt;button class=&quot;prefs-filter ${marketplaceFilter===v?&#x27;active&#x27;:&#x27;&#x27;}&quot; data-market-filter=&quot;${v}&quot;&gt;${n}&lt;/button&gt;`).join(&#x27;&#x27;)}&lt;/div&gt;`;
+          const filtered=library.filter(x=&gt;(marketplaceFilter===&#x27;all&#x27;||x.type===marketplaceFilter)&amp;&amp;(`${x.name} ${x.desc}`.toLowerCase().includes(marketplaceQuery.toLowerCase())));
+          content+=filtered.length?`&lt;div class=&quot;prefs-collection&quot;&gt;${filtered.map(x=&gt;libraryCard(x,true)).join(&#x27;&#x27;)}&lt;/div&gt;`:&#x27;&lt;div class=&quot;prefs-hint&quot;&gt;No results for this query.&lt;/div&gt;&#x27;;
+        }
+        if(settingsSection===&#x27;about&#x27;) content+=`&lt;div class=&quot;prefs-group&quot;&gt;&lt;h3&gt;Prototype information&lt;/h3&gt;${settingRow(&#x27;Version&#x27;,&#x27;Single-file interactive HTML prototype.&#x27;,&#x27;v2.0&#x27;)}${settingRow(&#x27;Runtime&#x27;,&#x27;Local browser state; no server connection.&#x27;,&#x27;HTML / CSS / JS&#x27;)}&lt;/div&gt;&lt;div class=&quot;prefs-hint&quot;&gt;This prototype cannot install actual extensions or skills, fetch marketplace packages, run terminal commands, or change Git repositories. All sample catalog entries and installation states are local UI simulations.&lt;/div&gt;`;
+        main.innerHTML=content;main.scrollTop=scroll;
+      }
+      $(&#x27;settingsNav&#x27;).addEventListener(&#x27;click&#x27;,e=&gt;{const b=e.target.closest(&#x27;[data-settings-section]&#x27;);if(!b)return;settingsSection=b.dataset.settingsSection;shortcutRecording=null;libraryQuery=&#x27;&#x27;;renderSettings();});
+      $(&#x27;settingsMain&#x27;).addEventListener(&#x27;change&#x27;,e=&gt;{
+        const el=e.target,field=el.dataset.pref;
+        if(!field)return;
+        if(field===&#x27;keymap&#x27;){pref.bindings={};shortcutRecording=null;}
+        pref[field]=field===&#x27;fontSize&#x27;?Number(el.value):el.value;
+        persist();applyPreferences();renderSettings(true);
+      });
+      $(&#x27;settingsMain&#x27;).addEventListener(&#x27;input&#x27;,e=&gt;{
+        if(e.target.dataset.pref===&#x27;fontSize&#x27;) {pref.fontSize=Number(e.target.value);applyPreferences();$(&#x27;fontSizeValue&#x27;).textContent=`${pref.fontSize}px`;persist();}
+        if(e.target.id===&#x27;librarySearch&#x27;){libraryQuery=e.target.value;renderSettings(true);const input=$(&#x27;librarySearch&#x27;);input?.focus();input?.setSelectionRange(libraryQuery.length,libraryQuery.length);}
+        if(e.target.id===&#x27;marketplaceSearch&#x27;){marketplaceQuery=e.target.value;renderSettings(true);const input=$(&#x27;marketplaceSearch&#x27;);input?.focus();input?.setSelectionRange(marketplaceQuery.length,marketplaceQuery.length);}
+      });
+      $(&#x27;settingsMain&#x27;).addEventListener(&#x27;click&#x27;,e=&gt;{
+        const sw=e.target.closest(&#x27;[data-toggle-pref]&#x27;);
+        if(sw){const id=sw.dataset.togglePref;pref[id]=!pref[id];persist();if(id===&#x27;restoreSession&#x27;&amp;&amp;pref[id])persistSessions();renderSettings(true);return;}
+        const color=e.target.closest(&#x27;[data-accent-choice]&#x27;);
+        if(color){pref.accent=color.dataset.accentChoice;persist();applyPreferences();renderSettings(true);return;}
+        const binding=e.target.closest(&#x27;[data-edit-shortcut]&#x27;);
+        if(binding){shortcutRecording=binding.dataset.editShortcut;renderSettings(true);return;}
+        const reset=e.target.closest(&#x27;[data-reset-shortcut]&#x27;);
+        if(reset){delete pref.bindings[reset.dataset.resetShortcut];shortcutRecording=null;persist();renderSettings(true);return;}
+        const enabled=e.target.closest(&#x27;[data-library-toggle]&#x27;);
+        if(enabled){const id=enabled.dataset.libraryToggle;pref.enabled[id]=!pref.enabled[id];persist();renderSettings(true);return;}
+        const market=e.target.closest(&#x27;[data-go-market]&#x27;);
+        if(market){marketplaceFilter=market.dataset.goMarket;settingsSection=&#x27;marketplace&#x27;;marketplaceQuery=&#x27;&#x27;;renderSettings();return;}
+        const filter=e.target.closest(&#x27;[data-market-filter]&#x27;);
+        if(filter){marketplaceFilter=filter.dataset.marketFilter;renderSettings(true);return;}
+        const install=e.target.closest(&#x27;[data-install]&#x27;);
+        if(install){const id=install.dataset.install;pref.installed[id]=!pref.installed[id];pref.enabled[id]=pref.installed[id];persist();renderSettings(true);showToast(`${library.find(x=&gt;x.id===id)?.name}: ${pref.installed[id]?&#x27;added&#x27;:&#x27;removed&#x27;} from demo library.`);}
+      });
+      $(&#x27;closeSettings&#x27;).addEventListener(&#x27;click&#x27;,closeSettings);
+      $(&#x27;settingsLayer&#x27;).addEventListener(&#x27;click&#x27;,e=&gt;{if(e.target===$(&#x27;settingsLayer&#x27;))closeSettings();});
+      applyPreferences();
+
+      function positionPopup(target) {
+        const pop=$(&#x27;popup&#x27;), r=target.getBoundingClientRect();
+        pop.hidden=false;
+        const w=pop.offsetWidth, h=pop.offsetHeight;
+        pop.style.left=`${Math.max(8, Math.min(r.left, innerWidth-w-8))}px`;
+        pop.style.top=`${Math.max(8, Math.min(r.bottom+5, innerHeight-h-8))}px`;
+      }
+      function closePopup() { $(&#x27;popup&#x27;).hidden=true; popupSource=null; }
+      function openPopup(target,html,onSelect) {
+        if(popupSource===target &amp;&amp; !$(&#x27;popup&#x27;).hidden) { closePopup(); return; }
+        popupSource=target; $(&#x27;popup&#x27;).innerHTML=html; positionPopup(target);
+        $(&#x27;popup&#x27;).onclick=e=&gt; { const btn=e.target.closest(&#x27;[data-choice]&#x27;); if(btn) { onSelect(btn.dataset.choice); closePopup(); } };
+      }
+      const row=(choice,label,iconName,end=&#x27;&#x27;)=&gt;`&lt;button class=&quot;pop-row&quot; data-choice=&quot;${esc(choice)}&quot;&gt;${icon(iconName)}&lt;span&gt;${esc(label)}&lt;/span&gt;${end?`&lt;span class=&quot;end&quot;&gt;${esc(end)}&lt;/span&gt;`:&#x27;&#x27;}&lt;/button&gt;`;
+      function openMainMenu() {
+        openPopup($(&#x27;menuButton&#x27;),
+          `&lt;div class=&quot;pop-caption&quot;&gt;Workspace&lt;/div&gt;${row(&#x27;search&#x27;,&#x27;Quick open&#x27;,&#x27;search&#x27;,getBinding(&#x27;search&#x27;))}${row(&#x27;explorer&#x27;,&#x27;Toggle Explorer&#x27;,&#x27;panel&#x27;,getBinding(&#x27;explorer&#x27;))}${row(&#x27;new&#x27;,&#x27;New session&#x27;,&#x27;plus&#x27;,getBinding(&#x27;new&#x27;))}`+
+          `&lt;div class=&quot;pop-separator&quot;&gt;&lt;/div&gt;&lt;div class=&quot;pop-caption&quot;&gt;Customize&lt;/div&gt;${row(&#x27;general&#x27;,&#x27;Preferences…&#x27;,&#x27;settings&#x27;,getBinding(&#x27;settings&#x27;))}${row(&#x27;appearance&#x27;,&#x27;Appearance&#x27;,&#x27;sun&#x27;)}${row(&#x27;keymap&#x27;,&#x27;Keymap&#x27;,&#x27;keyboard&#x27;)}${row(&#x27;extensions&#x27;,&#x27;Extensions&#x27;,&#x27;puzzle&#x27;)}${row(&#x27;skills&#x27;,&#x27;Skills&#x27;,&#x27;spark&#x27;)}${row(&#x27;marketplace&#x27;,&#x27;Marketplace&#x27;,&#x27;store&#x27;)}`+
+          `&lt;div class=&quot;pop-separator&quot;&gt;&lt;/div&gt;${row(&#x27;about&#x27;,&#x27;About DSH&#x27;,&#x27;info&#x27;)}`,
+          choice =&gt; { if(choice===&#x27;search&#x27;)openSearch();else if(choice===&#x27;explorer&#x27;)toggleExplorer();else if(choice===&#x27;new&#x27;)createSession();else openSettings(choice); });
+      }
+      $(&#x27;menuButton&#x27;).addEventListener(&#x27;click&#x27;,openMainMenu);
+      $(&#x27;workspaceButton&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;openPopup($(&#x27;workspaceButton&#x27;),
+        `&lt;div class=&quot;pop-caption&quot;&gt;Recent workspaces · demo&lt;/div&gt;${Object.keys(data).map(n=&gt;row(n,n,&#x27;folder&#x27;,n===workspace?&#x27;✓&#x27;:&#x27;&#x27; )).join(&#x27;&#x27;)}`,
+        switchWorkspace));
+      $(&#x27;sessionButton&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;openPopup($(&#x27;sessionButton&#x27;),
+        `&lt;div class=&quot;pop-caption&quot;&gt;Sessions&lt;/div&gt;${sessions.map(s=&gt;row(String(s.id),s.name,&#x27;chat&#x27;,s.id===currentSession?&#x27;✓&#x27;:&#x27;&#x27; )).join(&#x27;&#x27;)}&lt;div class=&quot;pop-separator&quot;&gt;&lt;/div&gt;${row(&#x27;new&#x27;,&#x27;New session&#x27;,&#x27;plus&#x27;)}`,
+        (choice)=&gt;choice===&#x27;new&#x27;?createSession():activateSession(Number(choice))));
+      $(&#x27;newSession&#x27;).addEventListener(&#x27;click&#x27;,createSession);
+      $(&#x27;modelButton&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;openPopup($(&#x27;modelButton&#x27;),
+        `&lt;div class=&quot;pop-caption&quot;&gt;Model · preview selector&lt;/div&gt;${[&#x27;GPT-6 (High)&#x27;,&#x27;GPT-6 (Medium)&#x27;,&#x27;Claude Sonnet&#x27;].map(m=&gt;row(m,m,&#x27;check&#x27;,m===$(&#x27;modelName&#x27;).textContent?&#x27;✓&#x27;:&#x27;&#x27;)).join(&#x27;&#x27;)}`,
+        choice=&gt;{$(&#x27;modelName&#x27;).textContent=choice; showToast(&#x27;Chỉ thay đổi lựa chọn UI; chưa kết nối model.&#x27;);}));
+      $(&#x27;modeButton&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;openPopup($(&#x27;modeButton&#x27;),
+        `&lt;div class=&quot;pop-caption&quot;&gt;Execution mode&lt;/div&gt;${[&#x27;Plan&#x27;,&#x27;Build&#x27;,&#x27;Ask&#x27;].map(m=&gt;row(m,m,&#x27;check&#x27;,m===$(&#x27;modeName&#x27;).textContent?&#x27;✓&#x27;:&#x27;&#x27;)).join(&#x27;&#x27;)}`,
+        choice=&gt;{$(&#x27;modeName&#x27;).textContent=choice;}));
+      $(&#x27;branchButton&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;openPopup($(&#x27;branchButton&#x27;),
+        `&lt;div class=&quot;pop-caption&quot;&gt;Branch · preview&lt;/div&gt;${row(&#x27;main&#x27;,&#x27;main&#x27;,&#x27;branch&#x27;,&#x27;✓&#x27;)}${row(&#x27;feature&#x27;,&#x27;feature/ui-refine&#x27;,&#x27;branch&#x27;)}`,
+        choice=&gt;{$(&#x27;branchName&#x27;).textContent=choice===&#x27;main&#x27;?&#x27;main&#x27;:&#x27;feature/ui-refine&#x27;; showToast(&#x27;Đã đổi branch hiển thị (demo).&#x27;);}));
+      document.addEventListener(&#x27;pointerdown&#x27;,e=&gt;{ if(!$(&#x27;popup&#x27;).hidden &amp;&amp; !$(&#x27;popup&#x27;).contains(e.target) &amp;&amp; !popupSource?.contains(e.target))closePopup(); });
+
+      function createSession() {
+        const id=++sessionCounter; sessions.unshift({id,name:`New session ${id}`,initial:false}); activateSession(id);
+        persistSessions();
+        $(&#x27;composerInput&#x27;).focus(); showToast(&#x27;Đã tạo session mới trong prototype.&#x27;);
+      }
+      const originalChat=$(&#x27;conversationInner&#x27;).innerHTML;
+      const chatBySession=new Map([[1,originalChat]]);
+      const SESSION_STORE_KEY=&#x27;dsh_ui_sessions_v2&#x27;;
+      function persistSessions() {
+        if(!pref.restoreSession)return;
+        try {
+          chatBySession.set(currentSession,$(&#x27;conversationInner&#x27;).innerHTML);
+          localStorage.setItem(SESSION_STORE_KEY,JSON.stringify({sessions,currentSession,sessionCounter,chat:Object.fromEntries(chatBySession)}));
+        } catch(err) { /* Private mode or unavailable storage */ }
+      }
+      function restoreSessions() {
+        if(!pref.restoreSession)return;
+        try {
+          const state=JSON.parse(localStorage.getItem(SESSION_STORE_KEY)||&#x27;null&#x27;);
+          if(!state || !Array.isArray(state.sessions) || state.sessions.length===0)return;
+          const valid=state.sessions.filter(s=&gt;Number.isInteger(s.id)&amp;&amp;typeof s.name===&#x27;string&#x27;).slice(0,80);
+          if(!valid.length)return;
+          sessions=valid;
+          sessionCounter=Math.max(...valid.map(s=&gt;s.id),Number(state.sessionCounter)||0);
+          currentSession=valid.some(s=&gt;s.id===state.currentSession)?state.currentSession:valid[0].id;
+          chatBySession.clear();
+          for(const [id,chat] of Object.entries(state.chat||{})) {
+            if(/^\d+$/.test(id) &amp;&amp; typeof chat===&#x27;string&#x27; &amp;&amp; chat.length&lt;150000)chatBySession.set(Number(id),chat);
+          }
+          const session=sessions.find(s=&gt;s.id===currentSession);
+          $(&#x27;sessionName&#x27;).textContent=session.name;
+          $(&#x27;conversationInner&#x27;).innerHTML=chatBySession.get(currentSession)||`&lt;div class=&quot;session-empty&quot;&gt;&lt;div&gt;${icon(&#x27;chat&#x27;,&#x27;lg&#x27;)}&lt;h2&gt;${esc(session.name)}&lt;/h2&gt;&lt;p&gt;Start a conversation in this workspace.&lt;/p&gt;&lt;/div&gt;&lt;/div&gt;`;
+        }catch(err){}
+      }
+      function activateSession(id) {
+        chatBySession.set(currentSession,$(&#x27;conversationInner&#x27;).innerHTML);
+        currentSession=id;
+        const s=sessions.find(x=&gt;x.id===id); if(!s)return;
+        $(&#x27;sessionName&#x27;).textContent=s.name;
+        $(&#x27;conversationInner&#x27;).innerHTML=chatBySession.get(id) || `&lt;div class=&quot;session-empty&quot;&gt;&lt;div&gt;${icon(&#x27;chat&#x27;,&#x27;lg&#x27;)}&lt;h2&gt;${esc(s.name)}&lt;/h2&gt;&lt;p&gt;Start a conversation in this workspace.&lt;/p&gt;&lt;/div&gt;&lt;/div&gt;`;
+        persistSessions();
+        $(&#x27;conversation&#x27;).scrollTop=0; closePopup();
+      }
+      $(&#x27;composerForm&#x27;).addEventListener(&#x27;submit&#x27;,e=&gt;{
+        e.preventDefault(); const input=$(&#x27;composerInput&#x27;),value=input.value.trim(); if(!value)return;
+        const inner=$(&#x27;conversationInner&#x27;);
+        const empty=inner.querySelector(&#x27;.session-empty&#x27;); if(empty)empty.remove();
+        const now=new Date().toLocaleTimeString(&#x27;vi-VN&#x27;,{hour:&#x27;2-digit&#x27;,minute:&#x27;2-digit&#x27;});
+        const msg=document.createElement(&#x27;article&#x27;); msg.className=&#x27;message&#x27;;
+        msg.innerHTML=`&lt;div class=&quot;avatar&quot;&gt;U&lt;/div&gt;&lt;div&gt;&lt;div class=&quot;speaker&quot;&gt;&lt;span&gt;You&lt;/span&gt;&lt;time&gt;${esc(now)}&lt;/time&gt;&lt;/div&gt;&lt;p style=&quot;white-space:pre-wrap&quot;&gt;&lt;/p&gt;&lt;/div&gt;`;
+        msg.querySelector(&#x27;p&#x27;).textContent=value; inner.appendChild(msg);
+        const notice=document.createElement(&#x27;div&#x27;);notice.className=&#x27;demo-msg&#x27;;notice.textContent=&#x27;Prototype: tin nhắn đã được thêm vào giao diện, chưa gửi tới model hoặc backend DSH.&#x27;;inner.appendChild(notice);
+        input.value=&#x27;&#x27;; input.style.height=&#x27;auto&#x27;; $(&#x27;conversation&#x27;).scrollTop=$(&#x27;conversation&#x27;).scrollHeight;
+        const active=sessions.find(s=&gt;s.id===currentSession);
+        if(active?.name.startsWith(&#x27;New session&#x27;)) {active.name=value.slice(0,45);$(&#x27;sessionName&#x27;).textContent=active.name;}
+        persistSessions();
+      });
+      $(&#x27;composerInput&#x27;).addEventListener(&#x27;keydown&#x27;,e=&gt;{ if(e.key===&#x27;Enter&#x27; &amp;&amp; !e.shiftKey &amp;&amp; !e.isComposing){e.preventDefault();$(&#x27;composerForm&#x27;).requestSubmit();} });
+      $(&#x27;composerInput&#x27;).addEventListener(&#x27;input&#x27;,()=&gt;{const el=$(&#x27;composerInput&#x27;);el.style.height=&#x27;auto&#x27;;el.style.height=`${Math.min(el.scrollHeight,130)}px`;});
+      $(&#x27;attachButton&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;showToast(&#x27;Đính kèm file: UI demo. Chưa truy cập filesystem.&#x27;));
+      $(&#x27;mentionButton&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;{$(&#x27;composerInput&#x27;).value+=&#x27;@&#x27;;$(&#x27;composerInput&#x27;).focus();});
+
+      function toggleExplorer() { $(&#x27;app&#x27;).classList.toggle(&#x27;explorer-hidden&#x27;); if(pref.restorePanels)persistPanelState(); }
+      function toggleChanges() { $(&#x27;app&#x27;).classList.toggle(&#x27;changes-hidden&#x27;); $(&#x27;app&#x27;).classList.toggle(&#x27;show-changes&#x27;,!$(&#x27;app&#x27;).classList.contains(&#x27;changes-hidden&#x27;)); if(pref.restorePanels)persistPanelState(); }
+      function toggleTerminal() { const open=$(&#x27;terminalPanel&#x27;).hidden; $(&#x27;terminalPanel&#x27;).hidden=!open;$(&#x27;terminalToggle&#x27;).classList.toggle(&#x27;active&#x27;,open);if(open)$(&#x27;terminalInput&#x27;).focus(); }
+      $(&#x27;toggleChangesTop&#x27;).addEventListener(&#x27;click&#x27;,toggleChanges);
+      $(&#x27;gitButton&#x27;).addEventListener(&#x27;click&#x27;,()=&gt; { $(&#x27;app&#x27;).classList.remove(&#x27;changes-hidden&#x27;);$(&#x27;app&#x27;).classList.add(&#x27;show-changes&#x27;);setChangeTab(&#x27;diff&#x27;);showToast(&#x27;Changes panel&#x27;); });
+      $(&#x27;terminalToggle&#x27;).addEventListener(&#x27;click&#x27;,toggleTerminal);
+      $(&#x27;closeTerminal&#x27;).addEventListener(&#x27;click&#x27;,toggleTerminal);
+      $(&#x27;problemsButton&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;showToast(&#x27;2 Problems (mock): no diagnostics service connected.&#x27;));
+      $(&#x27;syncButton&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;showToast(&#x27;Sync is not connected in this HTML prototype.&#x27;));
+      $(&#x27;terminalForm&#x27;).addEventListener(&#x27;submit&#x27;,e=&gt;{
+        e.preventDefault(); const val=$(&#x27;terminalInput&#x27;).value.trim(),out=$(&#x27;terminalOutput&#x27;);if(!val)return;
+        const mock={help:&#x27;Available demo commands: help, pwd, ls, clear&#x27;,pwd:`~/projects/${workspace}`,ls:&#x27;NhiDong  README.md  package.json  tests&#x27;,clear:&#x27;&#x27;};
+        out.textContent=val===&#x27;clear&#x27;?&#x27;&#x27;:`${out.textContent}\n❯ ${val}\n${Object.hasOwn(mock,val)?mock[val]:&#x27;Preview terminal: command not executed.&#x27;}`;
+        $(&#x27;terminalInput&#x27;).value=&#x27;&#x27;;out.scrollTop=out.scrollHeight;
+      });
+
+      function getFiles(nodes,prefix=&#x27;&#x27;,out=[]) { for(const n of nodes){const path=prefix?`${prefix}/${n.name}`:n.name;if(n.children)getFiles(n.children,path,out);else out.push(path);}return out; }
+      function openSearch() { $(&#x27;commandLayer&#x27;).hidden=false;$(&#x27;commandInput&#x27;).value=&#x27;&#x27;;renderSearch();$(&#x27;commandInput&#x27;).focus(); }
+      function closeSearch() { $(&#x27;commandLayer&#x27;).hidden=true; }
+      $(&#x27;searchButton&#x27;).addEventListener(&#x27;click&#x27;,openSearch);
+      $(&#x27;commandLayer&#x27;).addEventListener(&#x27;click&#x27;,e=&gt;{if(e.target===$(&#x27;commandLayer&#x27;))closeSearch();});
+      function renderSearch() {
+        const q=$(&#x27;commandInput&#x27;).value.toLowerCase();
+        const candidates=[...getFiles(data[workspace].files).map(p=&gt;({label:p,type:&#x27;file&#x27;})),
+          {label:&#x27;Toggle Terminal&#x27;,type:&#x27;command&#x27;},{label:&#x27;Toggle Explorer&#x27;,type:&#x27;command&#x27;},
+          {label:&#x27;New Session&#x27;,type:&#x27;command&#x27;},{label:&#x27;Settings&#x27;,type:&#x27;command&#x27;},
+          {label:&#x27;Appearance&#x27;,type:&#x27;command&#x27;},{label:&#x27;Keymap&#x27;,type:&#x27;command&#x27;},
+          {label:&#x27;Extensions&#x27;,type:&#x27;command&#x27;},{label:&#x27;Skills&#x27;,type:&#x27;command&#x27;},
+          {label:&#x27;Marketplace&#x27;,type:&#x27;command&#x27;}];
+        const found=candidates.filter(x=&gt;x.label.toLowerCase().includes(q)).slice(0,12);
+        $(&#x27;commandResults&#x27;).innerHTML=found.map((x,i)=&gt;`&lt;button class=&quot;pop-row&quot; data-search-index=&quot;${i}&quot;&gt;${icon(x.type===&#x27;file&#x27;?&#x27;file&#x27;:&#x27;search&#x27;,&#x27;sm&#x27;)}&lt;span&gt;${esc(x.label)}&lt;/span&gt;&lt;span class=&quot;end&quot;&gt;${x.type}&lt;/span&gt;&lt;/button&gt;`).join(&#x27;&#x27;)||&#x27;&lt;div class=&quot;pop-caption&quot;&gt;No results&lt;/div&gt;&#x27;;
+        $(&#x27;commandResults&#x27;)._results=found;
+      }
+      $(&#x27;commandInput&#x27;).addEventListener(&#x27;input&#x27;,renderSearch);
+      $(&#x27;commandResults&#x27;).addEventListener(&#x27;click&#x27;,e=&gt;{
+        const btn=e.target.closest(&#x27;[data-search-index]&#x27;);if(!btn)return;
+        const item=$(&#x27;commandResults&#x27;)._results[Number(btn.dataset.searchIndex)];closeSearch();
+        if(item.type===&#x27;file&#x27;){selectedFile=item.label;renderTree();showFilePreview(item.label);}else{
+          if(item.label===&#x27;Toggle Terminal&#x27;)toggleTerminal(); if(item.label===&#x27;Toggle Explorer&#x27;)toggleExplorer();
+          if(item.label===&#x27;New Session&#x27;)createSession();
+          if([&#x27;Settings&#x27;,&#x27;Appearance&#x27;,&#x27;Keymap&#x27;,&#x27;Extensions&#x27;,&#x27;Skills&#x27;,&#x27;Marketplace&#x27;].includes(item.label))openSettings(item.label===&#x27;Settings&#x27;?&#x27;general&#x27;:item.label.toLowerCase());
+        }
+      });
+      $(&#x27;commandInput&#x27;).addEventListener(&#x27;keydown&#x27;,e=&gt;{if(e.key===&#x27;Enter&#x27;){$(&#x27;commandResults&#x27;).querySelector(&#x27;button&#x27;)?.click();}});
+      document.addEventListener(&#x27;keydown&#x27;,e=&gt;{
+        if(shortcutRecording) {
+          if(e.key===&#x27;Escape&#x27;) { e.preventDefault();shortcutRecording=null;renderSettings();return; }
+          const chord=chordFromEvent(e);
+          if(chord) { e.preventDefault(); saveShortcut(shortcutRecording,chord); }
+          return;
+        }
+        if(e.key===&#x27;Escape&#x27;) { closePopup();closeSearch();closeSettings(); return; }
+        const chord=chordFromEvent(e); if(!chord)return;
+        const matches=Object.keys(actions).find(id=&gt;getBinding(id)===chord);
+        if(matches) { e.preventDefault(); actions[matches](); }
+      });
+      function enableSplitter(id,side) {
+        const grip=$(id); let start=0, orig=0;
+        grip.addEventListener(&#x27;pointerdown&#x27;,e=&gt;{
+          if(innerWidth&lt;950)return;
+          start=e.clientX;orig=parseFloat(getComputedStyle(document.documentElement).getPropertyValue(side===&#x27;left&#x27;?&#x27;--left-w&#x27;:&#x27;--right-w&#x27;));
+          document.body.classList.add(&#x27;dragging-ui&#x27;);grip.classList.add(&#x27;dragging&#x27;);grip.setPointerCapture(e.pointerId);
+        });
+        grip.addEventListener(&#x27;pointermove&#x27;,e=&gt;{
+          if(!grip.hasPointerCapture(e.pointerId))return;
+          const delta=e.clientX-start;
+          const max=side===&#x27;left&#x27;?Math.min(450,innerWidth-700):Math.min(750,innerWidth-620);
+          const size=Math.round(Math.max(side===&#x27;left&#x27;?195:300,Math.min(max,orig+(side===&#x27;left&#x27;?delta:-delta))));
+          document.documentElement.style.setProperty(side===&#x27;left&#x27;?&#x27;--left-w&#x27;:&#x27;--right-w&#x27;,`${size}px`);
+        });
+        for(const ev of [&#x27;pointerup&#x27;,&#x27;pointercancel&#x27;])grip.addEventListener(ev,()=&gt;{document.body.classList.remove(&#x27;dragging-ui&#x27;);grip.classList.remove(&#x27;dragging&#x27;);});
+      }
+      enableSplitter(&#x27;leftSplitter&#x27;,&#x27;left&#x27;);enableSplitter(&#x27;rightSplitter&#x27;,&#x27;right&#x27;);
+      $(&#x27;reviewAll&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;{setChangeTab(&#x27;diff&#x27;);$(&#x27;reviewChanges&#x27;).focus();showToast(&#x27;Review diff trước khi đánh dấu đã xem.&#x27;);});
+      $(&#x27;reviewChanges&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;{
+        const b=$(&#x27;reviewChanges&#x27;),already=b.dataset.reviewed===&#x27;1&#x27;;
+        b.dataset.reviewed=already?&#x27;0&#x27;:&#x27;1&#x27;;b.textContent=already?&#x27;Review changes&#x27;:&#x27;Reviewed ✓&#x27;;
+        showToast(already?&#x27;Đã bỏ đánh dấu reviewed.&#x27;:&#x27;Đã đánh dấu reviewed trong UI demo.&#x27;);
+      });
+      $(&#x27;discardButton&#x27;).addEventListener(&#x27;click&#x27;,()=&gt;showToast(&#x27;Discard bị vô hiệu trong prototype; không có tệp nào bị thay đổi.&#x27;));
+      function persistPanelState() {
+        try { localStorage.setItem(&#x27;dsh_ui_panels_v2&#x27;,JSON.stringify({explorer:!$(&#x27;app&#x27;).classList.contains(&#x27;explorer-hidden&#x27;),changes:!$(&#x27;app&#x27;).classList.contains(&#x27;changes-hidden&#x27;)})); } catch(err){}
+      }
+      if(pref.restorePanels) {
+        try {const p=JSON.parse(localStorage.getItem(&#x27;dsh_ui_panels_v2&#x27;)||&#x27;null&#x27;);if(p){$(&#x27;app&#x27;).classList.toggle(&#x27;explorer-hidden&#x27;,!p.explorer);$(&#x27;app&#x27;).classList.toggle(&#x27;changes-hidden&#x27;,!p.changes)}}catch(err){}
+      }
+      restoreSessions();renderTree();renderDiff();setChangeTab(&#x27;diff&#x27;);
+    })();
+  &lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+" loading="eager"></iframe></div><div class="reference-footnote"><span>UI V2 approved · interactive prototype · offline demo data</span><span>Chrome heights 30 / 34 / 26px · native GPUI implementation not shown</span></div></section>
+<section class="section" id="components"><div class="section-top"><div><h2><span class="section-num">03 /</span> Component grammar</h2><p class="section-description">Tokens chỉ là nền. Mỗi component có trạng thái, focus, keyboard, scope hành động và lời giải thích khi thất bại.</p></div><div class="section-hint">PRIMITIVES + PRODUCT COMPOSITES</div></div>
+<div class="components-grid"><article class="surface"><div class="block-head"><strong>Actions</strong><small>Button / IconButton</small></div><div class="component-body"><div class="button-row"><button type="button" class="button-primary" id="primaryDemo">Primary</button><button type="button" class="button-secondary" id="secondaryDemo">Secondary</button><button type="button" class="button-danger" id="dangerDemo">Destructive</button></div><div class="button-row" style="margin-top:14px"><button disabled type="button" class="button-primary">Disabled</button><button type="button" class="plain-btn" id="keyboardDemo">⌘ Keyboard</button></div><p class="hint">Một hành động chính trong mỗi khu vực quyết định. Disabled phải có lý do; danger có xác nhận phạm vi.</p></div></article>
+<article class="surface"><div class="block-head"><strong>Fields & validation</strong><small>TextField / Form</small></div><div class="component-body"><label class="field-label" for="fieldDemo">Session name</label><input class="field" id="fieldDemo" placeholder="Name this session" value="Design system rollout"><p class="hint" style="margin:7px 0 14px">This name is local to the workspace.</p><label class="field-label" for="fieldErrorDemo">Shortcut conflict</label><input class="field error" id="fieldErrorDemo" value="Ctrl+P" aria-invalid="true" aria-describedby="shortcutError"><div class="field-error" id="shortcutError">Already assigned to Quick Open.</div></div></article>
+<article class="surface"><div class="block-head"><strong>Status semantics</strong><small>Badge / Alert / Progress</small></div><div class="component-body"><div class="badge-row"><span class="badge">Idle</span><span class="badge success">Completed</span><span class="badge warn">Approval</span><span class="badge danger">Failed</span></div><div class="notice" style="margin-top:18px"><span class="notice-icon">⚠</span><div><strong>Needs your attention</strong><span>Permission is required before the shell command can run.</span></div></div><p class="hint">Color reinforces language. It never replaces labels or action scope.</p></div></article>
+<article class="surface"><div class="block-head"><strong>Preferences</strong><small>Switch / Segmented</small></div><div class="component-body"><div class="state-line"><div><strong style="font-size:11.5px">Restore last session</strong><br><small>Client-local setting</small></div><button role="switch" aria-checked="true" class="switch" id="switchDemo" aria-label="Restore last session"><i></i></button></div><div class="state-line"><div><strong style="font-size:11.5px">Theme mode</strong><br><small>Applied across windows</small></div><span class="kbd">Dark</span></div><p class="hint">Switch chỉ dùng cho thay đổi áp dụng ngay. Cấu hình Host phải đợi xác nhận ghi thành công.</p></div></article>
+<article class="surface"><div class="block-head"><strong>Loading, empty & error</strong><small>Skeleton / EmptyState</small></div><div class="component-body"><div class="skeleton" aria-hidden="true"><span></span><span></span><span></span></div><p class="hint">Chỉ render skeleton khi dữ liệu thật đang tải. No result, permission denied và Host disconnected là ba trạng thái khác nhau.</p><button type="button" class="button-secondary" id="emptyDemo" style="margin-top:6px">View error example</button></div></article>
+<article class="surface"><div class="block-head"><strong>Keyboard & focus</strong><small>CommandPalette / Kbd</small></div><div class="component-body"><div style="font-size:11.5px;line-height:2.5">Quick Open <span style="float:right" class="kbd">Ctrl P</span><br>Command Palette <span style="float:right" class="kbd">Ctrl Shift P</span><br>Dismiss overlay <span style="float:right" class="kbd">Esc</span></div><button type="button" class="button-secondary" id="paletteDemo" style="margin-top:10px">Open palette</button><p class="hint">Focus ring 2px, Escape đúng tầng phủ, trả focus về nguồn mở.</p></div></article></div></section>
+<section class="section" id="patterns"><div class="section-top"><div><h2><span class="section-num">04 /</span> Critical UX patterns</h2><p class="section-description">Một flow phải giúp người dùng biết chuyện gì đã xảy ra, có quyền quyết định hay không, và điều gì là thật từ runtime.</p></div></div><div class="patterns">
+<article class="surface pattern"><div class="eyebrow" style="margin-bottom:8px">01 / Healthy run</div><strong>Read → Change → Verify</strong><div class="step"><span class="index">1</span>Inspect source / show evidence</div><div class="step"><span class="index">2</span>Apply explicit, bounded edits</div><div class="step"><span class="index">3</span>Run checks / attach outcomes</div><div class="step"><span class="index">4</span>Review actual diff, no fake pass</div></article>
+<article class="surface pattern"><div class="eyebrow" style="margin-bottom:8px">02 / Human in control</div><strong>Approval with exact scope</strong><div class="step"><span class="index">1</span>Explain tool, target and risk</div><div class="step"><span class="index">2</span>Allow once / Deny, only</div><div class="step"><span class="index">3</span>Wait for Host acknowledgment</div><div class="step"><span class="index">4</span>Display truthful outcome</div></article>
+<article class="surface pattern"><div class="eyebrow" style="margin-bottom:8px">03 / Recovery</div><strong>Failure is a state, not a dead end</strong><div class="step"><span class="index">1</span>Name what failed and why</div><div class="step"><span class="index">2</span>Keep draft, selection and context</div><div class="step"><span class="index">3</span>Offer safe retry / copy details</div><div class="step"><span class="index">4</span>Reconcile with actual Host state</div></article></div></section>
+<section class="section" id="quality"><div class="section-top"><div><h2><span class="section-num">05 /</span> Quality is the feature</h2><p class="section-description">Không đánh đồng `cargo check` với UI PASS. Native screenshots, input automation, Host-backed flows và keyboard/regression là gate thực sự.</p></div></div><div class="checklist"><div class="metric"><b>4.5:1</b><span>Readable text contrast on actual surface</span></div><div class="metric"><b>30 / 34 / 26</b><span>Locked chrome heights from the V2 handoff</span></div><div class="metric"><b>100 / 125 / 150%</b><span>UI scale / responsive checks</span></div><div class="metric"><b>Native GPUI</b><span>Evidence from actual app, not only this HTML</span></div></div></section>
+<div class="footer"><span>DSH / Quiet Precision — Design System 1.2 · Offline reference</span><span>Architecture remains agent-first; current Host is authoritative.</span></div>
+</div></main></div>
+<div class="overlay" id="dialogOverlay" role="presentation"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="dialogTitle"><div class="modal-label">Destructive action · Demo</div><h3 id="dialogTitle">Discard file changes?</h3><p>Discarding <code>src/shell/theme.rs</code> is irreversible without a separate history. This specimen will not change any real files.</p><div class="modal-actions"><button type="button" class="button-secondary" id="dialogCancel">Cancel</button><button type="button" class="button-danger" id="dialogConfirm">Discard (preview)</button></div></div></div>
+<div class="overlay" id="paletteOverlay" role="presentation"><div class="palette-modal" role="dialog" aria-modal="true" aria-label="Command palette preview"><input id="paletteInput" class="search" placeholder="Type a command…" aria-label="Search commands"><div class="palette-result">⌕ &nbsp; Open workspace <small>Ctrl O</small></div><div class="palette-result">▣ &nbsp; Toggle Changes <small>Ctrl Shift D</small></div><div class="palette-result">⚙ &nbsp; Preferences <small>Ctrl ,</small></div><div class="palette-result">◎ &nbsp; Switch Session <small>—</small></div></div></div>
+<div class="toast" id="toast" role="status"><b id="toastTitle">Preview action</b><span id="toastBody">No Host operations are performed in this offline specimen.</span></div>
+<script>
+(()=>{
+const root=document.documentElement,$=id=>document.getElementById(id);
+let lastFocus=null,toastTimer=null;
+function updateTokens(){const cs=getComputedStyle(root);document.querySelectorAll('[data-token-color]').forEach(n=>{n.textContent=cs.getPropertyValue('--'+n.dataset.tokenColor).trim().toUpperCase()})}
+function choice(kind,value){root.dataset[kind]=value;document.querySelectorAll('[data-'+kind+'-btn]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset[kind+'Btn']===value)));updateTokens()}
+['theme','accent','density'].forEach(kind=>document.querySelectorAll('[data-'+kind+'-btn]').forEach(b=>b.addEventListener('click',()=>choice(kind,b.dataset[kind+'Btn']))));updateTokens();
+// Design system page settings are independent from the embedded approved V2. Configure its own themes via Preferences.
+function toast(title,body){clearTimeout(toastTimer);$('toastTitle').textContent=title;$('toastBody').textContent=body||'This is an offline design reference, not the DSH Host.';$('toast').classList.add('show');toastTimer=setTimeout(()=>$('toast').classList.remove('show'),3900)}
+function overlay(id){lastFocus=document.activeElement;$(id).classList.add('open');setTimeout(()=>$(id).querySelector('input,button')?.focus(),10)}
+function close(id){$(id).classList.remove('open');if(lastFocus?.isConnected)lastFocus.focus()}
+$('dialogCancel').onclick=()=>close('dialogOverlay');$('dialogConfirm').onclick=()=>{close('dialogOverlay');toast('No changes made','Native DSH must require Host-confirmed scope and version checks.')};
+$('paletteDemo').onclick=()=>overlay('paletteOverlay');$('keyboardDemo').onclick=()=>overlay('paletteOverlay');
+$('dangerDemo').onclick=()=>overlay('dialogOverlay');
+for(const id of ['dialogOverlay','paletteOverlay'])$(id).addEventListener('click',e=>{if(e.target===$(id))close(id)});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){for(const id of ['paletteOverlay','dialogOverlay'])if($(id).classList.contains('open')){close(id);e.preventDefault();break}}if((e.ctrlKey||e.metaKey)&&e.shiftKey&&e.key.toLowerCase()==='p'&&document.activeElement!==$('approvedV2')){e.preventDefault();overlay('paletteOverlay')}});
+for(const id of ['primaryDemo','secondaryDemo','emptyDemo'])$(id).onclick=()=>toast('Component interaction preview','No real session, model, file, or runtime operation occurred.');
+$('switchDemo').onclick=()=>{const b=$('switchDemo');b.setAttribute('aria-checked',String(b.getAttribute('aria-checked')!=='true'))};
+document.querySelectorAll('.nav a').forEach(a=>a.addEventListener('click',()=>{document.querySelectorAll('.nav a').forEach(x=>x.classList.remove('current'));a.classList.add('current')}));
+})();
+</script>
+</body></html>
