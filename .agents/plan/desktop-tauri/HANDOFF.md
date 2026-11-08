@@ -2,6 +2,12 @@
 
 Cập nhật 2026-11-07. Mục đích: session mới đọc file này là biết đang ở đâu, cái gì đã xong, cái gì nên làm tiếp và bẫy nào đã mắc.
 
+## Định hướng 2026-11-08 — UI completion (đọc trước)
+
+Công việc mới nhất nằm ở worktree **`~/deepseek-harness-merge`**, nhánh **`merge/upstream-0.2.2`** (đã merge upstream `dsh-v0.2.2-rc.1`). Ở đó có handoff đầy đủ, AppImage trial đã cài tại `~/.local/bin/deepseek-harness`, full test suite xanh, và mục **"UI completion — đầu vào cho session sau"**.
+
+Nhánh này (`chore/web-bun-migration`) mới là lane chính trước merge; **chưa nhận** `merge/upstream-0.2.2`. Session sau lập plan hoàn thiện UI trên nhánh merge rồi mới quyết định merge ngược.
+
 > **Đọc theo mốc thời gian.** Các mục ghi ngày ≤ 2026-11-01 mô tả shell **egui** mà ngày 2026-11-06 đã bị xoá (xem mục cuối). Chúng được giữ làm lịch sử quyết định và bẫy, không phải trạng thái hiện tại.
 
 ## Trạng thái hiện tại — 2026-11-07
