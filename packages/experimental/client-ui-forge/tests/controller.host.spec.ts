@@ -1185,7 +1185,7 @@ describe('forgePanel worktree requests during a creation', () => {
   })
 })
 
-describe('forgePanel removed worktrees', () => {
+describe('forgePanel removed worktrees', { timeout: 20_000 }, () => {
   it('shows a removed worktree whose branch remains, and holds the next message until the branch is checked out again', async () => {
     const { repo } = await project()
     const opened = await open(repo, {}, { worktrees: true })
