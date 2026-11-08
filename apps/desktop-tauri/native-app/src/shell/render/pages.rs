@@ -5,6 +5,7 @@ use gpui::{div, prelude::*, StatefulInteractiveElement, px, AnyElement, Context}
 
 use crate::assets::Icon;
 use crate::layout;
+use crate::theme::remote::ThemeProvenance;
 use crate::theme::{
     resolve, ContrastStatus, ThemeRequest, ThemeSource, CUSTOM_PACK_ID,
 };
@@ -814,7 +815,14 @@ fn preferences_appearance(
     let accent = app.ui_preferences.accent_scheme;
     let theme_notice = theme.status.errors.join("; ");
     let selected_theme = app.ui_preferences.theme_id.clone();
-    let mut theme_rows: Vec<(String, String, ThemeSource, Option<ContrastStatus>, bool)> = app
+    let mut theme_rows: Vec<(
+        String,
+        String,
+        ThemeSource,
+        Option<ContrastStatus>,
+        bool,
+        Option<ThemeProvenance>,
+    )> = app
         .theme_catalog
         .themes()
         .iter()
@@ -826,6 +834,7 @@ fn preferences_appearance(
                 installed.source,
                 app.theme_catalog.contrast_status(&id, accent, dark),
                 true,
+                installed.provenance.clone(),
             )
         })
         .collect();
@@ -848,12 +857,14 @@ fn preferences_appearance(
             ContrastStatus::Warnings(custom.status.warnings.len())
         }),
         false,
+        None,
     ));
     let theme_errors = app.theme_catalog.errors().to_vec();
     let theme_remove_confirm = app.theme_remove_confirm.clone();
     let theme_pending_replace = app.theme_pending_import.is_some();
     let theme_message = app.theme_message.clone();
     let editor_id = app.theme_editor.as_ref().map(|editor| editor.id.clone());
+    let github_dialog_open = app.github_dialog.is_some();
 
     let mut content = div().flex().flex_col().gap(theme.sp(8.)).child(preferences_page_head(
         theme,
@@ -912,6 +923,19 @@ fn preferences_appearance(
                             cx.notify();
                         })),
                 )
+                .child(
+                    widgets::Button::new(theme, "Add from GitHub…")
+                        .build()
+                        .id("pref-theme-github")
+                        .debug_selector(|| "pref-theme-github".to_owned())
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.open_github_dialog();
+                            app.set_input("github-source", "", cx);
+                            app.set_input("github-ref", "", cx);
+                            app.set_input("github-path", "", cx);
+                            cx.notify();
+                        })),
+                )
                 .when(theme_pending_replace, |element| {
                     element.child(
                         widgets::Button::new(theme, "Replace theme file")
@@ -926,6 +950,9 @@ fn preferences_appearance(
                     )
                 }),
         )
+        .when(github_dialog_open, |element| {
+            element.child(github_theme_panel(app, theme, cx))
+        })
         .when_some(theme_message, |element, message| {
             element.child(
                 div()
@@ -935,7 +962,7 @@ fn preferences_appearance(
             )
         })
         .children(theme_rows.into_iter().map(
-            |(id, name, source, contrast, file_backed)| {
+            |(id, name, source, contrast, file_backed, provenance)| {
                 theme_pack_row(
                     theme,
                     id,
@@ -943,6 +970,7 @@ fn preferences_appearance(
                     source,
                     contrast,
                     file_backed,
+                    provenance,
                     selected_theme.as_str(),
                     theme_remove_confirm.as_deref(),
                     cx,
@@ -1095,7 +1123,7 @@ fn preferences_appearance(
     content.into_any_element()
 }
 
-/// One installed pack with its source, contrast status, and file actions.
+/// One installed pack with its source, contrast status, and actions.
 fn theme_pack_row(
     theme: &Theme,
     id: String,
@@ -1103,11 +1131,14 @@ fn theme_pack_row(
     source: ThemeSource,
     contrast: Option<ContrastStatus>,
     file_backed: bool,
+    provenance: Option<ThemeProvenance>,
     selected: &str,
     remove_confirm: Option<&str>,
     cx: &mut Context<DesktopApp>,
 ) -> AnyElement {
     let is_user = source == ThemeSource::User;
+    let is_github = source == ThemeSource::Github;
+    let can_remove = source != ThemeSource::Builtin;
     let already_selected = selected == id;
     let confirming_remove = remove_confirm == Some(id.as_str());
     let row_selector = id.clone();
@@ -1122,6 +1153,27 @@ fn theme_pack_row(
     let export_selector = id.clone();
     let remove_id = id.clone();
     let remove_selector = id.clone();
+    let update_id = id.clone();
+    let update_selector = id.clone();
+    let provenance_selector = id.clone();
+
+    let edit_reason = match source {
+        ThemeSource::User => None,
+        ThemeSource::Github => {
+            Some("Cached GitHub packs are read-only; Duplicate one to edit its colours.")
+        }
+        ThemeSource::Builtin => {
+            Some("Built-in themes are read-only; Duplicate one to edit its colours.")
+        }
+    };
+    let provenance_text = provenance.map(|meta| {
+        let ref_name = if meta.ref_name.is_empty() {
+            "raw URL".to_owned()
+        } else {
+            format!("ref {}", meta.ref_name)
+        };
+        format!("{} · {ref_name}", meta.source_url)
+    });
 
     div()
         .flex()
@@ -1190,11 +1242,8 @@ fn theme_pack_row(
                     "pref-theme-edit-{edit_id}"
                 )))
                 .debug_selector(move || format!("pref-theme-edit-{edit_selector}"))
-                .when(!is_user, |button| {
-                    button.tooltip(widgets::HintView::tooltip(
-                        theme,
-                        "Built-in themes are read-only; Duplicate one to edit its colours.",
-                    ))
+                .when_some(edit_reason, |button, reason| {
+                    button.tooltip(widgets::HintView::tooltip(theme, reason))
                 })
                 .when(is_user, |button| {
                     button.on_click(cx.listener(move |app, _, _, cx| {
@@ -1226,26 +1275,221 @@ fn theme_pack_row(
         )
         .child(
             widgets::Button::new(theme, if confirming_remove { "Confirm remove" } else { "Remove" })
-                .enabled(is_user)
+                .enabled(can_remove)
                 .danger()
                 .build()
                 .id(gpui::SharedString::from(format!(
                     "pref-theme-remove-{remove_id}"
                 )))
                 .debug_selector(move || format!("pref-theme-remove-{remove_selector}"))
-                .when(!is_user, |button| {
+                .when(!can_remove, |button| {
                     button.tooltip(widgets::HintView::tooltip(
                         theme,
                         "Built-in themes cannot be removed.",
                     ))
                 })
-                .when(is_user, |button| {
+                .when(can_remove, |button| {
                     button.on_click(cx.listener(move |app, _, window, cx| {
                         app.remove_theme(&remove_id, window);
                         cx.notify();
                     }))
                 }),
         )
+        .when(is_github, |row| {
+            row.child(
+                widgets::Button::new(theme, "Check for updates")
+                    .build()
+                    .id(gpui::SharedString::from(format!(
+                        "pref-theme-update-{update_id}"
+                    )))
+                    .debug_selector(move || format!("pref-theme-update-{update_selector}"))
+                    .on_click(cx.listener(move |app, _, _, cx| {
+                        app.update_github_theme(&update_id);
+                        cx.notify();
+                    })),
+            )
+        })
+        .when_some(provenance_text, |row, text| {
+            row.child(
+                div()
+                    .text_size(theme.fs(9.5))
+                    .text_color(theme.muted)
+                    .debug_selector(move || {
+                        format!("pref-theme-provenance-{provenance_selector}")
+                    })
+                    .child(text),
+            )
+        })
+        .into_any_element()
+}
+
+/// In-app form for checking and importing one GitHub theme source.
+fn github_theme_panel(
+    app: &mut DesktopApp,
+    theme: &Theme,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
+    let (busy, status, error) = app
+        .github_dialog
+        .as_ref()
+        .map(|dialog| {
+            (
+                dialog.busy,
+                dialog.status.clone(),
+                dialog.error.clone(),
+            )
+        })
+        .unwrap_or((false, None, None));
+    let source_input = app.text_field(
+        "github-source",
+        "owner/repo[@ref] or https://…/theme.json",
+        false,
+        cx,
+    );
+    let ref_input = app.text_field("github-ref", "ref (default main)", false, cx);
+    let path_input = app.text_field("github-path", "path (default theme.json)", false, cx);
+    let field = |label: &'static str,
+                 input: &gpui::Entity<crate::shell::text_input::TextInput>| {
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(theme.sp(6.))
+            .child(line(theme, label))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .p(theme.sp(4.))
+                    .rounded(theme.corner())
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.surface_raised)
+                    .child(crate::shell::text_input::text_input_element(
+                        input,
+                        theme,
+                        theme.control_height(),
+                    )),
+            )
+    };
+    div()
+        .id("pref-theme-github-dialog")
+        .debug_selector(|| "pref-theme-github-dialog".to_owned())
+        .flex()
+        .flex_col()
+        .gap(theme.sp(6.))
+        .p(theme.sp(8.))
+        .rounded(theme.corner())
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.surface)
+        .child(section(theme, "ADD FROM GITHUB"))
+        .child(line(
+            theme,
+            "Paste a raw https .json URL or owner/repo[@ref]. Nothing is fetched until Check or Import.",
+        ))
+        .child(field("Source", &source_input))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(6.))
+                .child(field("Ref", &ref_input))
+                .child(field("Path", &path_input)),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(6.))
+                .child(
+                    widgets::Button::new(theme, "Check")
+                        .enabled(!busy)
+                        .build()
+                        .id("pref-theme-github-check")
+                        .debug_selector(|| "pref-theme-github-check".to_owned())
+                        .when(busy, |button| {
+                            button.tooltip(widgets::HintView::tooltip(
+                                theme,
+                                "Wait for the running GitHub request to finish.",
+                            ))
+                        })
+                        .when(!busy, |button| {
+                            button.on_click(cx.listener(|app, _, _, cx| {
+                                let source = app.input_text("github-source", cx);
+                                let ref_name = app.input_text("github-ref", cx);
+                                let path = app.input_text("github-path", cx);
+                                app.check_github_source(&source, &ref_name, &path);
+                                cx.notify();
+                            }))
+                        }),
+                )
+                .child(
+                    widgets::Button::new(theme, "Import")
+                        .primary()
+                        .enabled(!busy)
+                        .build()
+                        .id("pref-theme-github-import")
+                        .debug_selector(|| "pref-theme-github-import".to_owned())
+                        .when(busy, |button| {
+                            button.tooltip(widgets::HintView::tooltip(
+                                theme,
+                                "Wait for the running GitHub request to finish.",
+                            ))
+                        })
+                        .when(!busy, |button| {
+                            button.on_click(cx.listener(|app, _, _, cx| {
+                                let source = app.input_text("github-source", cx);
+                                let ref_name = app.input_text("github-ref", cx);
+                                let path = app.input_text("github-path", cx);
+                                app.import_github_source(&source, &ref_name, &path);
+                                cx.notify();
+                            }))
+                        }),
+                )
+                .child(
+                    widgets::Button::new(theme, "Cancel")
+                        .enabled(!busy)
+                        .build()
+                        .id("pref-theme-github-cancel")
+                        .debug_selector(|| "pref-theme-github-cancel".to_owned())
+                        .when(busy, |button| {
+                            button.tooltip(widgets::HintView::tooltip(
+                                theme,
+                                "Wait for the running GitHub request to finish.",
+                            ))
+                        })
+                        .when(!busy, |button| {
+                            button.on_click(cx.listener(|app, _, _, cx| {
+                                app.close_github_dialog();
+                                app.set_input("github-source", "", cx);
+                                app.set_input("github-ref", "", cx);
+                                app.set_input("github-path", "", cx);
+                                cx.notify();
+                            }))
+                        }),
+                ),
+        )
+        .when_some(error, |panel, error| {
+            panel.child(
+                div()
+                    .text_size(theme.fs(10.5))
+                    .text_color(theme.error)
+                    .debug_selector(|| "pref-theme-github-error".to_owned())
+                    .child(error),
+            )
+        })
+        .when_some(status, |panel, status| {
+            panel.child(
+                div()
+                    .text_size(theme.fs(10.5))
+                    .text_color(theme.muted)
+                    .debug_selector(|| "pref-theme-github-status".to_owned())
+                    .child(status),
+            )
+        })
         .into_any_element()
 }
 
@@ -1262,7 +1506,7 @@ fn theme_source_badge(theme: &Theme, source: ThemeSource, id: &str) -> AnyElemen
         .text_size(theme.fs(9.5))
         .text_color(match source {
             ThemeSource::Builtin => theme.muted,
-            ThemeSource::User => theme.accent,
+            ThemeSource::User | ThemeSource::Github => theme.accent,
         })
         .debug_selector(move || format!("pref-theme-source-{selector}"))
         .child(source.label())
@@ -2917,6 +3161,81 @@ mod tests {
             app.theme_catalog = crate::theme::ThemeCatalog::load(&app.ui_themes_path);
             path
         })
+    }
+
+    struct PagesThemeFetcher {
+        body: Vec<u8>,
+    }
+
+    impl crate::theme::remote::ThemeFetcher for PagesThemeFetcher {
+        fn fetch(
+            &self,
+            request: &crate::theme::remote::FetchRequest,
+        ) -> Result<crate::theme::remote::FetchResponse, crate::theme::remote::RemoteError>
+        {
+            Ok(crate::theme::remote::FetchResponse {
+                status: 200,
+                etag: Some("\"pages\"".to_owned()),
+                final_url: request.url.clone(),
+                body: self.body.clone(),
+            })
+        }
+    }
+
+    #[test]
+    fn github_dialog_and_cached_theme_list_render_their_states() {
+        let mut harness = Harness::open(1366., 768.);
+        harness.with(|app, _| {
+            let spec = crate::theme::remote::resolve_source("owner/repo", "", "").unwrap();
+            let fetcher = PagesThemeFetcher {
+                body: crate::theme::test_pack_document("github-theme", "GitHub theme")
+                    .into_bytes(),
+            };
+            crate::theme::remote::import_source(&app.ui_themes_path, &spec, &fetcher).unwrap();
+            app.theme_catalog = crate::theme::ThemeCatalog::load(&app.ui_themes_path);
+        });
+        harness.run_command(CommandId::ToggleSettings);
+        harness.click("preferences-nav-Appearance");
+
+        for selector in [
+            "pref-theme-row-github-theme",
+            "pref-theme-source-github-theme",
+            "pref-theme-provenance-github-theme",
+            "pref-theme-update-github-theme",
+        ] {
+            assert!(
+                harness.bounds(selector).is_some(),
+                "{selector} did not render"
+            );
+        }
+
+        harness.click("pref-theme-github");
+        assert!(harness.with(|app, _| app.github_dialog.is_some()));
+        for selector in [
+            "pref-theme-github-dialog",
+            "pref-theme-github-check",
+            "pref-theme-github-import",
+            "pref-theme-github-cancel",
+        ] {
+            assert!(
+                harness.bounds(selector).is_some(),
+                "{selector} did not render"
+            );
+        }
+
+        harness.with(|app, cx| {
+            if let Some(dialog) = app.github_dialog.as_mut() {
+                dialog.error = Some("invalid theme source: enter a URL or owner/repo".to_owned());
+            }
+            cx.notify();
+        });
+        harness.settle();
+        assert!(harness.bounds("pref-theme-github-error").is_some());
+        harness.with(|app, cx| {
+            app.close_github_dialog();
+            cx.notify();
+        });
+        assert!(harness.with(|app, _| app.github_dialog.is_none()));
     }
 
     #[test]
