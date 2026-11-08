@@ -5,6 +5,9 @@ use gpui::{div, prelude::*, StatefulInteractiveElement, px, AnyElement, Context}
 
 use crate::assets::Icon;
 use crate::layout;
+use crate::theme::{
+    resolve, ContrastStatus, ThemeRequest, ThemeSource, CUSTOM_PACK_ID,
+};
 use crate::transcript::RowKind;
 use crate::ui_preferences::{AccentScheme, KeymapPreset, ThemeMode, UiDensity};
 use crate::shell::app::{ActiveView, DesktopApp, GoalAction, PreferencesSection};
@@ -810,6 +813,47 @@ fn preferences_appearance(
     let scale = app.ui_preferences.ui_scale;
     let accent = app.ui_preferences.accent_scheme;
     let theme_notice = theme.status.errors.join("; ");
+    let selected_theme = app.ui_preferences.theme_id.clone();
+    let mut theme_rows: Vec<(String, String, ThemeSource, Option<ContrastStatus>, bool)> = app
+        .theme_catalog
+        .themes()
+        .iter()
+        .map(|installed| {
+            let id = installed.pack.id.clone();
+            (
+                id.clone(),
+                installed.pack.name.clone(),
+                installed.source,
+                app.theme_catalog.contrast_status(&id, accent, dark),
+                true,
+            )
+        })
+        .collect();
+    // The legacy custom palette is not a file-backed pack, so it appears in
+    // the list but its file actions stay disabled with a stated reason.
+    let custom = resolve(&ThemeRequest {
+        pack_id: CUSTOM_PACK_ID,
+        custom: &app.ui_preferences.custom_theme,
+        catalog: &app.theme_catalog,
+        accent,
+        dark,
+    });
+    theme_rows.push((
+        CUSTOM_PACK_ID.to_owned(),
+        "Custom".to_owned(),
+        ThemeSource::Builtin,
+        Some(if custom.status.warnings.is_empty() {
+            ContrastStatus::Pass
+        } else {
+            ContrastStatus::Warnings(custom.status.warnings.len())
+        }),
+        false,
+    ));
+    let theme_errors = app.theme_catalog.errors().to_vec();
+    let theme_remove_confirm = app.theme_remove_confirm.clone();
+    let theme_pending_replace = app.theme_pending_import.is_some();
+    let theme_message = app.theme_message.clone();
+    let editor_id = app.theme_editor.as_ref().map(|editor| editor.id.clone());
 
     let mut content = div().flex().flex_col().gap(theme.sp(8.)).child(preferences_page_head(
         theme,
@@ -850,6 +894,7 @@ fn preferences_appearance(
                         })),
                 ),
         )
+        .child(section(theme, "PACKS"))
         .child(
             div()
                 .flex()
@@ -857,29 +902,82 @@ fn preferences_appearance(
                 .items_center()
                 .flex_wrap()
                 .gap(theme.sp(6.))
-                .child(line(theme, "Pack"))
-                .children(
-                    crate::theme::pack_choices()
-                        .into_iter()
-                        .map(|(id, name)| {
-                            let selected = app.ui_preferences.theme_id == id;
-                            widgets::Button::new(theme, name)
-                                .enabled(!selected)
-                                .build()
-                                .id(gpui::SharedString::from(format!("pref-pack-{id}")))
-                                .on_click(cx.listener(move |app, _, window, cx| {
-                                    let id = id.clone();
-                                    app.update_preferences(window, |preferences| {
-                                        preferences.theme_id = id;
-                                    });
-                                    cx.notify();
-                                }))
-                        })
-                        .collect::<Vec<_>>(),
-                ),
+                .child(
+                    widgets::Button::new(theme, "Add theme file…")
+                        .build()
+                        .id("pref-theme-add")
+                        .debug_selector(|| "pref-theme-add".to_owned())
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.add_theme_file();
+                            cx.notify();
+                        })),
+                )
+                .when(theme_pending_replace, |element| {
+                    element.child(
+                        widgets::Button::new(theme, "Replace theme file")
+                            .primary()
+                            .build()
+                            .id("pref-theme-replace")
+                            .debug_selector(|| "pref-theme-replace".to_owned())
+                            .on_click(cx.listener(|app, _, window, cx| {
+                                app.replace_theme_file(window);
+                                cx.notify();
+                            })),
+                    )
+                }),
         )
+        .when_some(theme_message, |element, message| {
+            element.child(
+                div()
+                    .text_size(theme.fs(10.5))
+                    .text_color(theme.muted)
+                    .child(message),
+            )
+        })
+        .children(theme_rows.into_iter().map(
+            |(id, name, source, contrast, file_backed)| {
+                theme_pack_row(
+                    theme,
+                    id,
+                    name,
+                    source,
+                    contrast,
+                    file_backed,
+                    selected_theme.as_str(),
+                    theme_remove_confirm.as_deref(),
+                    cx,
+                )
+            },
+        ))
+        .children(theme_errors.into_iter().map(|error| {
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(6.))
+                .debug_selector({
+                    let file_name = error.file_name.clone();
+                    move || format!("pref-theme-error-{file_name}")
+                })
+                .child(
+                    div()
+                        .text_size(theme.fs(11.))
+                        .text_color(theme.error)
+                        .child(error.file_name),
+                )
+                .child(
+                    div()
+                        .text_size(theme.fs(10.5))
+                        .text_color(theme.muted)
+                        .child(error.reason),
+                )
+                .into_any_element()
+        }))
         .when(!theme_notice.is_empty(), |element| {
             element.child(line(theme, theme_notice))
+        })
+        .when_some(editor_id, |element, editor_id| {
+            element.child(theme_editor_panel(app, theme, &editor_id, cx))
         })
         .child(section(theme, "ACCENT"))
         .child(
@@ -995,6 +1093,290 @@ fn preferences_appearance(
                 ),
         );
     content.into_any_element()
+}
+
+/// One installed pack with its source, contrast status, and file actions.
+fn theme_pack_row(
+    theme: &Theme,
+    id: String,
+    name: String,
+    source: ThemeSource,
+    contrast: Option<ContrastStatus>,
+    file_backed: bool,
+    selected: &str,
+    remove_confirm: Option<&str>,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
+    let is_user = source == ThemeSource::User;
+    let already_selected = selected == id;
+    let confirming_remove = remove_confirm == Some(id.as_str());
+    let row_selector = id.clone();
+
+    let use_id = id.clone();
+    let use_selector = id.clone();
+    let duplicate_id = id.clone();
+    let duplicate_selector = id.clone();
+    let edit_id = id.clone();
+    let edit_selector = id.clone();
+    let export_id = id.clone();
+    let export_selector = id.clone();
+    let remove_id = id.clone();
+    let remove_selector = id.clone();
+
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .flex_wrap()
+        .gap(theme.sp(6.))
+        .py(theme.sp(3.))
+        .debug_selector(move || format!("pref-theme-row-{row_selector}"))
+        .child(
+            div()
+                .text_size(theme.fs(11.5))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(name),
+        )
+        .child(theme_source_badge(theme, source, &id))
+        .child(theme_contrast_badge(theme, &id, &contrast))
+        .child(
+            widgets::Button::new(theme, "Use")
+                .enabled(!already_selected)
+                .build()
+                .id(gpui::SharedString::from(format!("pref-pack-{id}")))
+                .debug_selector(move || format!("pref-pack-{use_selector}"))
+                .when(already_selected, |button| {
+                    button.tooltip(widgets::HintView::tooltip(
+                        theme,
+                        "This theme is already active.",
+                    ))
+                })
+                .when(!already_selected, |button| {
+                    button.on_click(cx.listener(move |app, _, window, cx| {
+                        let id = use_id.clone();
+                        app.update_preferences(window, |preferences| {
+                            preferences.theme_id = id;
+                        });
+                        cx.notify();
+                    }))
+                }),
+        )
+        .child(
+            widgets::Button::new(theme, "Duplicate")
+                .enabled(file_backed)
+                .build()
+                .id(gpui::SharedString::from(format!(
+                    "pref-theme-duplicate-{duplicate_id}"
+                )))
+                .debug_selector(move || format!("pref-theme-duplicate-{duplicate_selector}"))
+                .when(!file_backed, |button| {
+                    button.tooltip(widgets::HintView::tooltip(
+                        theme,
+                        "The legacy custom palette is not a theme file; choose a built-in or user pack to copy.",
+                    ))
+                })
+                .when(file_backed, |button| {
+                    button.on_click(cx.listener(move |app, _, window, cx| {
+                        app.duplicate_theme(&duplicate_id, window);
+                        cx.notify();
+                    }))
+                }),
+        )
+        .child(
+            widgets::Button::new(theme, "Edit JSON")
+                .enabled(is_user)
+                .build()
+                .id(gpui::SharedString::from(format!(
+                    "pref-theme-edit-{edit_id}"
+                )))
+                .debug_selector(move || format!("pref-theme-edit-{edit_selector}"))
+                .when(!is_user, |button| {
+                    button.tooltip(widgets::HintView::tooltip(
+                        theme,
+                        "Built-in themes are read-only; Duplicate one to edit its colours.",
+                    ))
+                })
+                .when(is_user, |button| {
+                    button.on_click(cx.listener(move |app, _, _, cx| {
+                        app.edit_theme(&edit_id);
+                        cx.notify();
+                    }))
+                }),
+        )
+        .child(
+            widgets::Button::new(theme, "Export…")
+                .enabled(file_backed)
+                .build()
+                .id(gpui::SharedString::from(format!(
+                    "pref-theme-export-{export_id}"
+                )))
+                .debug_selector(move || format!("pref-theme-export-{export_selector}"))
+                .when(!file_backed, |button| {
+                    button.tooltip(widgets::HintView::tooltip(
+                        theme,
+                        "The legacy custom palette is not a theme file to export.",
+                    ))
+                })
+                .when(file_backed, |button| {
+                    button.on_click(cx.listener(move |app, _, _, cx| {
+                        app.export_theme(&export_id);
+                        cx.notify();
+                    }))
+                }),
+        )
+        .child(
+            widgets::Button::new(theme, if confirming_remove { "Confirm remove" } else { "Remove" })
+                .enabled(is_user)
+                .danger()
+                .build()
+                .id(gpui::SharedString::from(format!(
+                    "pref-theme-remove-{remove_id}"
+                )))
+                .debug_selector(move || format!("pref-theme-remove-{remove_selector}"))
+                .when(!is_user, |button| {
+                    button.tooltip(widgets::HintView::tooltip(
+                        theme,
+                        "Built-in themes cannot be removed.",
+                    ))
+                })
+                .when(is_user, |button| {
+                    button.on_click(cx.listener(move |app, _, window, cx| {
+                        app.remove_theme(&remove_id, window);
+                        cx.notify();
+                    }))
+                }),
+        )
+        .into_any_element()
+}
+
+/// Source badge shown beside one installed pack.
+fn theme_source_badge(theme: &Theme, source: ThemeSource, id: &str) -> AnyElement {
+    let selector = id.to_owned();
+    div()
+        .px(theme.sp(5.))
+        .py(theme.sp(1.))
+        .rounded(theme.corner())
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.surface_raised)
+        .text_size(theme.fs(9.5))
+        .text_color(match source {
+            ThemeSource::Builtin => theme.muted,
+            ThemeSource::User => theme.accent,
+        })
+        .debug_selector(move || format!("pref-theme-source-{selector}"))
+        .child(source.label())
+        .into_any_element()
+}
+
+/// Contrast gate outcome shown beside one installed pack.
+fn theme_contrast_badge(
+    theme: &Theme,
+    id: &str,
+    contrast: &Option<ContrastStatus>,
+) -> AnyElement {
+    let (text, color) = match contrast {
+        Some(ContrastStatus::Pass) => ("contrast ok".to_owned(), theme.success),
+        Some(ContrastStatus::Warnings(count)) => {
+            (format!("contrast warnings ({count})"), theme.warn)
+        }
+        Some(ContrastStatus::Rejected(reasons)) => (
+            format!(
+                "contrast rejected: {}",
+                reasons
+                    .first()
+                    .map(String::as_str)
+                    .unwrap_or("required pair failed")
+            ),
+            theme.error,
+        ),
+        None => ("contrast unavailable".to_owned(), theme.error),
+    };
+    let selector = id.to_owned();
+    div()
+        .text_size(theme.fs(10.))
+        .text_color(color)
+        .debug_selector(move || format!("pref-theme-contrast-{selector}"))
+        .child(text)
+        .into_any_element()
+}
+
+/// JSON editor for one installed user pack.
+fn theme_editor_panel(
+    app: &mut DesktopApp,
+    theme: &Theme,
+    editor_id: &str,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
+    let pending = app
+        .theme_editor
+        .as_mut()
+        .and_then(|editor| editor.pending_text.take());
+    let input = app.text_field("theme-editor", "Theme pack JSON", true, cx);
+    if let Some(text) = pending {
+        input.update(cx, |input, cx| input.set_text(text, cx));
+    }
+    div()
+        .flex()
+        .flex_col()
+        .gap(theme.sp(6.))
+        .child(section(theme, "EDIT THEME JSON"))
+        .child(line(
+            theme,
+            format!("Editing `{editor_id}`. Save validates the complete document before writing."),
+        ))
+        .child(
+            div()
+                .id("pref-theme-editor")
+                .debug_selector(|| "pref-theme-editor".to_owned())
+                .flex()
+                .flex_col()
+                .w_full()
+                .min_h(theme.sp(220.))
+                .p(theme.sp(8.))
+                .rounded(theme.corner())
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.code_background)
+                .font(theme.mono_font())
+                .overflow_hidden()
+                .child(crate::shell::text_input::text_input_element(
+                    &input,
+                    theme,
+                    theme.sp(220.),
+                )),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(6.))
+                .child(
+                    widgets::Button::new(theme, "Save")
+                        .primary()
+                        .build()
+                        .id("pref-theme-save")
+                        .debug_selector(|| "pref-theme-save".to_owned())
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            let text = app.input_text("theme-editor", cx);
+                            app.save_theme_editor(&text, window);
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    widgets::Button::new(theme, "Cancel")
+                        .build()
+                        .id("pref-theme-cancel")
+                        .debug_selector(|| "pref-theme-cancel".to_owned())
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.cancel_theme_editor();
+                            app.set_input("theme-editor", "", cx);
+                            cx.notify();
+                        })),
+                ),
+        )
+        .into_any_element()
 }
 
 /// Keyboard profile selection shared by the menu, palette, and dispatcher.
@@ -2515,6 +2897,85 @@ mod tests {
             !restore
         );
         assert!(harness.with(|app, _| app.show_settings));
+    }
+
+    /// A valid user pack based on the shipped DSH document.
+    fn user_theme_document(id: &str, name: &str) -> String {
+        let mut document: serde_json::Value =
+            serde_json::from_str(include_str!("../../theme/packs/dsh.json")).unwrap();
+        document["id"] = serde_json::json!(id);
+        document["name"] = serde_json::json!(name);
+        document["source"] = serde_json::json!("user");
+        serde_json::to_string_pretty(&document).unwrap()
+    }
+
+    fn install_test_theme(harness: &mut Harness, id: &str, name: &str) -> std::path::PathBuf {
+        harness.with(|app, _| {
+            std::fs::create_dir_all(&app.ui_themes_path).expect("theme test directory");
+            let path = app.ui_themes_path.join(format!("{id}.json"));
+            std::fs::write(&path, user_theme_document(id, name)).expect("user theme file");
+            app.theme_catalog = crate::theme::ThemeCatalog::load(&app.ui_themes_path);
+            path
+        })
+    }
+
+    #[test]
+    fn preferences_lists_installed_theme_packs_and_opens_the_editor() {
+        let mut harness = Harness::open(1366., 768.);
+        install_test_theme(&mut harness, "forest", "Forest");
+        harness.run_command(CommandId::ToggleSettings);
+        harness.click("preferences-nav-Appearance");
+
+        for selector in [
+            "pref-theme-row-forest",
+            "pref-theme-source-forest",
+            "pref-theme-contrast-forest",
+            "pref-theme-row-dsh",
+            "pref-theme-add",
+            "pref-theme-edit-forest",
+            "pref-theme-remove-forest",
+        ] {
+            assert!(
+                harness.bounds(selector).is_some(),
+                "{selector} did not render"
+            );
+        }
+
+        harness.click("pref-theme-edit-forest");
+        assert!(harness.with(|app, _| app.theme_editor.is_some()));
+        assert!(harness.bounds("pref-theme-editor").is_some());
+        assert!(harness.bounds("pref-theme-save").is_some());
+        // The editor panel scrolls below the first viewport; the render test
+        // checks it is present, then closes it through the same state action.
+        harness.with(|app, cx| {
+            app.cancel_theme_editor();
+            cx.notify();
+        });
+        assert!(harness.with(|app, _| app.theme_editor.is_none()));
+        assert!(harness.with(|app, _| app.ui_themes_path.join("forest.json").exists()));
+    }
+
+    #[test]
+    fn removing_a_user_theme_requires_confirmation() {
+        let mut harness = Harness::open(1366., 768.);
+        let path = install_test_theme(&mut harness, "forest", "Forest");
+        harness.run_command(CommandId::ToggleSettings);
+        harness.click("preferences-nav-Appearance");
+
+        harness.click("pref-theme-remove-forest");
+        assert!(path.exists());
+        assert_eq!(
+            harness.with(|app, _| app.theme_remove_confirm.clone()),
+            Some("forest".to_owned())
+        );
+
+        // The confirmation row sits below the first viewport; drive the same
+        // action with the window so the second click's state path still runs.
+        harness.with_window(|app, window, _| app.remove_theme("forest", window));
+        assert!(!path.exists());
+        assert!(harness.with(|app, _| {
+            app.theme_remove_confirm.is_none() && app.theme_catalog.find("forest").is_none()
+        }));
     }
 
     #[test]

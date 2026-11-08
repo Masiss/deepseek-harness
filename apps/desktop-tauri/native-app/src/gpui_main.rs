@@ -192,6 +192,7 @@ fn main() {
         hidden,
         tray_available,
         ui_preferences_path: UiPreferences::config_path(),
+        ui_themes_path: UiPreferences::themes_path(),
         spawn_host: true,
         commands: Default::default(),
     });

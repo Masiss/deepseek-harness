@@ -1,15 +1,17 @@
-//! The compiled-in theme packs and resolution into one scheme.
+//! Installed theme packs and resolution into one scheme.
 //!
-//! This app resolves packs compiled into the binary plus the editable `custom`
-//! palette migrated from preferences. User-installed and imported packs enter
-//! through [`resolve_pack_document`] with [`PackTrust::Untrusted`], the only
-//! path where a contrast failure rejects a pack.
+//! The catalogue holds the compiled-in packs, user files discovered by
+//! [`super::user::ThemeCatalog`], and the editable `custom` palette migrated from
+//! preferences. User packs resolve through [`resolve_pack_document`] with
+//! [`PackTrust::Untrusted`], the only path where a contrast failure rejects a
+//! pack.
 
 use std::sync::OnceLock;
 
 use super::contrast;
 use super::pack::{SchemeColors, ThemePack};
 use super::tokens::{blend_hsl, Rgba8, Scheme};
+use super::user::{ThemeCatalog, ThemeSource};
 use crate::ui_preferences::{AccentScheme, CustomTheme};
 
 /// Id of the pack a new installation selects.
@@ -52,28 +54,12 @@ pub(crate) fn builtin_pack(id: &str) -> Option<&'static ThemePack> {
     builtin_packs().iter().find(|pack| pack.id == id)
 }
 
-/// The pack choices a pack list offers: the compiled-in packs plus the editable
-/// custom palette, in display order.
-///
-/// The custom entry keeps a migrated `customTheme` reachable: without it, a
-/// preferences file that migrated to `themeId: "custom"` could switch to a
-/// built-in pack and never return.
-pub(crate) fn pack_choices() -> Vec<(String, String)> {
-    let mut choices: Vec<(String, String)> = builtin_packs()
-        .iter()
-        .map(|pack| (pack.id.clone(), pack.name.clone()))
-        .collect();
-    choices.push((CUSTOM_PACK_ID.to_owned(), "Custom".to_owned()));
-    choices
-}
-
 /// Where a pack document came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PackTrust {
     /// Shipped with the app, or migrated from preferences the app itself wrote.
     Trusted,
-    /// Read from a user file or a remote import.
-    #[allow(dead_code)] // No untrusted source is wired yet; the gate is tested directly.
+    /// Read from a user file.
     Untrusted,
 }
 
@@ -83,6 +69,8 @@ pub(crate) struct ThemeRequest<'a> {
     pub(crate) pack_id: &'a str,
     /// Editable custom palettes, used when `pack_id` is `custom`.
     pub(crate) custom: &'a CustomTheme,
+    /// Installed built-in and user packs.
+    pub(crate) catalog: &'a ThemeCatalog,
     /// Accent family preference.
     pub(crate) accent: AccentScheme,
     /// Whether the dark scheme is active.
@@ -135,8 +123,11 @@ pub(crate) fn resolve(request: &ThemeRequest<'_>) -> ResolvedTheme {
     let requested = if request.pack_id == CUSTOM_PACK_ID {
         Ok(custom_outcome(request.custom, scheme))
     } else {
-        match builtin_pack(request.pack_id) {
-            Some(pack) => builtin_outcome(pack, request.accent, scheme),
+        match request.catalog.find(request.pack_id) {
+            Some(theme) if theme.source == ThemeSource::Builtin => {
+                builtin_outcome(&theme.pack, request.accent, scheme)
+            }
+            Some(theme) => user_outcome(&theme.pack, request.accent, scheme),
             None => Err(vec![format!(
                 "theme `{}` is not installed",
                 request.pack_id
@@ -207,6 +198,28 @@ fn builtin_outcome(
     Ok(PackOutcome {
         pack_id: pack.id.clone(),
         trusted: true,
+        colors,
+        accent_families: pack.has_accent_families(),
+        warnings,
+    })
+}
+
+/// Resolves a user pack under the untrusted contrast gate.
+fn user_outcome(
+    pack: &ThemePack,
+    accent: AccentScheme,
+    scheme: Scheme,
+) -> Result<PackOutcome, Vec<String>> {
+    let (colors, warnings) = resolve_pack_document(pack, PackTrust::Untrusted, accent, scheme)
+        .map_err(|failures| {
+            failures
+                .into_iter()
+                .map(|reason| format!("theme `{}` was rejected: {reason}", pack.id))
+                .collect::<Vec<String>>()
+        })?;
+    Ok(PackOutcome {
+        pack_id: pack.id.clone(),
+        trusted: false,
         colors,
         accent_families: pack.has_accent_families(),
         warnings,
@@ -611,9 +624,11 @@ mod tests {
     #[test]
     fn an_unknown_pack_resolves_harness_and_names_the_reason() {
         let custom = CustomTheme::default();
+        let catalog = ThemeCatalog::builtins();
         let resolved = resolve(&ThemeRequest {
             pack_id: "missing",
             custom: &custom,
+            catalog: &catalog,
             accent: AccentScheme::Harness,
             dark: false,
         });
@@ -630,29 +645,9 @@ mod tests {
     }
 
     #[test]
-    fn pack_choices_keep_the_custom_palette_selectable() {
-        let choices = pack_choices();
-        let ids: Vec<&str> = choices.iter().map(|(id, _)| id.as_str()).collect();
-        assert_eq!(
-            ids,
-            [
-                "dsh",
-                "harness",
-                "high-contrast",
-                "solarized",
-                CUSTOM_PACK_ID
-            ]
-        );
-        let names: Vec<&str> = choices.iter().map(|(_, name)| name.as_str()).collect();
-        assert_eq!(
-            names,
-            ["DSH", "Harness", "High contrast", "Solarized", "Custom"]
-        );
-    }
-
-    #[test]
     fn accent_family_support_follows_the_resolved_pack() {
         let custom = CustomTheme::default();
+        let catalog = ThemeCatalog::builtins();
         for (pack_id, expected) in [
             ("harness", true),
             ("dsh", true),
@@ -665,6 +660,7 @@ mod tests {
             let resolved = resolve(&ThemeRequest {
                 pack_id,
                 custom: &custom,
+                catalog: &catalog,
                 accent: AccentScheme::Blue,
                 dark: false,
             });
@@ -677,9 +673,11 @@ mod tests {
     #[test]
     fn the_custom_pack_resolves_as_a_trusted_pack() {
         let custom = CustomTheme::default();
+        let catalog = ThemeCatalog::builtins();
         let resolved = resolve(&ThemeRequest {
             pack_id: CUSTOM_PACK_ID,
             custom: &custom,
+            catalog: &catalog,
             accent: AccentScheme::Teal,
             dark: true,
         });

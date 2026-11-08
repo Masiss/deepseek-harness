@@ -246,15 +246,15 @@ Cột điều hướng bên trái chia bảy mục: **General**, **Appearance**,
 
 ### Appearance
 
-**COLOR** chọn **Theme** System/Light/Dark và **Pack** giao diện (DSH, Harness, High contrast, Solarized hoặc Custom). **ACCENT** chỉ áp dụng cho pack có bộ accent riêng (DSH và Harness); pack khác giữ accent của chính nó nên các nút Accent bị tắt kèm chú thích. **DENSITY** chọn Comfortable hoặc Compact. **SCALE** đổi UI scale từ 0.8 đến 1.5 theo bước 0.05 bằng hai nút − và +.
+**COLOR** chọn **Theme** System/Light/Dark. **PACKS** liệt kê các pack đã cài: pack built-in (DSH, Harness, High contrast, Solarized), palette **Custom** cũ và pack người dùng đọc từ `$DSH_HOME/themes/*.json` (mặc định `$HOME/.deepseek-harness/themes`). Mỗi dòng ghi nguồn `builtin` hoặc `user`, trạng thái tương phản và các nút **Use**, **Duplicate**, **Edit JSON**, **Export…**, **Remove**. **Add theme file…** chép một tệp JSON đã chọn vào thư mục themes dưới tên `<id>.json`; id trùng pack built-in bị từ chối, còn nếu đã có tệp người dùng cùng id thì phải bấm **Replace theme file** để xác nhận ghi đè. **Duplicate** tạo `<id>-copy.json` với đầy đủ mọi role và accent của pack nguồn. **Edit JSON** mở trình soạn thảo: **Save** kiểm tra schema, id và màu rồi ghi nguyên tử, **Cancel** bỏ thay đổi và giữ nguyên tệp. **Export…** lưu bản JSON đầy đủ ra vị trí bạn chọn. **Remove** chỉ xoá pack người dùng và cần bấm xác nhận lần hai; pack built-in luôn chỉ đọc. Nút bị tắt có chú thích nêu lý do. **ACCENT** chỉ áp dụng cho pack có bộ accent riêng (DSH và Harness); pack khác giữ accent của chính nó nên các nút Accent bị tắt kèm chú thích. **DENSITY** chọn Comfortable hoặc Compact. **SCALE** đổi UI scale từ 0.8 đến 1.5 theo bước 0.05 bằng hai nút − và +.
 
-Pack giao diện là dữ liệu: một pack không đọc được sẽ hiện lý do thay vì làm hỏng giao diện, và client quay về pack Harness. File schema 5 dùng `themePack` được chuyển khi đọc: `default` giữ bảng màu Harness cũ, còn `high-contrast`/`solarized`/`custom` giữ nguyên tên.
+Pack giao diện là dữ liệu và pack người dùng là nguồn không tin cậy: tệp thiếu role, sai id/màu, hoặc không đạt ngưỡng tương phản bắt buộc sẽ hiện lý do trong danh sách và client quay về pack Harness thay vì vẽ một phần pack. Một tệp không đọc được chỉ hiện lỗi, không cản ứng dụng khởi động. Không có chức năng tải pack từ mạng; mọi pack người dùng đến từ tệp bạn tự chọn. File schema 5 dùng `themePack` vẫn được chuyển khi đọc: `default` giữ bảng màu Harness cũ, còn `high-contrast`/`solarized`/`custom` giữ nguyên tên.
 
 ### Keymap
 
 **PRESET** chọn bộ phím DSH, Zed hoặc VS Code. Bên dưới là bốn tổ hợp phím đổi được: mở Settings, Marketplace, Goals và tạo Session. Dùng dạng `Ctrl+Shift+S`; nhập `none` để tắt. Khi lưu, client kiểm tra cả bốn phím tùy chỉnh lẫn các phím cố định của menu và command palette, và báo lỗi nếu hai chức năng trùng tổ hợp.
 
-Tùy chọn giao diện được lưu ở tệp `native-ui-preferences.json` trong thư mục cấu hình của ứng dụng. Khi `DSH_HOME` không được đặt, thư mục mặc định là `$HOME/.deepseek-harness`.
+Tùy chọn giao diện được lưu ở tệp `native-ui-preferences.json` trong thư mục cấu hình của ứng dụng; pack người dùng nằm trong thư mục con `themes/` cạnh tệp đó. Khi `DSH_HOME` không được đặt, thư mục mặc định là `$HOME/.deepseek-harness`.
 
 ### Host settings
 

@@ -11,6 +11,7 @@ use crate::host::{self, Host};
 use crate::question_card::QuestionCard;
 use crate::restart;
 use crate::session_list;
+use crate::theme::{ThemeCatalog, ThemeCatalogError};
 use crate::transcript::{self, RowKind, Transcript};
 use crate::ui_preferences::UiPreferences;
 use dsh_client_core::{
@@ -834,6 +835,8 @@ enum DialogPurpose {
     Attach,
     Open,
     Folder,
+    ThemeAdd,
+    ThemeExport,
 }
 
 /// Snapshot, bundles, and managed plugins returned by the inventory workers.
@@ -1081,7 +1084,21 @@ pub(crate) struct DesktopApp {
     pub(crate) feedback_put_receiver: Option<mpsc::Receiver<Result<MessageFeedbackItem, Error>>>,
     pub(crate) feedback_status: Option<String>,
     pub(crate) ui_preferences_path: PathBuf,
+    /// Directory that holds installed user theme packs.
+    pub(crate) ui_themes_path: PathBuf,
     pub(crate) ui_preferences: UiPreferences,
+    /// Built-in and user theme packs discovered for this client.
+    pub(crate) theme_catalog: ThemeCatalog,
+    /// Result or warning from the last theme file action.
+    pub(crate) theme_message: Option<String>,
+    /// User pack open in the JSON editor.
+    pub(crate) theme_editor: Option<ThemeEditor>,
+    /// Imported file waiting for the user to confirm replacing its id.
+    pub(crate) theme_pending_import: Option<PathBuf>,
+    /// Pack the open save dialog will export.
+    pub(crate) theme_export_id: Option<String>,
+    /// User pack whose Remove button is waiting for confirmation.
+    pub(crate) theme_remove_confirm: Option<String>,
     pub(crate) settings_description: Option<SettingsDescribeValue>,
     pub(crate) settings_loading: bool,
     pub(crate) settings_error: Option<String>,
@@ -1421,6 +1438,15 @@ fn apply_workspace_frame(
     }
 }
 
+/// Editable user theme pack open in Preferences → Appearance.
+#[derive(Clone)]
+pub(crate) struct ThemeEditor {
+    /// Id of the installed user pack being edited.
+    pub(crate) id: String,
+    /// Text to install into the editor input on the next render.
+    pub(crate) pending_text: Option<String>,
+}
+
 /// Host settings editor state for the gpui Settings surface.
 pub(crate) struct HostSettingsView {
     pub(crate) namespace: Option<String>,
@@ -1442,6 +1468,7 @@ impl DesktopApp {
             hidden,
             tray_available,
             ui_preferences_path,
+            ui_themes_path,
             spawn_host,
             commands,
         } = services;
@@ -1464,7 +1491,12 @@ impl DesktopApp {
         } else {
             None
         };
-        let theme = Theme::new(&ui_preferences, appearance_is_dark(window.appearance()));
+        let theme_catalog = ThemeCatalog::load(&ui_themes_path);
+        let theme = Theme::new_with_catalog(
+            &ui_preferences,
+            appearance_is_dark(window.appearance()),
+            &theme_catalog,
+        );
         // Escape resolves to `Dismiss`; the listener is global so overlays close
         // whichever node holds focus, including a palette search field.
         let shell = cx.entity().downgrade();
@@ -1522,6 +1554,13 @@ impl DesktopApp {
             close_requested: false,
             preferences_draft: None,
             preferences_message: None,
+            ui_themes_path,
+            theme_catalog,
+            theme_message: None,
+            theme_editor: None,
+            theme_pending_import: None,
+            theme_export_id: None,
+            theme_remove_confirm: None,
             theme,
             host_settings_view: HostSettingsView {
                 namespace: None,
@@ -5484,7 +5523,7 @@ impl DesktopApp {
         }
     }
 
-    fn poll_dialog(&mut self) {
+    fn poll_dialog(&mut self, window: &Window) {
         let Some((purpose, receiver)) = &self.dialog else {
             return;
         };
@@ -5496,6 +5535,10 @@ impl DesktopApp {
                     (DialogPurpose::Attach, Some(path)) => self.attach_path(path),
                     (DialogPurpose::Open, Some(path)) => self.open_preview_path(&path),
                     (DialogPurpose::Folder, Some(path)) => self.open_folder_path(path),
+                    (DialogPurpose::ThemeAdd, Some(path)) => {
+                        self.import_theme_file(path, window)
+                    }
+                    (DialogPurpose::ThemeExport, Some(path)) => self.export_theme_to(&path),
                     (_, None) => self.status = "File picker cancelled".to_owned(),
                 }
             }
@@ -6859,7 +6902,11 @@ impl DesktopApp {
     pub(crate) fn refresh_theme(&mut self, window: &Window) {
         let effective =
             effective_preferences(&self.ui_preferences, self.selected_workspace.as_deref());
-        self.theme = Theme::new(&effective, appearance_is_dark(window.appearance()));
+        self.theme = Theme::new_with_catalog(
+            &effective,
+            appearance_is_dark(window.appearance()),
+            &self.theme_catalog,
+        );
     }
 
     /// Starts resizing one docked panel from a pointer position.
@@ -6990,6 +7037,167 @@ impl DesktopApp {
         change(&mut self.ui_preferences);
         self.refresh_theme(window);
         self.persist_preferences();
+    }
+
+    /// Opens the picker for a theme pack file to install.
+    pub(crate) fn add_theme_file(&mut self) {
+        self.dialog = Some((DialogPurpose::ThemeAdd, dialog::open_theme_file_async()));
+        self.theme_message = Some("Choose a theme pack JSON file…".to_owned());
+    }
+
+    /// Replaces the pending user theme after the duplicate-id warning.
+    pub(crate) fn replace_theme_file(&mut self, window: &Window) {
+        let Some(path) = self.theme_pending_import.take() else {
+            self.theme_message =
+                Some("Choose a theme file before confirming a replacement.".to_owned());
+            return;
+        };
+        match self.theme_catalog.import_file(&path, true) {
+            Ok(id) => {
+                self.reload_theme_catalog(window);
+                self.theme_message = Some(format!("Replaced user theme `{id}`."));
+            }
+            Err(error) => self.theme_message = Some(format!("Could not add theme: {error}")),
+        }
+    }
+
+    /// Installs a picked theme file, warning before it replaces a user file.
+    ///
+    /// @param path — file chosen by the user.
+    /// @param window — window whose appearance the refreshed theme follows.
+    pub(crate) fn import_theme_file(&mut self, path: PathBuf, window: &Window) {
+        match self.theme_catalog.import_file(&path, false) {
+            Ok(id) => {
+                self.theme_pending_import = None;
+                self.reload_theme_catalog(window);
+                self.theme_message = Some(format!("Added user theme `{id}`."));
+            }
+            Err(ThemeCatalogError::AlreadyInstalled { id }) => {
+                self.theme_pending_import = Some(path);
+                self.theme_message = Some(format!(
+                    "A user theme with id `{id}` already exists. Choose Replace theme file to overwrite it."
+                ));
+            }
+            Err(error) => self.theme_message = Some(format!("Could not add theme: {error}")),
+        }
+    }
+
+    /// Writes a complete copy of one installed pack.
+    ///
+    /// @param id — pack to copy.
+    /// @param window — window whose appearance the refreshed catalogue follows.
+    pub(crate) fn duplicate_theme(&mut self, id: &str, window: &Window) {
+        match self.theme_catalog.duplicate(id) {
+            Ok(copy) => {
+                self.reload_theme_catalog(window);
+                self.theme_message =
+                    Some(format!("Created `{copy}.json` from the `{id}` theme."));
+            }
+            Err(error) => self.theme_message = Some(format!("Could not duplicate theme: {error}")),
+        }
+    }
+
+    /// Opens one user pack in the JSON editor.
+    ///
+    /// @param id — installed user pack id.
+    pub(crate) fn edit_theme(&mut self, id: &str) {
+        match self.theme_catalog.edit_text(id) {
+            Ok(text) => {
+                self.theme_editor = Some(ThemeEditor {
+                    id: id.to_owned(),
+                    pending_text: Some(text),
+                });
+                self.theme_message =
+                    Some(format!("Editing `{id}`. Save validates the document before writing."));
+            }
+            Err(error) => self.theme_message = Some(format!("Could not edit theme: {error}")),
+        }
+    }
+
+    /// Validates and saves the JSON editor's current text.
+    ///
+    /// @param text — complete pack document typed by the user.
+    /// @param window — window whose appearance the refreshed theme follows.
+    pub(crate) fn save_theme_editor(&mut self, text: &str, window: &Window) {
+        let Some(editor) = self.theme_editor.clone() else {
+            return;
+        };
+        match self.theme_catalog.save_edit(&editor.id, text) {
+            Ok(id) => {
+                if self.ui_preferences.theme_id == editor.id {
+                    self.ui_preferences.theme_id = id.clone();
+                }
+                self.theme_editor = None;
+                self.reload_theme_catalog(window);
+                self.persist_preferences();
+                self.theme_message = Some(format!("Saved user theme `{id}`."));
+            }
+            Err(error) => {
+                self.theme_message = Some(format!("Could not save theme: {error}"));
+            }
+        }
+    }
+
+    /// Closes the JSON editor without writing the file.
+    pub(crate) fn cancel_theme_editor(&mut self) {
+        self.theme_editor = None;
+        self.theme_message = Some("Theme edits discarded; the file is unchanged.".to_owned());
+    }
+
+    /// Opens the export picker for one installed pack.
+    ///
+    /// @param id — pack to export.
+    pub(crate) fn export_theme(&mut self, id: &str) {
+        if self.theme_catalog.find(id).is_none() {
+            self.theme_message = Some(format!("Theme `{id}` is not installed."));
+            return;
+        }
+        self.theme_export_id = Some(id.to_owned());
+        self.dialog = Some((
+            DialogPurpose::ThemeExport,
+            dialog::save_theme_file_async(&format!("{id}.json")),
+        ));
+        self.theme_message = Some(format!("Choose where to save `{id}.json`…"));
+    }
+
+    /// Writes the pack selected for export to a picked destination.
+    ///
+    /// @param path — destination returned by the save dialog.
+    pub(crate) fn export_theme_to(&mut self, path: &Path) {
+        let Some(id) = self.theme_export_id.take() else {
+            self.theme_message = Some("Choose a theme before exporting.".to_owned());
+            return;
+        };
+        match self.theme_catalog.export_to(&id, path) {
+            Ok(()) => self.theme_message = Some(format!("Exported `{id}` to {}.", path.display())),
+            Err(error) => self.theme_message = Some(format!("Could not export theme: {error}")),
+        }
+    }
+
+    /// Removes a user pack after a second confirmation click.
+    ///
+    /// @param id — installed user pack id.
+    /// @param window — window whose appearance the refreshed theme follows.
+    pub(crate) fn remove_theme(&mut self, id: &str, window: &Window) {
+        if self.theme_remove_confirm.as_deref() != Some(id) {
+            self.theme_remove_confirm = Some(id.to_owned());
+            self.theme_message =
+                Some(format!("Remove user theme `{id}`? Choose Confirm remove to delete its file."));
+            return;
+        }
+        self.theme_remove_confirm = None;
+        match self.theme_catalog.remove(id) {
+            Ok(()) => {
+                self.reload_theme_catalog(window);
+                self.theme_message = Some(format!("Removed user theme `{id}`."));
+            }
+            Err(error) => self.theme_message = Some(format!("Could not remove theme: {error}")),
+        }
+    }
+
+    fn reload_theme_catalog(&mut self, window: &Window) {
+        self.theme_catalog = ThemeCatalog::load(&self.ui_themes_path);
+        self.refresh_theme(window);
     }
 
     /// The composer's model label, naming the selected model or the blocker.
@@ -7572,7 +7780,7 @@ impl DesktopApp {
         }
         self.flush_session_state_if_quiet();
         self.poll_run_state();
-        self.poll_dialog();
+        self.poll_dialog(window);
         self.poll_attachment();
         self.poll_git_auto_refresh();
         if self.explorer.poll(self.transport.as_ref()) {
