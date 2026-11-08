@@ -139,6 +139,121 @@ pub struct GitApplyResult {
     pub operation: String,
 }
 
+/// Side of a conflict a caller keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GitResolveSide {
+    /// The current branch's stage 2.
+    Ours,
+    /// The incoming stage 3.
+    Theirs,
+}
+
+/// Side of a conflict `git/conflict` capped at the Host's diff byte limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GitConflictStage {
+    /// The merge base.
+    Base,
+    /// The current branch's stage 2.
+    Ours,
+    /// The incoming stage 3.
+    Theirs,
+}
+
+/// One unmerged path's index stages from `git/conflict`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitConflict {
+    pub path: String,
+    /// Merge-base content; absent when the index holds no stage 1.
+    #[serde(default)]
+    pub base: Option<String>,
+    /// Current-branch content; absent when the index holds no stage 2.
+    #[serde(default)]
+    pub ours: Option<String>,
+    /// Incoming content; absent when the index holds no stage 3.
+    #[serde(default)]
+    pub theirs: Option<String>,
+    /// Sides the Host byte cap shortened.
+    #[serde(default)]
+    pub truncated: Vec<GitConflictStage>,
+}
+
+/// Request for `git/resolve`: one unmerged path and the side to keep.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitResolveRequest {
+    pub path: String,
+    pub side: GitResolveSide,
+}
+
+/// Result of `git/resolve`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitResolveResult {
+    pub path: String,
+    /// Side now in the work tree and staged.
+    pub side: GitResolveSide,
+}
+
+/// Result of `git/discardUntracked`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitDiscardUntrackedResult {
+    pub path: String,
+}
+
+/// Action one `git/stash` call performs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GitStashAction {
+    List,
+    Save,
+    Apply,
+    Pop,
+    Drop,
+}
+
+/// One entry of `git/stash` with `action: "list"`, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitStashEntry {
+    /// Entry number: the `index` in `stash@{index}`.
+    pub index: u32,
+    pub oid: String,
+    pub message: String,
+    /// Save instant as ISO 8601 with the committer's UTC offset.
+    pub time: String,
+}
+
+/// Request for `git/stash`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStashRequest {
+    pub action: GitStashAction,
+    /// `save` only: message recorded on the entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    /// `save` only: also stash untracked files, never ignored ones.
+    #[serde(default)]
+    pub include_untracked: bool,
+    /// `apply`, `pop`, and `drop` only: entry number, defaulting to 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<u32>,
+}
+
+/// Result of one `git/stash` action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitStash {
+    /// Action the Host ran.
+    pub action: GitStashAction,
+    /// Entries newest first; empty unless the action is `list`.
+    #[serde(default)]
+    pub entries: Vec<GitStashEntry>,
+    /// Git's own output for a mutation, trimmed; empty for `list`.
+    #[serde(default)]
+    pub summary: String,
+    /// Whether the Host byte cap dropped entries or cut the summary.
+    #[serde(default)]
+    pub truncated: bool,
+}
+
 /// Options for one `git/commit`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GitCommitOptions {
@@ -484,6 +599,126 @@ impl<'a> GitClient<'a> {
         self.call("git/abortOperation", serde_json::json!({ "gitWorkspaceScopeId": session_id.into() }))
     }
 
+    /// Lists, saves, applies, pops, or drops one stash entry.
+    pub fn stash(&self, session_id: impl Into<String>, request: &GitStashRequest) -> Result<GitStash, Error> {
+        self.call(
+            "git/stash",
+            serde_json::json!({
+                "gitWorkspaceScopeId": session_id.into(),
+                "request": serde_json::to_value(request)?,
+            }),
+        )
+    }
+
+    /// Lists the repository's stash entries newest first.
+    pub fn stash_list(&self, session_id: impl Into<String>) -> Result<GitStash, Error> {
+        self.stash(session_id, &GitStashRequest {
+            action: GitStashAction::List,
+            message: None,
+            include_untracked: false,
+            index: None,
+        })
+    }
+
+    /// Saves the work tree's changes as one stash entry.
+    pub fn stash_save(
+        &self,
+        session_id: impl Into<String>,
+        message: Option<String>,
+        include_untracked: bool,
+    ) -> Result<GitStash, Error> {
+        self.stash(session_id, &GitStashRequest {
+            action: GitStashAction::Save,
+            message,
+            include_untracked,
+            index: None,
+        })
+    }
+
+    /// Applies one stash entry, keeping it in the stash list.
+    pub fn stash_apply(&self, session_id: impl Into<String>, index: u32) -> Result<GitStash, Error> {
+        self.stash(session_id, &GitStashRequest {
+            action: GitStashAction::Apply,
+            message: None,
+            include_untracked: false,
+            index: Some(index),
+        })
+    }
+
+    /// Applies one stash entry and drops it.
+    pub fn stash_pop(&self, session_id: impl Into<String>, index: u32) -> Result<GitStash, Error> {
+        self.stash(session_id, &GitStashRequest {
+            action: GitStashAction::Pop,
+            message: None,
+            include_untracked: false,
+            index: Some(index),
+        })
+    }
+
+    /// Drops one stash entry without touching the work tree.
+    pub fn stash_drop(&self, session_id: impl Into<String>, index: u32) -> Result<GitStash, Error> {
+        self.stash(session_id, &GitStashRequest {
+            action: GitStashAction::Drop,
+            message: None,
+            include_untracked: false,
+            index: Some(index),
+        })
+    }
+
+    /// Reads one unmerged path's merge base and both sides.
+    pub fn conflict(
+        &self,
+        session_id: impl Into<String>,
+        path: impl Into<String>,
+    ) -> Result<GitConflict, Error> {
+        self.call(
+            "git/conflict",
+            serde_json::json!({
+                "gitWorkspaceScopeId": session_id.into(),
+                "request": { "path": path.into() },
+            }),
+        )
+    }
+
+    /// Keeps one side of an unmerged path and stages the result.
+    pub fn resolve(
+        &self,
+        session_id: impl Into<String>,
+        request: &GitResolveRequest,
+    ) -> Result<GitResolveResult, Error> {
+        self.call(
+            "git/resolve",
+            serde_json::json!({
+                "gitWorkspaceScopeId": session_id.into(),
+                "request": serde_json::to_value(request)?,
+            }),
+        )
+    }
+
+    /// Deletes one untracked file.
+    ///
+    /// `expected_status` carries the status the caller displayed; the Host
+    /// refuses when the path's current status differs or the path is not
+    /// untracked.
+    pub fn discard_untracked(
+        &self,
+        session_id: impl Into<String>,
+        path: impl Into<String>,
+        expected_status: Option<String>,
+    ) -> Result<GitDiscardUntrackedResult, Error> {
+        let mut request = serde_json::json!({ "path": path.into() });
+        if let Some(expected_status) = expected_status {
+            request["expectedStatus"] = serde_json::Value::String(expected_status);
+        }
+        self.call(
+            "git/discardUntracked",
+            serde_json::json!({
+                "gitWorkspaceScopeId": session_id.into(),
+                "request": request,
+            }),
+        )
+    }
+
     fn path_verb(&self, method: &str, session_id: impl Into<String>, path: impl Into<String>) -> Result<GitPathResult, Error> {
         self.call(
             method,
@@ -675,5 +910,96 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(apply.operation, "unstage");
+    }
+
+    #[test]
+    fn serializes_stash_requests_onto_the_wire_fields() {
+        let save = GitStashRequest {
+            action: GitStashAction::Save,
+            message: Some("wip".to_owned()),
+            include_untracked: true,
+            index: None,
+        };
+        let wire = serde_json::to_value(&save).unwrap();
+        assert_eq!(wire["action"], serde_json::json!("save"));
+        assert_eq!(wire["message"], serde_json::json!("wip"));
+        assert_eq!(wire["includeUntracked"], serde_json::json!(true));
+        assert!(wire.get("index").is_none());
+        assert_eq!(serde_json::from_value::<GitStashRequest>(wire).unwrap(), save);
+
+        let drop = GitStashRequest {
+            action: GitStashAction::Drop,
+            message: None,
+            include_untracked: false,
+            index: Some(2),
+        };
+        let wire = serde_json::to_value(&drop).unwrap();
+        assert_eq!(wire["action"], serde_json::json!("drop"));
+        assert_eq!(wire["index"], serde_json::json!(2));
+        assert!(wire.get("message").is_none());
+    }
+
+    #[test]
+    fn deserializes_stash_results_and_mutation_defaults() {
+        let stash: GitStash = serde_json::from_value(serde_json::json!({
+            "action": "list",
+            "entries": [{
+                "index": 0,
+                "oid": "a".repeat(40),
+                "message": "On main: wip",
+                "time": "2026-11-08T10:00:00+07:00",
+            }],
+            "summary": "",
+            "truncated": true,
+        }))
+        .unwrap();
+        assert_eq!(stash.action, GitStashAction::List);
+        assert!(stash.truncated);
+        assert_eq!(stash.entries[0].index, 0);
+        assert_eq!(stash.entries[0].time, "2026-11-08T10:00:00+07:00");
+
+        let mutation: GitStash = serde_json::from_value(serde_json::json!({ "action": "drop" })).unwrap();
+        assert_eq!(mutation.action, GitStashAction::Drop);
+        assert!(mutation.entries.is_empty());
+        assert!(mutation.summary.is_empty());
+        assert!(!mutation.truncated);
+    }
+
+    #[test]
+    fn deserializes_conflict_sides_with_absent_stages() {
+        let conflict: GitConflict = serde_json::from_value(serde_json::json!({
+            "path": "a.txt",
+            "base": "base\n",
+            "ours": "main\n",
+            "theirs": null,
+            "truncated": ["ours"],
+        }))
+        .unwrap();
+        assert_eq!(conflict.base.as_deref(), Some("base\n"));
+        assert!(conflict.theirs.is_none());
+        assert_eq!(conflict.truncated, [GitConflictStage::Ours]);
+
+        let plain: GitConflict = serde_json::from_value(serde_json::json!({ "path": "a.txt" })).unwrap();
+        assert!(plain.base.is_none() && plain.ours.is_none() && plain.theirs.is_none());
+        assert!(plain.truncated.is_empty());
+    }
+
+    #[test]
+    fn serializes_resolve_requests_and_reads_resolution_results() {
+        let request = GitResolveRequest {
+            path: "a.txt".to_owned(),
+            side: GitResolveSide::Theirs,
+        };
+        let wire = serde_json::to_value(&request).unwrap();
+        assert_eq!(wire["side"], serde_json::json!("theirs"));
+        assert_eq!(serde_json::from_value::<GitResolveRequest>(wire).unwrap(), request);
+
+        let resolved: GitResolveResult =
+            serde_json::from_value(serde_json::json!({ "path": "a.txt", "side": "ours" })).unwrap();
+        assert_eq!(resolved.side, GitResolveSide::Ours);
+
+        let deleted: GitDiscardUntrackedResult =
+            serde_json::from_value(serde_json::json!({ "path": "loose.txt" })).unwrap();
+        assert_eq!(deleted.path, "loose.txt");
     }
 }

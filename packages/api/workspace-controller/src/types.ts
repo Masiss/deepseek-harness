@@ -84,6 +84,8 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'git/remote-no-upstream': { readonly operation: GitRemoteOperation }
     /** No multi-step operation is in progress, or git refused the step. */
     'git/operation-refused': Record<string, never>
+    /** The stash message is blank or too long, or git refused the stash action. */
+    'git/stash-refused': { readonly action: GitStashAction }
   }
 }
 
@@ -309,7 +311,7 @@ export interface GitCheckoutValue {
   readonly branch: string
 }
 
-/** One changed path requested for diff, stage, unstage, or discard. */
+/** One changed path requested for diff, stage, unstage, discard, conflict, resolve, or untracked delete. */
 export interface GitPathRequest {
   /** Path relative to the repository root, as reported by {@link GitChangedFile.path}. */
   readonly path: string
@@ -516,4 +518,104 @@ export interface GitOperationValue {
   readonly state: GitOperationState
   /** Git's own output for the step, trimmed. */
   readonly output: string
+}
+
+/** Index stage of one unmerged path: the merge base, the current side, or the incoming side. */
+export type GitConflictStage = 'base' | 'ours' | 'theirs'
+
+/**
+ * One unmerged path's three index stages, read from stages `:1:`, `:2:`, and
+ * `:3:`. Each side is the blob's text; `null` marks a stage the index does not
+ * hold, as in a delete/modify conflict.
+ */
+export interface GitConflictValue {
+  /** Path relative to the repository root, as reported by {@link GitChangedFile.path}. */
+  readonly path: string
+  /** Merge-base content, or null when the index has no stage 1. */
+  readonly base: string | null
+  /** Current-branch content, or null when the index has no stage 2. */
+  readonly ours: string | null
+  /** Incoming content, or null when the index has no stage 3. */
+  readonly theirs: string | null
+  /** Sides the configured diff byte cap shortened. */
+  readonly truncated: readonly GitConflictStage[]
+}
+
+/** Side of a conflict a caller keeps. */
+export type GitResolveSide = Exclude<GitConflictStage, 'base'>
+
+/** One unmerged path requested for resolution. */
+export interface GitResolveRequest {
+  /** Unmerged path relative to the repository root. */
+  readonly path: string
+  /**
+   * Side kept in the work tree. The Host checks it out and stages the result;
+   * a path without that stage answers `git/path-refused`.
+   */
+  readonly side: GitResolveSide
+}
+
+/** Result of one conflict resolution. */
+export interface GitResolveValue {
+  /** Path the resolution applied to. */
+  readonly path: string
+  /** Side kept in the work tree. */
+  readonly side: GitResolveSide
+}
+
+/** Result of one untracked delete. */
+export interface GitDiscardUntrackedValue {
+  /** Path whose untracked file was deleted. */
+  readonly path: string
+}
+
+/** Action one `git/stash` call performs. */
+export type GitStashAction = 'list' | 'save' | 'apply' | 'pop' | 'drop'
+
+/** One entry of `git/stash` with `action: "list"`, newest first. */
+export interface GitStashEntry {
+  /** Entry number: the `index` in `stash@{index}`. */
+  readonly index: number
+  /** Commit the entry records. */
+  readonly oid: string
+  /** Entry subject, such as `WIP on main: 1a2b3c4 subject` or the saved message. */
+  readonly message: string
+  /** Save instant as ISO 8601 with the committer's UTC offset. */
+  readonly time: string
+}
+
+/** Stash action requested, with the fields that action reads. */
+export interface GitStashRequest {
+  /** Action to perform. */
+  readonly action: GitStashAction
+  /**
+   * `save` only: message recorded on the entry. Omitted leaves git's own
+   * `WIP on <branch>: ...` subject; a blank or oversized message answers
+   * `git/stash-refused`.
+   */
+  readonly message?: string
+  /** `save` only: also stash untracked files, never ignored ones. Defaults to tracked changes only. */
+  readonly includeUntracked?: boolean
+  /**
+   * `apply`, `pop`, and `drop` only: entry number from {@link GitStashEntry.index},
+   * defaulting to 0. A negative or fractional number answers
+   * `gateway/bad-request`; an entry git does not have answers `git/stash-refused`.
+   */
+  readonly index?: number
+}
+
+/**
+ * Result of one stash action. `entries` carries the list a `list` action read
+ * and stays empty for every mutation; `summary` carries git's own text for a
+ * mutation and is empty for `list`.
+ */
+export interface GitStashValue {
+  /** Action that ran. */
+  readonly action: GitStashAction
+  /** Entries newest first, empty unless the action is `list`. */
+  readonly entries: readonly GitStashEntry[]
+  /** Git's own output for a mutation, trimmed; empty for `list`. */
+  readonly summary: string
+  /** Whether the configured byte cap dropped entries or the tail of {@link summary}. */
+  readonly truncated: boolean
 }

@@ -101,6 +101,10 @@ export const VIEWER_ENDPOINT_CLASSES = {
   'git/revert': 'owner-only',
   'git/continueOperation': 'owner-only',
   'git/abortOperation': 'owner-only',
+  'git/stash': 'owner-only',
+  'git/conflict': 'owner-only',
+  'git/resolve': 'owner-only',
+  'git/discardUntracked': 'owner-only',
   // No reader role names these, so the conservative class is owner-only. A share's method policy
   // decides whether one installed plugin's method reaches its viewers; this table only decides what
   // the core share roles grant.

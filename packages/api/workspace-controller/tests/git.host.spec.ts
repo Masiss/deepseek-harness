@@ -1,7 +1,7 @@
 /** Git Remote contract: porcelain parsing, repository status, and checkout. */
 import { existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -17,6 +17,7 @@ import {
   parseGitBranches,
   parseGitLog,
   parseGitNumstat,
+  parseGitStashList,
   parseGitStatus,
   type GitRunner,
   type GitRunResult,
@@ -522,6 +523,21 @@ describe('GitController Session scope', () => {
         .resolves.toMatchObject({ code: 'git/operation-refused' })
       await expect(rejected(controller.abortOperation(scope, signal())))
         .resolves.toMatchObject({ code: 'git/operation-refused' })
+
+      await writeFile(join(root, 'loose.txt'), 'loose\n')
+      await expect(controller.discardUntracked(scope, { path: 'loose.txt', expectedStatus: 'untracked' }, signal()))
+        .resolves.toEqual({ path: 'loose.txt' })
+      await writeFile(join(root, 'loose.txt'), 'loose\n')
+      await expect(controller.stash(scope, { action: 'save', message: 'via controller', includeUntracked: true }, signal()))
+        .resolves.toMatchObject({ action: 'save', entries: [], truncated: false })
+      await expect(controller.stash(scope, { action: 'list' }, signal()))
+        .resolves.toMatchObject({ action: 'list', truncated: false, entries: [{ index: 0 }] })
+      await expect(controller.stash(scope, { action: 'drop', index: 0 }, signal()))
+        .resolves.toMatchObject({ action: 'drop' })
+      await expect(controller.conflict(scope, { path: 'a.txt' }, signal()))
+        .rejects.toMatchObject({ code: 'git/path-refused' })
+      await expect(controller.resolve(scope, { path: 'a.txt', side: 'ours' }, signal()))
+        .rejects.toMatchObject({ code: 'git/path-refused' })
 
       await plugin.dispose()
       expect(ctx.typert.lookups.get('gitWorkspaceScope')).toBeUndefined()
@@ -1471,5 +1487,370 @@ describe('GitCommands operation state and steps', () => {
     } finally {
       git(root, 'revert', '--abort')
     }
+  })
+})
+
+describe('parseGitStashList', () => {
+  const OID = 'a'.repeat(40)
+
+  /** One stash record in the format the verb asks git for. */
+  function record(index: number, message: string): string {
+    return [`stash@{${index}}`, OID, '2026-11-08T10:00:00+07:00', message].join('\0') + '\u001e\n'
+  }
+
+  it('reads the entry number, commit, time, and message newest first', () => {
+    const output = record(0, 'On main: fix') + record(1, 'WIP on main: abc1234 subject')
+    expect(parseGitStashList(output)).toEqual([
+      { index: 0, oid: OID, message: 'On main: fix', time: '2026-11-08T10:00:00+07:00' },
+      { index: 1, oid: OID, message: 'WIP on main: abc1234 subject', time: '2026-11-08T10:00:00+07:00' },
+    ])
+  })
+
+  it('reads an empty stash list', () => {
+    expect(parseGitStashList('')).toEqual([])
+  })
+
+  it('rejects a record that is not a stash entry', () => {
+    expect(() => parseGitStashList(record(0, 'message').replace('stash@{0}', 'main'))).toThrow('malformed git stash record')
+    expect(() => parseGitStashList(record(0, 'message').replace(OID, 'not-an-object-id'))).toThrow('malformed git stash record')
+  })
+
+  it('rejects a truncated record', () => {
+    expect(() => parseGitStashList('stash@{0}\0abc\u001e\n')).toThrow('truncated git stash record')
+  })
+})
+
+describe('GitCommands stash', () => {
+  let root: string
+
+  beforeEach(async () => {
+    root = await scratch('dsh-git-stash-')
+    git(root, 'init', '-b', 'main')
+    await writeFile(join(root, 'a.txt'), 'one\n')
+    git(root, 'add', 'a.txt')
+    git(root, 'commit', '-m', 'first')
+  })
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('saves tracked and untracked changes and lists them', async () => {
+    await writeFile(join(root, 'a.txt'), 'two\n')
+    await writeFile(join(root, 'loose.txt'), 'loose\n')
+    await writeFile(join(root, '.gitignore'), 'secret.txt\n')
+    await writeFile(join(root, 'secret.txt'), 'secret\n')
+    const commands = new GitCommands(RUNNER)
+
+    await expect(commands.stash(root, { action: 'list' }, signal()))
+      .resolves.toEqual({ action: 'list', entries: [], summary: '', truncated: false })
+
+    const saved = await commands.stash(
+      root,
+      { action: 'save', message: 'work in progress', includeUntracked: true },
+      signal(),
+    )
+    expect(saved).toMatchObject({ action: 'save', entries: [], truncated: false })
+    expect(saved.summary).toContain('work in progress')
+    expect(existsSync(join(root, 'loose.txt'))).toBe(false)
+    expect(existsSync(join(root, 'secret.txt'))).toBe(true)
+    await expect(readFile(join(root, 'a.txt'), 'utf8')).resolves.toBe('one\n')
+
+    const listed = await commands.stash(root, { action: 'list' }, signal())
+    expect(listed.entries).toHaveLength(1)
+    expect(listed.entries[0]?.message).toContain('work in progress')
+    expect(listed.entries[0]?.index).toBe(0)
+    expect(listed.entries[0]?.oid).toMatch(/^[0-9a-f]{40}$/)
+    expect(listed.entries[0]?.time).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+  })
+
+  it('keeps the entry on apply, drops it on pop, and drops it on drop', async () => {
+    await writeFile(join(root, 'a.txt'), 'two\n')
+    const commands = new GitCommands(RUNNER)
+    await commands.stash(root, { action: 'save' }, signal())
+
+    const applied = await commands.stash(root, { action: 'apply' }, signal())
+    expect(applied).toMatchObject({ action: 'apply', entries: [], truncated: false })
+    await expect(readFile(join(root, 'a.txt'), 'utf8')).resolves.toBe('two\n')
+    expect((await commands.stash(root, { action: 'list' }, signal())).entries).toHaveLength(1)
+
+    git(root, 'checkout', '--', 'a.txt')
+    const popped = await commands.stash(root, { action: 'pop', index: 0 }, signal())
+    expect(popped.action).toBe('pop')
+    await expect(readFile(join(root, 'a.txt'), 'utf8')).resolves.toBe('two\n')
+    expect((await commands.stash(root, { action: 'list' }, signal())).entries).toEqual([])
+
+    git(root, 'checkout', '--', 'a.txt')
+    await writeFile(join(root, 'a.txt'), 'three\n')
+    await commands.stash(root, { action: 'save', message: 'to drop' }, signal())
+    const dropped = await commands.stash(root, { action: 'drop', index: 0 }, signal())
+    expect(dropped.summary).toContain('Dropped')
+    expect((await commands.stash(root, { action: 'list' }, signal())).entries).toEqual([])
+    await expect(readFile(join(root, 'a.txt'), 'utf8')).resolves.toBe('one\n')
+  })
+
+  it('refuses a blank message, an oversized message, and a malformed index', async () => {
+    const commands = new GitCommands(RUNNER)
+    await expect(commands.stash(root, { action: 'save', message: '  \n' }, signal()))
+      .rejects.toMatchObject({ code: 'git/stash-refused' })
+    await expect(commands.stash(root, { action: 'save', message: 'x'.repeat(1025) }, signal()))
+      .rejects.toThrow('stash message exceeds 1024 bytes')
+    for (const index of [-1, 1.5]) {
+      await expect(commands.stash(root, { action: 'drop', index }, signal()))
+        .rejects.toMatchObject({ code: 'gateway/bad-request' })
+    }
+  })
+
+  it('maps a missing entry to git/stash-refused with git diagnostics', async () => {
+    const pop = new GitCommands(RUNNER).stash(root, { action: 'pop', index: 3 }, signal())
+    await expect(pop).rejects.toMatchObject({ code: 'git/stash-refused' })
+    await expect(pop).rejects.toThrow('stash@{3}')
+  })
+
+  it('reports a refused save with git stderr or its exit code', async () => {
+    const withStderr = new GitCommands(async () => ({ stdout: '', stderr: 'cannot stash', exitCode: 1 }))
+    await expect(withStderr.stash('/repo', { action: 'save' }, signal()))
+      .rejects.toThrow('git stash save failed: cannot stash')
+    const withoutStderr = new GitCommands(async () => ({ stdout: '', stderr: '', exitCode: 4 }))
+    await expect(withoutStderr.stash('/repo', { action: 'save' }, signal()))
+      .rejects.toThrow('git stash save failed: exit 4')
+  })
+
+  it('falls back to stderr when git writes the summary there', async () => {
+    const dropped: GitRunner = async () => ({ stdout: '', stderr: 'Dropped refs/stash@{0}\n', exitCode: 0 })
+    await expect(new GitCommands(dropped, 1024, dropped, 128).stash('/repo', { action: 'drop' }, signal()))
+      .resolves.toEqual({ action: 'drop', entries: [], summary: 'Dropped refs/stash@{0}', truncated: false })
+    const saved: GitRunner = async () => ({ stdout: '', stderr: 'No local changes to save\n', exitCode: 0 })
+    await expect(new GitCommands(saved, 1024, saved, 128).stash('/repo', { action: 'save' }, signal()))
+      .resolves.toEqual({ action: 'save', entries: [], summary: 'No local changes to save', truncated: false })
+  })
+
+  it('passes the action to git without a shell and caps the summary', async () => {
+    const calls: string[][] = []
+    const run: GitRunner = async (args) => {
+      calls.push([...args])
+      return args[1] === 'push'
+        ? { stdout: `${'x'.repeat(64)}\n`, stderr: '', exitCode: 0 }
+        : { stdout: '', stderr: 'no such entry', exitCode: 2 }
+    }
+    const commands = new GitCommands(run, 1024, run, 8)
+
+    await expect(commands.stash('/repo', { action: 'save', message: 'msg', includeUntracked: true }, signal()))
+      .resolves.toEqual({ action: 'save', entries: [], summary: 'xxxxxxxx', truncated: true })
+    expect(calls[0]).toEqual(['stash', 'push', '-m', 'msg', '-u'])
+
+    await expect(commands.stash('/repo', { action: 'apply', index: 2 }, signal()))
+      .rejects.toThrow('git stash apply failed: no such entry')
+    expect(calls[1]).toEqual(['stash', 'apply', 'stash@{2}'])
+
+    await expect(commands.stash('/repo', { action: 'drop' }, signal()))
+      .rejects.toMatchObject({ code: 'git/stash-refused' })
+    expect(calls[2]).toEqual(['stash', 'drop', 'stash@{0}'])
+
+    await expect(commands.stash('/repo', { action: 'pop', index: 1 }, signal()))
+      .rejects.toMatchObject({ code: 'git/stash-refused' })
+    expect(calls[3]).toEqual(['stash', 'pop', 'stash@{1}'])
+  })
+
+  it('caps a long list at the configured byte limit', async () => {
+    const record = (index: number, message: string): string =>
+      [`stash@{${index}}`, 'a'.repeat(40), '2026-11-08T10:00:00+07:00', message].join('\0') + '\u001e\n'
+    const first = Buffer.byteLength(
+      JSON.stringify({ index: 0, oid: 'a'.repeat(40), message: 'one', time: '2026-11-08T10:00:00+07:00' }),
+      'utf8',
+    )
+    const run: GitRunner = async () => ({
+      stdout: record(0, 'one') + record(1, 'two'),
+      stderr: '',
+      exitCode: 0,
+    })
+    const commands = new GitCommands(run, 1024, run, first)
+    await expect(commands.stash('/repo', { action: 'list' }, signal())).resolves.toEqual({
+      action: 'list',
+      entries: [{ index: 0, oid: 'a'.repeat(40), message: 'one', time: '2026-11-08T10:00:00+07:00' }],
+      summary: '',
+      truncated: true,
+    })
+  })
+})
+
+describe('GitCommands conflict sides', () => {
+  let root: string
+
+  beforeEach(async () => {
+    root = await scratch('dsh-git-conflict-')
+    git(root, 'init', '-b', 'main')
+    await writeFile(join(root, 'a.txt'), 'base\n')
+    git(root, 'add', 'a.txt')
+    git(root, 'commit', '-m', 'base')
+  })
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true })
+  })
+
+  /** Merge `feature` into `main` so both sides change `a.txt`. */
+  async function editConflict(): Promise<void> {
+    git(root, 'checkout', '-b', 'feature')
+    await writeFile(join(root, 'a.txt'), 'feature\n')
+    git(root, 'commit', '-am', 'feature')
+    git(root, 'checkout', 'main')
+    await writeFile(join(root, 'a.txt'), 'main\n')
+    git(root, 'commit', '-am', 'main')
+    gitTolerating(root, 'merge', 'feature')
+  }
+
+  /** Merge `feature` into `main` after `feature` deleted `a.txt` and `main` changed it. */
+  async function deleteConflict(): Promise<void> {
+    git(root, 'checkout', '-b', 'feature')
+    git(root, 'rm', 'a.txt')
+    git(root, 'commit', '-m', 'drop a')
+    git(root, 'checkout', 'main')
+    await writeFile(join(root, 'a.txt'), 'main\n')
+    git(root, 'commit', '-am', 'main')
+    gitTolerating(root, 'merge', 'feature')
+  }
+
+  it('reads the base and both sides of an unmerged path', async () => {
+    await editConflict()
+    await expect(new GitCommands(RUNNER).conflict(root, { path: 'a.txt' }, signal())).resolves.toEqual({
+      path: 'a.txt',
+      base: 'base\n',
+      ours: 'main\n',
+      theirs: 'feature\n',
+      truncated: [],
+    })
+  })
+
+  it('reports a stage the index does not hold as null', async () => {
+    await deleteConflict()
+    await expect(new GitCommands(RUNNER).conflict(root, { path: 'a.txt' }, signal())).resolves.toEqual({
+      path: 'a.txt',
+      base: 'base\n',
+      ours: 'main\n',
+      theirs: null,
+      truncated: [],
+    })
+  })
+
+  it('caps each side at the configured diff limit', async () => {
+    await editConflict()
+    await expect(new GitCommands(RUNNER, 4).conflict(root, { path: 'a.txt' }, signal())).resolves.toEqual({
+      path: 'a.txt',
+      base: 'base',
+      ours: 'main',
+      theirs: 'feat',
+      truncated: ['base', 'ours', 'theirs'],
+    })
+  })
+
+  it('refuses a path that is not unmerged and a path outside the repository', async () => {
+    const commands = new GitCommands(RUNNER)
+    await expect(commands.conflict(root, { path: 'a.txt' }, signal()))
+      .rejects.toMatchObject({ code: 'git/path-refused' })
+    await expect(commands.conflict(root, { path: '../outside.txt' }, signal()))
+      .rejects.toMatchObject({ code: 'git/path-refused' })
+  })
+
+  it('keeps one side, stages it, and refuses the resolved path again', async () => {
+    await editConflict()
+    const commands = new GitCommands(RUNNER)
+    await expect(commands.resolve(root, { path: 'a.txt', side: 'theirs' }, signal()))
+      .resolves.toEqual({ path: 'a.txt', side: 'theirs' })
+    await expect(readFile(join(root, 'a.txt'), 'utf8')).resolves.toBe('feature\n')
+    await expect(commands.state(root, signal())).resolves.toEqual({ operation: 'merge', conflicts: [] })
+    await expect(commands.resolve(root, { path: 'a.txt', side: 'ours' }, signal()))
+      .rejects.toMatchObject({ code: 'git/path-refused' })
+  })
+
+  it('refuses the ours side of a delete/modify conflict and a path outside the repository', async () => {
+    await deleteConflict()
+    const commands = new GitCommands(RUNNER)
+    await expect(commands.resolve(root, { path: 'a.txt', side: 'theirs' }, signal()))
+      .rejects.toThrow('has no theirs side')
+    await expect(commands.resolve(root, { path: '../outside.txt', side: 'ours' }, signal()))
+      .rejects.toMatchObject({ code: 'git/path-refused' })
+    await expect(commands.resolve(root, { path: 'a.txt', side: 'ours' }, signal()))
+      .resolves.toEqual({ path: 'a.txt', side: 'ours' })
+    await expect(readFile(join(root, 'a.txt'), 'utf8')).resolves.toBe('main\n')
+  })
+})
+
+describe('GitCommands untracked delete', () => {
+  let root: string
+
+  beforeEach(async () => {
+    root = await scratch('dsh-git-untracked-')
+    git(root, 'init', '-b', 'main')
+    await writeFile(join(root, 'a.txt'), 'one\n')
+    git(root, 'add', 'a.txt')
+    git(root, 'commit', '-m', 'first')
+  })
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true })
+  })
+
+  it('deletes one untracked file and keeps ignored files', async () => {
+    await writeFile(join(root, '.gitignore'), 'secret.txt\n')
+    await writeFile(join(root, 'secret.txt'), 'secret\n')
+    await writeFile(join(root, 'loose.txt'), 'loose\n')
+
+    await expect(new GitCommands(RUNNER).discardUntracked(
+      root,
+      { path: 'loose.txt', expectedStatus: 'untracked' },
+      signal(),
+    )).resolves.toEqual({ path: 'loose.txt' })
+    expect(existsSync(join(root, 'loose.txt'))).toBe(false)
+    expect(existsSync(join(root, 'secret.txt'))).toBe(true)
+  })
+
+  it('refuses a stale reviewed status before deleting', async () => {
+    await writeFile(join(root, 'loose.txt'), 'loose\n')
+    await expect(new GitCommands(RUNNER).discardUntracked(
+      root,
+      { path: 'loose.txt', expectedStatus: 'modified' },
+      signal(),
+    )).rejects.toThrow('changed from modified to untracked since review')
+    expect(existsSync(join(root, 'loose.txt'))).toBe(true)
+  })
+
+  it('refuses a tracked path, an untracked directory, and a path inside one', async () => {
+    await writeFile(join(root, 'a.txt'), 'changed\n')
+    await mkdir(join(root, 'sub'))
+    await writeFile(join(root, 'sub', 'x.txt'), 'x\n')
+    const commands = new GitCommands(RUNNER)
+
+    await expect(commands.discardUntracked(root, { path: 'a.txt' }, signal()))
+      .rejects.toThrow('is not an untracked path')
+    await expect(commands.discardUntracked(root, { path: 'sub/' }, signal()))
+      .rejects.toThrow('is an untracked directory, not a file')
+    await expect(commands.discardUntracked(root, { path: 'sub/x.txt' }, signal()))
+      .rejects.toMatchObject({ code: 'git/path-refused' })
+    expect(existsSync(join(root, 'sub', 'x.txt'))).toBe(true)
+  })
+
+  it('runs git clean with the reviewed path and without -d', async () => {
+    const calls: string[][] = []
+    const run: GitRunner = async (args) => {
+      calls.push([...args])
+      return args[0] === 'status'
+        ? { stdout: '# branch.head main\0? loose.txt\0', stderr: '', exitCode: 0 }
+        : { stdout: '', stderr: '', exitCode: 0 }
+    }
+    await expect(new GitCommands(run).discardUntracked('/repo', { path: 'loose.txt' }, signal()))
+      .resolves.toEqual({ path: 'loose.txt' })
+    expect(calls).toEqual([
+      ['status', '--porcelain=v2', '-b', '-z'],
+      ['clean', '-f', '--', 'loose.txt'],
+    ])
+  })
+
+  it('maps a refused clean to git/command-failed', async () => {
+    const run: GitRunner = async args => args[0] === 'status'
+      ? { stdout: '# branch.head main\0? loose.txt\0', stderr: '', exitCode: 0 }
+      : { stdout: '', stderr: 'refused', exitCode: 1 }
+    await expect(new GitCommands(run).discardUntracked('/repo', { path: 'loose.txt' }, signal()))
+      .rejects.toMatchObject({ code: 'git/command-failed' })
   })
 })
