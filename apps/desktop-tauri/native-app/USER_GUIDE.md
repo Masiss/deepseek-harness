@@ -45,13 +45,13 @@ Xem [USER_FLOWS.md](USER_FLOWS.md) để theo dõi các nhánh từ lúc mở �
 
 ## Bố cục và điều hướng
 
-Thanh trên cùng cao 30 px gồm nút menu **☰**, chip workspace (tên thư mục của Session đang mở), tiêu đề Session, **Search ⌕** và **Changes**. Không có thanh điều hướng dọc: menu **☰** chia ba nhóm — **Workspace** (New session, Toggle Explorer, Toggle Changes, Open file…, Goals), **Customize** (**Preferences…**, **Extensions**, **Skills**, **Marketplace**) và **Help** (**About DSH**, Quit).
+Thanh trên cùng cao 30 px dùng nút biểu tượng: menu, workspace picker (tên thư mục + mũi tên), Search và Changes; không còn tiêu đề Session ở giữa. Search mở command palette, còn workspace picker liệt kê các workspace của những Session đã biết và chuyển sang Session mới nhất của workspace đó. Không có thanh điều hướng dọc: menu chia ba nhóm — **Workspace** (New session, Toggle Explorer, Toggle Changes, Open file…, Goals), **Customize** (**Preferences…**, **Extensions**, **Skills**, **Marketplace**) và **Help** (**About DSH**, Quit).
 
-Bố cục gồm ba cột: **Explorer** bên trái, cột **Agent** ở giữa với tab Agent, transcript và composer, và **Changes** bên phải với hai tab Diff/Files. Thanh dưới cùng cao 26 px: bên trái hiển thị branch và số file thay đổi do Host báo, hoặc `⎇ No repository` khi workspace không phải Git; bên phải là Jobs, Schedules, Deliverables, Terminal và chấm kết nối Host.
+Bố cục gồm ba cột: **Explorer** bên trái, cột **Agent** ở giữa với tab Agent, transcript và composer, và **Changes** bên phải với hai tab Diff/Files. Thanh dưới cùng cao 26 px: bên trái hiển thị branch (mở tab Branches) và số file thay đổi do Host báo, hoặc `⎇ No repository` khi workspace không phải Git; bên phải là Terminal, Problems, menu Jobs/Schedules/Deliverables/Diagnostics và chấm kết nối Host.
 
-Explorer tự ẩn khi cửa sổ hẹp hơn 1240 px và Changes cần tối thiểu 1180 px, để cột Agent giữ được chiều rộng đọc. Trong Explorer, ở chiều rộng không quá 900 px, panel hiển thị lần lượt cây thư mục hoặc phần xem tệp.
+Explorer rộng mặc định 300 px (210–390), Changes 565 px (340–720); Explorer chỉ dock khi cửa sổ đủ rộng để cột Agent còn tối thiểu 420 px (khoảng 1293 px), Changes cần tối thiểu 1180 px. Trong Explorer, ở chiều rộng không quá 900 px, panel hiển thị lần lượt cây thư mục hoặc phần xem tệp.
 
-Kéo vách phân cách giữa Explorer hoặc Changes với cột Agent để đổi chiều rộng; chiều rộng được lưu vào preferences khi thả tay. Panel Changes hiện chỉ hiển thị trạng thái trống vì Host chưa cung cấp diff.
+Kéo vách phân cách giữa Explorer hoặc Changes với cột Agent để đổi chiều rộng; chiều rộng được lưu vào preferences khi thả tay. Panel Changes có các tab Diff, Files và Branches; nội dung do Host trả về và chưa có hành động review theo hunk.
 
 -----
 
@@ -59,7 +59,7 @@ Kéo vách phân cách giữa Explorer hoặc Changes với cột Agent để đ
 
 Session chứa transcript và workspace riêng, đồng thời là phạm vi cho Goals, terminal, jobs, schedules, skills và model đã chọn.
 
-- Mở bộ chuyển Session bằng chip workspace ở góc trái thanh trên, nút **Search ⌕**, hoặc nút tên Session ở đáy Explorer. Popover có ô tìm kiếm và nút làm mới; chọn ra ngoài popover để đóng.
+- Mở bộ chuyển Session bằng nút tên Session ở đáy Explorer. Popover có ô tìm kiếm và nút làm mới; chọn ra ngoài popover để đóng. Nút workspace ở thanh trên mở workspace picker riêng, không mở danh sách Session.
 - Chọn một hàng trong danh sách để mở Session. Dấu chấm bên hàng và nhãn **● Running** cạnh tiêu đề Agent báo Session đang chạy; dòng phụ hiển thị thời điểm cập nhật và trạng thái trống nếu không có nội dung.
 - Nội dung chưa gửi trong composer được giữ riêng cho từng Session. Chuyển sang Session khác rồi quay lại sẽ thấy lại bản nháp; gửi prompt sẽ xoá bản nháp của Session đó. Bản nháp được lưu cục bộ sau khoảng 0,75 giây ngừng nhập.
 - Khi **Restore last Session** bật (mặc định), lần mở ứng dụng tiếp theo sẽ mở lại Session cuối. Nếu Session đó không còn, ứng dụng mở Session cập nhật gần nhất và ghi rõ lý do; nếu chưa có Session nào, danh sách để trống.
@@ -106,7 +106,7 @@ Chọn **Answer** để gửi các lựa chọn và nội dung đã nhập. Ch�
 
 ## Workspace Explorer và xem tài liệu
 
-Workspace Explorer đọc cây tệp thuộc Session đang chọn. Panel hiển thị rõ **Read only**; bạn có thể mở rộng thư mục, làm mới cây và chọn tệp văn bản UTF-8 để xem nội dung. Tệp không được sửa trong Explorer.
+Workspace Explorer đọc cây tệp thuộc Session đang chọn. Panel chỉ đọc (ghi trong tooltip của nút làm mới); bạn có thể mở rộng thư mục, làm mới cây và chọn tệp văn bản UTF-8 để xem nội dung. Tệp không được sửa trong Explorer.
 
 Explorer tải thư mục khi bạn mở rộng nó. Trang xem văn bản đầu tiên tối đa 300 dòng; chọn **Load next lines** để đọc tiếp. Tệp nhị phân, liên kết tượng trưng, mục không hỗ trợ hoặc giới hạn từ Host sẽ được báo thay vì hiển thị như văn bản bình thường.
 
@@ -201,7 +201,7 @@ Trong **Appearance**, chọn theme System/Light/Dark, UI scale từ 0.8 đến 1
 
 File schema 5 dùng `themePack` được chuyển khi đọc: `default` giữ bảng màu Harness cũ, còn `high-contrast`/`solarized`/`custom` giữ nguyên tên. Nếu `themeId` không tồn tại, ứng dụng hiển thị bằng bảng màu Harness, ghi lý do ngay trong Settings và không làm hỏng file tùy chọn.
 
-Trong **Layout**, chỉnh chiều rộng mặc định của popover Sessions, bật/tắt Explorer và Changes cạnh hội thoại, chỉnh chiều rộng mặc định của Explorer và Changes, và bật/tắt **Restore last Session**. Explorer chỉ dock khi cửa sổ rộng từ 1240 px, Changes từ 1180 px; hẹp hơn thì cột hội thoại được ưu tiên. Lưu Settings để áp dụng các giá trị mặc định.
+Trong **Layout**, chỉnh chiều rộng mặc định của popover Sessions, bật/tắt Explorer và Changes cạnh hội thoại, chỉnh chiều rộng mặc định của Explorer và Changes, và bật/tắt **Restore last Session**. Explorer chỉ dock khi cửa sổ đủ rộng để cột Agent còn 420 px (khoảng 1293 px), Changes từ 1180 px; hẹp hơn thì cột hội thoại được ưu tiên. Lưu Settings để áp dụng các giá trị mặc định.
 
 Trong **Shortcuts**, chỉnh tổ hợp phím để mở Settings, Marketplace, Goals hoặc tạo Session. Dùng dạng `Ctrl+Shift+S`; nhập `none` để tắt. Mỗi chức năng phải có tổ hợp phím khác nhau: khi lưu, client kiểm tra cả bốn phím tùy chỉnh lẫn các phím cố định của menu và command palette, và báo lỗi nếu hai chức năng trùng tổ hợp.
 
