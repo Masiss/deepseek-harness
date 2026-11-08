@@ -3,6 +3,7 @@
 use gpui::{div, prelude::*, px, AnyElement, Context, StatefulInteractiveElement};
 
 use super::widgets;
+use crate::assets::Icon;
 use crate::layout;
 use crate::session_list;
 use crate::shell::app::DesktopApp;
@@ -36,10 +37,11 @@ pub(crate) fn panel(
                 .child("Sessions"),
         )
         .child(
-            widgets::Button::new(theme, "↻")
+            widgets::Button::icon_only(theme, Icon::Sync)
                 .enabled(connected && !busy)
                 .build()
                 .id("sessions-refresh")
+                .debug_selector(|| "sessions-refresh".to_owned())
                 .on_click(cx.listener(|app, _, _, cx| {
                     if app.transport.is_some() && !app.sessions_busy() {
                         app.reload_sessions();
@@ -102,9 +104,22 @@ pub(crate) fn panel(
         .text_color(if connected { theme.accent } else { theme.muted })
         .text_size(theme.fs(12.))
         .id("sessions-new")
+        .debug_selector(|| "sessions-new".to_owned())
         .when(connected && !busy, |element| element.cursor_pointer())
         .when(!connected || busy, |element| element.opacity(0.55))
-        .child("＋ New session")
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(4.))
+                .child(widgets::icon(
+                    Icon::Plus,
+                    theme.sp(15.),
+                    if connected { theme.accent } else { theme.muted },
+                ))
+                .child("New session"),
+        )
         .on_click(cx.listener(|app, _, _, cx| {
             if app.transport.is_some() && !app.sessions_busy() {
                 app.new_session();

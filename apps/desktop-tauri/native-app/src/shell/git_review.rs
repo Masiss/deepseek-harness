@@ -23,6 +23,7 @@ use super::app::{
 use super::render::dialog_shell;
 use super::theme::Theme;
 use super::widgets;
+use crate::assets::Icon;
 use crate::layout;
 
 /// Height of one changed-file row (px).
@@ -360,7 +361,7 @@ fn start_number(spec: &str) -> Option<u32> {
 ///
 /// @param status — latest `git/status`.
 /// @returns whether the branch has an upstream and no unpushed commits.
-fn head_is_pushed(status: &GitStatus) -> bool {
+pub(crate) fn head_is_pushed(status: &GitStatus) -> bool {
     status.upstream.is_some() && status.ahead == 0
 }
 
@@ -370,7 +371,7 @@ fn head_is_pushed(status: &GitStatus) -> bool {
 /// @param busy — whether a Git verb is in flight.
 /// @param in_operation — whether a merge, rebase, cherry-pick, or revert is open.
 /// @returns the first blocking reason.
-fn commit_blocker(
+pub(crate) fn commit_blocker(
     staged_files: usize,
     message: &str,
     busy: bool,
@@ -1042,7 +1043,7 @@ pub(super) fn stash_panel(
                         ),
                 )
                 .child(
-                    widgets::Button::new(theme, "×")
+                    widgets::Button::icon_only(theme, Icon::X)
                         .build()
                         .id("git-stash-close")
                         .debug_selector(|| "git-stash-close".to_owned())
@@ -1395,7 +1396,7 @@ fn review_header(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopAp
                 .gap(theme.sp(4.))
                 .child(review_all)
                 .child(
-                    widgets::Button::new(theme, "×")
+                    widgets::Button::icon_only(theme, Icon::X)
                         .build()
                         .id("changes-close")
                         .on_click(cx.listener(|app, _, _, cx| {
@@ -1455,6 +1456,7 @@ fn view_tab_button(
         .child(label.to_owned())
         .on_click(cx.listener(move |app, _, window, cx| {
             app.changes_tab = value;
+            app.git_focused_hunk = None;
             if value == ChangesTab::History {
                 app.refresh_git_history();
                 window.focus(&app.git_history_focus);
@@ -2502,7 +2504,7 @@ fn conflict_body(
                         ),
                 )
                 .child(
-                    widgets::Button::new(theme, "×")
+                    widgets::Button::icon_only(theme, Icon::X)
                         .build()
                         .id("git-conflict-close")
                         .debug_selector(|| "git-conflict-close".to_owned())
@@ -3577,7 +3579,16 @@ fn diff_body(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>) 
                 for (index, hunk) in parsed.hunks.iter().enumerate() {
                     let patch = parsed.hunk_patch(index).unwrap_or_default();
                     content = content.child(hunk_card(
-                        app, theme, path, status, hunk, &patch, staged, disabled, cx,
+                        app,
+                        theme,
+                        path,
+                        status,
+                        hunk,
+                        &patch,
+                        staged,
+                        disabled,
+                        app.git_focused_hunk == Some(index),
+                        cx,
                     ));
                 }
             }
@@ -3585,26 +3596,39 @@ fn diff_body(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>) 
     }
     let review_bar = div()
         .flex()
-        .flex_row()
-        .items_center()
-        .gap(theme.sp(6.))
+        .flex_col()
+        .gap(theme.sp(2.))
         .px(theme.sp(10.))
         .py(theme.sp(5.))
         .border_t_1()
         .border_color(theme.border)
-        .child(reviewed_toggle(
-            theme,
-            path.as_deref().is_some_and(|path| app.git_is_reviewed(path)),
-            path.is_some() && !app.git_loading,
-            cx,
-        ))
         .child(
             div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(6.))
+                .child(reviewed_toggle(
+                    theme,
+                    path.as_deref().is_some_and(|path| app.git_is_reviewed(path)),
+                    path.is_some() && !app.git_loading,
+                    cx,
+                ))
+                .child(
+                    div()
+                        .text_size(theme.fs(9.))
+                        .text_color(theme.muted)
+                        .child(
+                            "Reviewed is keyed by path and content signature; it clears when the status entry changes.",
+                        ),
+                ),
+        )
+        .child(
+            div()
+                .debug_selector(|| "git-diff-keys".to_owned())
                 .text_size(theme.fs(9.))
                 .text_color(theme.muted)
-                .child(
-                    "Reviewed is keyed by path and content signature; it clears when the status entry changes.",
-                ),
+                .child("Alt+↑/↓ hunk · s stage · u unstage · d discard"),
         );
     div()
         .flex()
@@ -3710,6 +3734,7 @@ fn hunk_card(
     patch: &str,
     staged: bool,
     disabled: Option<&str>,
+    focused: bool,
     cx: &mut Context<DesktopApp>,
 ) -> AnyElement {
     let mut actions = div().flex().flex_row().items_center().gap(theme.sp(2.));
@@ -3801,8 +3826,11 @@ fn hunk_card(
         .flex_col()
         .rounded(theme.corner())
         .border_1()
-        .border_color(theme.border)
+        .border_color(if focused { theme.accent } else { theme.border })
         .overflow_hidden()
+        .when(focused, |element| {
+            element.debug_selector(|| "git-hunk-focused".to_owned())
+        })
         .child(
             div()
                 .flex()
@@ -3963,15 +3991,19 @@ fn commit_bar(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>)
                     .child(format!("−{}", summary.deletions)),
             )
     };
-    let recent_toggle = action_text(
-        theme,
-        if app.git_recent_open { "Recent ▴" } else { "Recent ▾" },
-        "git-recent-toggle".to_owned(),
-    )
-    .on_click(cx.listener(|app, _, _, cx| {
-        app.git_recent_open = !app.git_recent_open;
-        cx.notify();
-    }));
+    let recent_toggle = widgets::Button::new(theme, "Recent")
+        .trailing_icon(if app.git_recent_open {
+            Icon::ChevronUp
+        } else {
+            Icon::ChevronDown
+        })
+        .build()
+        .id("git-recent-toggle")
+        .debug_selector(|| "git-recent-toggle".to_owned())
+        .on_click(cx.listener(|app, _, _, cx| {
+            app.git_recent_open = !app.git_recent_open;
+            cx.notify();
+        }));
     let message_input = app.text_field("git-commit-message", "Commit message", false, cx);
     let mut recent = None;
     if app.git_recent_open {
@@ -5670,6 +5702,180 @@ mod tests {
                 .git_error
                 .as_deref()
                 .is_some_and(|error| error.contains("untracked directory")));
+        });
+    }
+
+    /// A two-hunk unified patch for one modified path.
+    const TWO_HUNK_PATCH: &str = "diff --git a/src/a.ts b/src/a.ts\nindex 1111111..2222222 100644\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,2 +1,2 @@\n-old one\n+new one\n context\n@@ -10,2 +10,2 @@\n-old two\n+new two\n context\n";
+
+    /// Shell with one changed path, a two-hunk diff, and a usable transport.
+    ///
+    /// The transport points at a closed local port: every verb starts on the
+    /// worker, and no test waits for it to finish.
+    fn changes_key_harness(setup: impl FnOnce(&mut DesktopApp)) -> crate::harness::Harness {
+        crate::harness::Harness::open_with(1440., 900., move |app| {
+            app.selected_session = Some("git-session".to_owned());
+            app.transport = HttpTransport::new("http://127.0.0.1:9").ok();
+            let mut status = status(0, 0, None);
+            status.files = vec![file("src/a.ts", "modified", false, true)];
+            app.git_status = Some(status);
+            app.git_selected_path = Some("src/a.ts".to_owned());
+            app.git_diff = Some(GitDiff {
+                path: "src/a.ts".to_owned(),
+                staged: false,
+                patch: TWO_HUNK_PATCH.to_owned(),
+                truncated: false,
+                untracked: false,
+            });
+            app.show_changes = true;
+            app.changes_tab = ChangesTab::Diff;
+            setup(app);
+        })
+    }
+
+    #[test]
+    fn diff_keys_step_through_hunks_and_stage_the_focused_one() {
+        let mut harness = changes_key_harness(|_| {});
+        assert!(harness.bounds("git-hunk-focused").is_none());
+
+        harness.keys("alt-down");
+        assert_eq!(harness.with(|app, _| app.git_focused_hunk), Some(0));
+        assert!(harness.bounds("git-hunk-focused").is_some());
+
+        harness.keys("alt-down");
+        assert_eq!(harness.with(|app, _| app.git_focused_hunk), Some(1));
+
+        harness.keys("alt-down");
+        assert_eq!(
+            harness.with(|app, _| app.git_focused_hunk),
+            Some(1),
+            "the last hunk keeps focus"
+        );
+
+        harness.keys("alt-up");
+        assert_eq!(harness.with(|app, _| app.git_focused_hunk), Some(0));
+
+        harness.press("s");
+        harness.with(|app, _| {
+            assert!(app.git_loading, "staging the focused hunk starts a verb");
+        });
+    }
+
+    #[test]
+    fn diff_keys_never_unstage_the_unstaged_side() {
+        let mut harness = changes_key_harness(|app| app.git_focused_hunk = Some(0));
+        harness.press("u");
+        harness.with(|app, _| {
+            assert!(!app.git_loading, "no unstage verb starts");
+            assert!(app.git_confirmation.is_none());
+        });
+    }
+
+    #[test]
+    fn diff_keys_discard_the_focused_hunk_through_the_confirmation() {
+        let mut harness = changes_key_harness(|app| app.git_focused_hunk = Some(1));
+        harness.keys("d");
+        assert!(matches!(
+            harness.with(|app, _| app.git_confirmation.clone()),
+            Some(GitConfirmation::DiscardHunk { path, .. }) if path == "src/a.ts"
+        ));
+        assert!(harness.bounds("git-confirm-action").is_some());
+    }
+
+    #[test]
+    fn files_keys_stage_the_selected_path() {
+        let mut harness = changes_key_harness(|app| app.changes_tab = ChangesTab::Files);
+        harness.press("s");
+        harness.with(|app, _| assert!(app.git_loading, "staging the selected path starts a verb"));
+    }
+
+    #[test]
+    fn files_keys_unstage_a_staged_path_and_confirm_a_discard() {
+        let mut harness = changes_key_harness(|app| {
+            app.changes_tab = ChangesTab::Files;
+            let mut status = status(0, 0, None);
+            status.files = vec![
+                file("src/a.ts", "modified", true, false),
+                file("src/b.ts", "modified", false, true),
+            ];
+            app.git_status = Some(status);
+            app.git_selected_path = Some("src/a.ts".to_owned());
+        });
+        harness.press("u");
+        harness.with(|app, _| assert!(app.git_loading, "unstage starts a verb"));
+
+        let mut discard = changes_key_harness(|app| {
+            app.changes_tab = ChangesTab::Files;
+            app.git_selected_path = Some("src/a.ts".to_owned());
+        });
+        discard.keys("d");
+        assert!(matches!(
+            discard.with(|app, _| app.git_confirmation.clone()),
+            Some(GitConfirmation::Discard { path, .. }) if path == "src/a.ts"
+        ));
+    }
+
+    #[test]
+    fn changes_keys_do_nothing_while_a_text_field_types() {
+        let mut harness = changes_key_harness(|app| app.changes_tab = ChangesTab::Files);
+        harness.focus_input("composer");
+        assert!(harness.input_focused("composer"));
+        harness.press("s");
+        harness.with(|app, _| {
+            assert!(!app.git_loading, "typing never stages");
+        });
+        assert_eq!(
+            harness.with(|app, cx| app.input_text("composer", cx)),
+            "s",
+            "the letter still reaches the field"
+        );
+    }
+
+    #[test]
+    fn changes_keys_stay_quiet_outside_the_diff_tab_and_closed_column() {
+        let mut harness = changes_key_harness(|app| app.changes_tab = ChangesTab::Files);
+        harness.keys("alt-down");
+        assert_eq!(
+            harness.with(|app, _| app.git_focused_hunk),
+            None,
+            "only the Diff tab moves hunk focus"
+        );
+
+        let mut closed = changes_key_harness(|app| {
+            app.show_changes = false;
+            app.changes_tab = ChangesTab::Files;
+        });
+        closed.press("s");
+        closed.with(|app, _| {
+            assert!(!app.git_loading, "a closed Changes column runs no verb");
+        });
+    }
+
+    #[test]
+    fn ctrl_enter_commits_from_the_commit_message_field_only() {
+        let mut harness = changes_key_harness(|app| {
+            let mut status = status(0, 0, None);
+            status.files = vec![file("src/a.ts", "modified", true, true)];
+            app.git_status = Some(status);
+            app.git_selected_path = Some("src/a.ts".to_owned());
+        });
+        harness.with(|app, cx| app.set_input("git-commit-message", "Ship the review keys", cx));
+        harness.focus_input("git-commit-message");
+        assert!(harness.input_focused("git-commit-message"));
+        harness.press("ctrl-enter");
+        harness.with(|app, _| assert!(app.git_loading, "the commit starts"));
+
+        let mut elsewhere = changes_key_harness(|app| {
+            let mut status = status(0, 0, None);
+            status.files = vec![file("src/a.ts", "modified", true, true)];
+            app.git_status = Some(status);
+            app.git_selected_path = Some("src/a.ts".to_owned());
+        });
+        elsewhere.with(|app, cx| app.set_input("git-commit-message", "Ship the review keys", cx));
+        elsewhere.focus_input("composer");
+        elsewhere.press("ctrl-enter");
+        elsewhere.with(|app, _| {
+            assert!(!app.git_loading, "Ctrl+Enter outside the commit field never commits");
         });
     }
 }

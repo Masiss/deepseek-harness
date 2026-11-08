@@ -2,6 +2,7 @@
 
 use gpui::{div, prelude::*, px, AnyElement, Context, Div, Window};
 
+use crate::assets::Icon;
 use crate::explorer::{ExplorerRow, ExplorerRowKind};
 use crate::layout;
 use crate::session_list::relative_time;
@@ -837,12 +838,15 @@ fn tool_activity_group(
         .id(gpui::SharedString::from(format!(
             "tool-activity-toggle-{first_seq}"
         )))
-        .child(
-            div()
-                .text_size(theme.fs(10.))
-                .text_color(theme.muted)
-                .child(if expanded { "▾" } else { "▸" }),
-        )
+        .child(widgets::icon(
+            if expanded {
+                Icon::ChevronDown
+            } else {
+                Icon::ChevronRight
+            },
+            theme.sp(15.),
+            theme.muted,
+        ))
         .child(div().child("Tool activity"))
         .child(
             div()
@@ -1374,8 +1378,14 @@ fn composer(
                                 .gap(px(2.))
                                 .min_w(px(0.))
                                 .child(
-                                    icon_button(theme, "composer-attach", "＋", attach_hint, attach_enabled)
-                                        .on_click(cx.listener(|app, _, _, cx| {
+                                    icon_button(
+                                        theme,
+                                        "composer-attach",
+                                        Icon::Plus,
+                                        attach_hint,
+                                        attach_enabled,
+                                    )
+                                    .on_click(cx.listener(|app, _, _, cx| {
                                             if app.chat_loading || app.attachment_receiver.is_some() {
                                                 return;
                                             }
@@ -1387,7 +1397,7 @@ fn composer(
                                     icon_button(
                                         theme,
                                         "composer-file-picker",
-                                        "＠",
+                                        Icon::AtSign,
                                         "Insert a workspace file reference.",
                                         transport,
                                     )
@@ -1424,17 +1434,17 @@ fn composer(
                                 .when(has_attachment, |element| {
                                     element.child(
                                         icon_button(
-                                                theme,
-                                                "composer-clear-attachment",
-                                                "×",
-                                                "Remove the attachment.",
-                                                true,
-                                            )
-                                            .on_click(cx.listener(|app, _, _, cx| {
-                                                app.attachment = None;
-                                                app.attachment_name.clear();
-                                                cx.notify();
-                                            })),
+                                            theme,
+                                            "composer-clear-attachment",
+                                            Icon::X,
+                                            "Remove the attachment.",
+                                            true,
+                                        )
+                                        .on_click(cx.listener(|app, _, _, cx| {
+                                            app.attachment = None;
+                                            app.attachment_name.clear();
+                                            cx.notify();
+                                        })),
                                     )
                                 }),
                         )
@@ -1445,13 +1455,11 @@ fn composer(
                                 .items_center()
                                 .gap(px(4.))
                                 .child(
-                                    widgets::Button::new(
-                                        theme,
-                                        format!("{model_label} ▾"),
-                                    )
-                                    .enabled(transport)
-                                    .build()
-                                    .id("composer-model")
+                                    widgets::Button::new(theme, model_label.clone())
+                                        .trailing_icon(Icon::ChevronDown)
+                                        .enabled(transport)
+                                        .build()
+                                        .id("composer-model")
                                     .debug_selector(|| "composer-model".to_owned())
                                     .when(!transport, |button| {
                                         button.tooltip(widgets::HintView::tooltip(
@@ -1465,13 +1473,11 @@ fn composer(
                                     })),
                                 )
                                 .child(
-                                    widgets::Button::new(
-                                        theme,
-                                        format!("{mode_label} ▾"),
-                                    )
-                                    .enabled(transport)
-                                    .build()
-                                    .id("composer-mode")
+                                    widgets::Button::new(theme, mode_label.clone())
+                                        .trailing_icon(Icon::ChevronDown)
+                                        .enabled(transport)
+                                        .build()
+                                        .id("composer-mode")
                                     .debug_selector(|| "composer-mode".to_owned())
                                     .when(!transport, |button| {
                                         button.tooltip(widgets::HintView::tooltip(
@@ -1488,7 +1494,7 @@ fn composer(
                                     icon_button(
                                         theme,
                                         if busy { "composer-stop" } else { "composer-send" },
-                                        if busy { "■" } else { "↑" },
+                                        if busy { Icon::Stop } else { Icon::Send },
                                         send_hint,
                                         busy || can_send,
                                     )
@@ -1659,10 +1665,17 @@ fn current_mode_label(app: &DesktopApp) -> &'static str {
 }
 
 /// A compact icon control for the composer's tool row.
+///
+/// @param theme — frame palette and metrics.
+/// @param id — element id, also the harness selector.
+/// @param icon — icon drawn inside the 27px hit area.
+/// @param hint — tooltip shown while the control is hovered.
+/// @param enabled — whether the control accepts a click.
+/// @returns the control, ready for its click handler.
 fn icon_button(
     theme: &Theme,
     id: &'static str,
-    glyph: &'static str,
+    icon: Icon,
     hint: &'static str,
     enabled: bool,
 ) -> gpui::Stateful<Div> {
@@ -1674,25 +1687,57 @@ fn icon_button(
         .w(theme.sp(27.))
         .h(theme.sp(27.))
         .rounded(theme.corner())
-        .text_size(theme.fs(13.))
         .text_color(theme.muted)
-        .child(glyph)
+        .child(widgets::icon(icon, theme.sp(15.), theme.muted))
         .id(id)
         .debug_selector(move || id.to_owned())
         .tooltip(widgets::HintView::tooltip(theme, hint));
     if enabled {
         button
             .cursor_pointer()
-            .hover(|style| style.bg(theme.surface_raised).text_color(theme.text))
+            .hover(|style| style.bg(theme.surface_raised))
     } else {
         button.opacity(0.45)
     }
 }
 
 /// One selectable row inside the composer menu.
+///
+/// @param theme — frame palette and metrics.
+/// @param id — element id, also the harness selector.
+/// @param label — row text.
+/// @param selected — whether the row's mode is the current one.
+/// @param enabled — whether the row accepts a click.
+/// @param hint — tooltip shown while the row is hovered.
+/// @returns the row, ready for its click handler.
 fn menu_row(
     theme: &Theme,
     id: &'static str,
+    label: String,
+    selected: bool,
+    enabled: bool,
+    hint: &'static str,
+) -> gpui::Stateful<Div> {
+    menu_row_with_arrow(theme, id, None, label, selected, enabled, hint)
+}
+
+/// One menu row that can end with a direction arrow.
+///
+/// The prompt-history rows use the arrow to show which way through the history
+/// the row recalls, so the row reads the same as the arrow keys it mirrors.
+///
+/// @param theme — frame palette and metrics.
+/// @param id — element id, also the harness selector.
+/// @param arrow — trailing direction icon, or `None` for a plain row.
+/// @param label — row text.
+/// @param selected — whether the row's mode is the current one.
+/// @param enabled — whether the row accepts a click.
+/// @param hint — tooltip shown while the row is hovered.
+/// @returns the row, ready for its click handler.
+fn menu_row_with_arrow(
+    theme: &Theme,
+    id: &'static str,
+    arrow: Option<Icon>,
     label: String,
     selected: bool,
     enabled: bool,
@@ -1717,6 +1762,13 @@ fn menu_row(
                 .child(if selected { "\u{2713}" } else { "" }),
         )
         .child(label)
+        .children(arrow.map(|name| {
+            div()
+                .flex_1()
+                .flex()
+                .justify_end()
+                .child(widgets::icon(name, theme.sp(15.), theme.muted))
+        }))
         .id(id)
         .debug_selector(move || id.to_owned())
         .tooltip(widgets::HintView::tooltip(theme, hint));
@@ -1896,9 +1948,10 @@ fn composer_menu(
                 .child("Prompt history"),
         )
         .child(
-            menu_row(
+            menu_row_with_arrow(
                 theme,
                 "composer-history",
+                Some(Icon::ChevronUp),
                 "Previous prompt".to_owned(),
                 false,
                 has_history,
@@ -1921,9 +1974,10 @@ fn composer_menu(
             })),
         )
         .child(
-            menu_row(
+            menu_row_with_arrow(
                 theme,
                 "composer-history-next",
+                Some(Icon::ChevronDown),
                 "Next prompt".to_owned(),
                 false,
                 has_history,
@@ -1962,7 +2016,7 @@ fn composer_menu(
                         .child("Model"),
                 )
                 .child(
-                    widgets::Button::new(theme, "↻")
+                    widgets::Button::icon_only(theme, Icon::Sync)
                         .build()
                         .id("model-reload")
                         .on_click(cx.listener(|app, _, _, cx| {
@@ -2090,7 +2144,8 @@ fn empty_state(
                         .child("A new Session needs the Host. Retry the connection to continue."),
                 )
                 .child(
-                    widgets::Button::new(theme, "＋ New Session")
+                    widgets::Button::new(theme, "New Session")
+                        .leading_icon(Icon::Plus)
                         .enabled(false)
                         .build()
                         .id("empty-new-session"),
@@ -2177,7 +2232,8 @@ fn empty_state(
                         .child("Open a Session from the sidebar, or start another one."),
                 )
                 .child(
-                    widgets::Button::new(theme, "＋ New Session")
+                    widgets::Button::new(theme, "New Session")
+                        .leading_icon(Icon::Plus)
                         .primary()
                         .build()
                         .id("empty-new-session-2")
@@ -2228,7 +2284,8 @@ fn empty_state(
                 .items_center()
                 .gap(theme.sp(6.))
                 .child(
-                    widgets::Button::new(theme, "＋ New Session")
+                    widgets::Button::new(theme, "New Session")
+                        .leading_icon(Icon::Plus)
                         .primary()
                         .build()
                         .id("onboarding-new-session")

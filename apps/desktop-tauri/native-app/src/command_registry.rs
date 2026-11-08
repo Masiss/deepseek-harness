@@ -11,6 +11,7 @@ pub enum CommandId {
     NewSession,
     ToggleExplorer,
     ToggleChanges,
+    ShowChangesDiff,
     ToggleTerminal,
     ToggleSettings,
     TogglePlugins,
@@ -26,11 +27,12 @@ pub enum CommandId {
 
 impl CommandId {
     /// Every command the shell understands, in palette order.
-    pub const ALL: [CommandId; 14] = [
+    pub const ALL: [CommandId; 15] = [
         Self::ShowPalette,
         Self::NewSession,
         Self::ToggleExplorer,
         Self::ToggleChanges,
+        Self::ShowChangesDiff,
         Self::ToggleTerminal,
         Self::OpenFile,
         Self::ToggleSettings,
@@ -44,10 +46,11 @@ impl CommandId {
     ];
 
     /// Commands a user can run from the menu or the palette.
-    pub const INVOKABLE: [CommandId; 12] = [
+    pub const INVOKABLE: [CommandId; 13] = [
         Self::NewSession,
         Self::ToggleExplorer,
         Self::ToggleChanges,
+        Self::ShowChangesDiff,
         Self::ToggleTerminal,
         Self::OpenFile,
         Self::ToggleSettings,
@@ -63,11 +66,12 @@ impl CommandId {
     ///
     /// The Terminal belongs to the bottom bar, so the menu omits it even though
     /// the palette still offers it.
-    pub const MENU: [CommandId; 12] = [
+    pub const MENU: [CommandId; 13] = [
         Self::ShowPalette,
         Self::ToggleExplorer,
         Self::NewSession,
         Self::ToggleChanges,
+        Self::ShowChangesDiff,
         Self::OpenFile,
         Self::ToggleGoals,
         Self::ToggleSettings,
@@ -84,6 +88,7 @@ impl CommandId {
             Self::NewSession => "New session",
             Self::ToggleExplorer => "Toggle Explorer",
             Self::ToggleChanges => "Toggle Changes",
+            Self::ShowChangesDiff => "Show changes (diff)",
             Self::ToggleTerminal => "Toggle Terminal",
             Self::ToggleSettings => "Preferences…",
             Self::TogglePlugins => "Extensions",
@@ -104,6 +109,7 @@ impl CommandId {
             Self::NewSession
             | Self::ToggleExplorer
             | Self::ToggleChanges
+            | Self::ShowChangesDiff
             | Self::OpenFile
             | Self::ToggleGoals
             | Self::ShowPalette => "Workspace",
@@ -126,6 +132,9 @@ impl CommandId {
             Self::NewSession => Some("Ctrl+N"),
             Self::ToggleExplorer => Some("Ctrl+Shift+E"),
             Self::ToggleChanges => Some("Ctrl+Shift+C"),
+            // Goals keeps Ctrl+Shift+G; the diff chord is the free one that
+            // leaves that shipped, user-overridable shortcut untouched.
+            Self::ShowChangesDiff => Some("Ctrl+Shift+D"),
             Self::ToggleTerminal => Some("Ctrl+Shift+T"),
             Self::ToggleSettings => Some("Ctrl+Comma"),
             Self::TogglePlugins => Some("Ctrl+Shift+X"),
@@ -213,6 +222,40 @@ mod tests {
             }
         }
         assert_eq!(seen, vec!["Workspace", "Customize", "Help", "Application"]);
+    }
+
+    #[test]
+    fn the_changes_and_goals_chords_are_the_documented_ones() {
+        // `USER_GUIDE.md` promises these three chords for three distinct jobs.
+        for (command, chord) in [
+            (CommandId::ToggleChanges, "Ctrl+Shift+C"),
+            (CommandId::ShowChangesDiff, "Ctrl+Shift+D"),
+            (CommandId::ToggleGoals, "Ctrl+Shift+G"),
+        ] {
+            assert_eq!(
+                command.default_chord(),
+                Some(chord),
+                "{command:?} keeps its documented chord"
+            );
+        }
+    }
+
+    #[test]
+    fn the_user_guide_documents_the_changes_shortcuts() {
+        let guide = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/USER_GUIDE.md"
+        ))
+        .expect("USER_GUIDE.md is readable");
+        for claim in [
+            "**Ctrl+Shift+D**",
+            "**Ctrl+Shift+C**",
+            "**Alt+↑/↓**",
+            "**Ctrl+Enter**",
+            "**Commit message**",
+        ] {
+            assert!(guide.contains(claim), "USER_GUIDE.md documents {claim}");
+        }
     }
 
     #[test]

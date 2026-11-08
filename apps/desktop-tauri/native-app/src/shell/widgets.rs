@@ -46,6 +46,8 @@ enum ButtonContent {
 /// A compact button with primary, danger, and enabled variants.
 pub(crate) struct Button {
     content: ButtonContent,
+    leading: Option<Icon>,
+    trailing: Option<Icon>,
     theme: Theme,
     primary: bool,
     danger: bool,
@@ -60,6 +62,8 @@ impl Button {
     pub(crate) fn new(theme: &Theme, label: impl Into<SharedString>) -> Self {
         Self {
             content: ButtonContent::Text(label.into()),
+            leading: None,
+            trailing: None,
             theme: theme.clone(),
             primary: false,
             danger: false,
@@ -78,6 +82,8 @@ impl Button {
     pub(crate) fn icon_only(theme: &Theme, name: Icon) -> Self {
         Self {
             content: ButtonContent::Icon(name),
+            leading: None,
+            trailing: None,
             theme: theme.clone(),
             primary: false,
             danger: false,
@@ -86,6 +92,24 @@ impl Button {
             padding_y: theme.sp(3.0),
             min_height: theme.control_height(),
         }
+    }
+
+    /// Draws an icon before the label, sized to the button's text.
+    ///
+    /// @param name — icon drawn at the button's foreground colour.
+    /// @returns the button, for the rest of its builder chain.
+    pub(crate) fn leading_icon(mut self, name: Icon) -> Self {
+        self.leading = Some(name);
+        self
+    }
+
+    /// Draws an icon after the label, sized to the button's text.
+    ///
+    /// @param name — icon drawn at the button's foreground colour.
+    /// @returns the button, for the rest of its builder chain.
+    pub(crate) fn trailing_icon(mut self, name: Icon) -> Self {
+        self.trailing = Some(name);
+        self
     }
 
     /// Uses the accent fill for the primary action.
@@ -130,12 +154,20 @@ impl Button {
             .bg(background)
             .text_color(foreground)
             .text_size(theme.fs(11.5))
+            .children(
+                self.leading
+                    .map(|name| icon(name, theme.sp(13.), foreground).into_any_element()),
+            )
             .child(match self.content {
                 ButtonContent::Text(label) => label.into_any_element(),
                 ButtonContent::Icon(name) => {
                     icon(name, theme.sp(15.), foreground).into_any_element()
                 }
-            });
+            })
+            .children(
+                self.trailing
+                    .map(|name| icon(name, theme.sp(13.), foreground).into_any_element()),
+            );
         if self.enabled {
             button = button
                 .cursor_pointer()
