@@ -556,4 +556,8 @@ DSH_DESKTOP_SHELL=native bash apps/desktop-tauri/scripts/pack-appimage.sh linux-
 
 Output dự kiến: `apps/desktop/.desktop-build/targets/linux-x64/appimage/DeepSeek-Harness-native-0.2.2-rc.1-x86_64.AppImage`. Sau khi build xong phải chạy `appimage-probe.sh` + `size-gate.sh linux-x64`, xác minh SHA-256 rồi mới cài nguyên tử vào `~/.local/bin/deepseek-harness` (không publish, không tag).
 
+Kết quả 2026-11-08: `DeepSeek-Harness-native-0.2.2-rc.1-x86_64.AppImage` **90.257.912 B**, SHA-256 `224f68784a94f0e7d73ffaa39529d12b235bbf4df719b772d1dff6a2708dd520`. `appimage-probe.sh` pass (`RESULT host=OK`, `bridge_status=idle`, `seeded_in_home=1`), `size-gate.sh linux-x64` pass (image 90.257.912 / 110.100.480; installed tree 309.971.655 / 419.430.400). Đã cài nguyên tử vào `~/.local/bin/deepseek-harness` (mode 0755).
+
+Bẫy build: cargo target của worktree merge làm đầy `/` (11 MB còn lại) ⇒ xoá `native-app/target` + `client-core/target` và symlink `native-app/target` sang target đã build ở lane chính để tái dùng dependency. Không commit bất kỳ thay đổi nào trong lúc `build:official`/`release:pack` chạy, vì `DSH_CLIENT_COMMIT_HASH` phải khớp HEAD.
+
 Lưu ý: build này là **local trial**, không phải release-qualified; update production vẫn chưa ký/phát hành.
