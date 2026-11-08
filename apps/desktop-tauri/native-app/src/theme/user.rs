@@ -7,13 +7,13 @@
 
 use std::error::Error as StdError;
 use std::fmt;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::contrast;
 use super::pack::ThemePack;
+use super::remote::{self, ThemeProvenance};
 use super::store::{builtin_packs, CUSTOM_PACK_ID};
 use super::tokens::Scheme;
 use crate::ui_preferences::AccentScheme;
@@ -24,8 +24,6 @@ const THEME_FILE_EXTENSION: &str = "json";
 /// Longest theme id, matching the pack schema.
 const ID_MAX_CHARS: usize = 64;
 
-static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
-
 /// Where one installed pack lives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ThemeSource {
@@ -33,6 +31,8 @@ pub(crate) enum ThemeSource {
     Builtin,
     /// Read from `<themes-dir>/<id>.json`.
     User,
+    /// Downloaded from GitHub into `<themes-dir>/cache/<id>.json`.
+    Github,
 }
 
 impl ThemeSource {
@@ -41,6 +41,7 @@ impl ThemeSource {
         match self {
             Self::Builtin => "builtin",
             Self::User => "user",
+            Self::Github => "github",
         }
     }
 }
@@ -54,6 +55,8 @@ pub(crate) struct InstalledTheme {
     pub(crate) source: ThemeSource,
     /// File the pack was read from; `None` for a built-in.
     pub(crate) path: Option<PathBuf>,
+    /// Fetch provenance for a cached GitHub pack.
+    pub(crate) provenance: Option<ThemeProvenance>,
 }
 
 /// One theme file that discovery could not load.
@@ -103,10 +106,12 @@ impl ThemeCatalog {
 
     /// Loads built-ins and every `*.json` file in `dir`.
     ///
-    /// Files are visited in file-name order. A user file shadows a built-in with
-    /// the same id; a second user file with an id already installed becomes an
-    /// error entry so the first file stays deterministic. A missing directory is
-    /// an empty user catalogue, not a failure.
+    /// Built-ins load first, then cached GitHub documents, then local user files.
+    /// A user file shadows a cached or built-in pack with the same id, and a
+    /// cached pack shadows a built-in. Files are visited in file-name order; a
+    /// second user file with an id already installed becomes an error entry so
+    /// the first file stays deterministic. A missing directory is an empty
+    /// catalogue, not a failure.
     ///
     /// @param dir — directory that holds user theme files.
     /// @returns the catalogue and every rejected file.
@@ -116,6 +121,20 @@ impl ThemeCatalog {
             themes: builtin_themes(),
             errors: Vec::new(),
         };
+        let cache = remote::discover_cache(&remote::cache_dir(dir));
+        for cached in cache.themes {
+            catalog.themes.retain(|theme| theme.pack.id != cached.pack.id);
+            catalog.themes.push(InstalledTheme {
+                pack: cached.pack,
+                source: ThemeSource::Github,
+                path: Some(cached.path),
+                provenance: Some(cached.meta),
+            });
+        }
+        catalog.errors.extend(cache.errors.into_iter().map(|error| ThemeFileError {
+            file_name: error.file_name,
+            reason: error.reason,
+        }));
         match fs::read_dir(dir) {
             Ok(entries) => {
                 let mut files: Vec<PathBuf> = entries
@@ -311,20 +330,33 @@ impl ThemeCatalog {
         Ok(pack.id)
     }
 
-    /// Removes one user pack file.
+    /// Removes one user or cached GitHub pack file.
     ///
-    /// @param id — installed user pack id.
+    /// @param id — installed user or cached pack id.
     pub(crate) fn remove(&mut self, id: &str) -> Result<(), ThemeCatalogError> {
-        let theme = self.user_theme(id)?;
-        let path = theme
-            .path
-            .clone()
-            .ok_or_else(|| ThemeCatalogError::NotUser { id: id.to_owned() })?;
-        fs::remove_file(&path).map_err(|source| ThemeCatalogError::Io {
-            operation: "remove theme file",
-            path: path.clone(),
-            source,
-        })?;
+        let source = self
+            .find(id)
+            .ok_or_else(|| ThemeCatalogError::NotFound { id: id.to_owned() })?
+            .source;
+        match source {
+            ThemeSource::Builtin => {
+                return Err(ThemeCatalogError::NotUser { id: id.to_owned() })
+            }
+            ThemeSource::User => {
+                let theme = self.user_theme(id)?;
+                let path = theme
+                    .path
+                    .clone()
+                    .ok_or_else(|| ThemeCatalogError::NotUser { id: id.to_owned() })?;
+                fs::remove_file(&path).map_err(|source| ThemeCatalogError::Io {
+                    operation: "remove theme file",
+                    path: path.clone(),
+                    source,
+                })?;
+            }
+            ThemeSource::Github => remote::remove_cached(&remote::cache_dir(&self.dir), id)
+                .map_err(|error| ThemeCatalogError::Remote(error.to_string()))?,
+        }
         self.reload();
         Ok(())
     }
@@ -402,6 +434,7 @@ impl ThemeCatalog {
             pack,
             source: ThemeSource::User,
             path: Some(path.to_owned()),
+            provenance: None,
         });
     }
 
@@ -458,6 +491,8 @@ pub(crate) enum ThemeCatalogError {
     NotUser { id: String },
     /// No pack has this id.
     NotFound { id: String },
+    /// A remote cache operation failed.
+    Remote(String),
 }
 
 impl fmt::Display for ThemeCatalogError {
@@ -493,6 +528,7 @@ impl fmt::Display for ThemeCatalogError {
             ),
             Self::NotUser { id } => write!(formatter, "theme `{id}` is not a user theme file"),
             Self::NotFound { id } => write!(formatter, "theme `{id}` is not installed"),
+            Self::Remote(reason) => formatter.write_str(reason),
         }
     }
 }
@@ -507,6 +543,7 @@ fn builtin_themes() -> Vec<InstalledTheme> {
             pack,
             source: ThemeSource::Builtin,
             path: None,
+            provenance: None,
         })
         .collect()
 }
@@ -521,51 +558,13 @@ fn serialize_pack(pack: &ThemePack) -> Result<String, ThemeCatalogError> {
     Ok(text)
 }
 
-/// Writes a file by syncing a sibling temporary file and renaming it over `path`.
+/// Writes a theme file through the shared atomic replacement helper.
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ThemeCatalogError> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(parent).map_err(|source| ThemeCatalogError::Io {
-        operation: "create the theme directory for",
+    super::atomic::write_atomic(path, bytes).map_err(|source| ThemeCatalogError::Io {
+        operation: "write",
         path: path.to_owned(),
         source,
-    })?;
-    let temporary = parent.join(format!(
-        ".theme.{}.{}.tmp",
-        std::process::id(),
-        NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed)
-    ));
-    let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|source| ThemeCatalogError::Io {
-                operation: "create a temporary theme file for",
-                path: path.to_owned(),
-                source,
-            })?;
-        file.write_all(bytes)
-            .map_err(|source| ThemeCatalogError::Io {
-                operation: "write",
-                path: path.to_owned(),
-                source,
-            })?;
-        file.sync_all().map_err(|source| ThemeCatalogError::Io {
-            operation: "sync",
-            path: path.to_owned(),
-            source,
-        })?;
-        drop(file);
-        fs::rename(&temporary, path).map_err(|source| ThemeCatalogError::Io {
-            operation: "replace",
-            path: path.to_owned(),
-            source,
-        })
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
+    })
 }
 
 #[cfg(test)]
@@ -575,7 +574,7 @@ mod tests {
         builtin_pack, resolve, ThemeRequest, DEFAULT_PACK_ID, FALLBACK_PACK_ID,
     };
     use crate::ui_preferences::CustomTheme;
-    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
 

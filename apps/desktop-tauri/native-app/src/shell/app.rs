@@ -11,7 +11,8 @@ use crate::host::{self, Host};
 use crate::question_card::QuestionCard;
 use crate::restart;
 use crate::session_list;
-use crate::theme::{ThemeCatalog, ThemeCatalogError};
+use crate::theme::remote::{self, CheckedTheme, RefreshOutcome};
+use crate::theme::{ThemeCatalog, ThemeCatalogError, ThemeSource};
 use crate::transcript::{self, RowKind, Transcript};
 use crate::ui_preferences::UiPreferences;
 use dsh_client_core::{
@@ -1099,6 +1100,10 @@ pub(crate) struct DesktopApp {
     pub(crate) theme_export_id: Option<String>,
     /// User pack whose Remove button is waiting for confirmation.
     pub(crate) theme_remove_confirm: Option<String>,
+    /// GitHub import dialog state, when open.
+    pub(crate) github_dialog: Option<GithubThemeDialog>,
+    /// Running explicit GitHub check, import, or update.
+    pub(crate) github_receiver: Option<mpsc::Receiver<GithubTaskResult>>,
     pub(crate) settings_description: Option<SettingsDescribeValue>,
     pub(crate) settings_loading: bool,
     pub(crate) settings_error: Option<String>,
@@ -1447,6 +1452,30 @@ pub(crate) struct ThemeEditor {
     pub(crate) pending_text: Option<String>,
 }
 
+/// In-app GitHub import dialog.
+#[derive(Clone)]
+pub(crate) struct GithubThemeDialog {
+    /// Fetch or validation status shown below the fields.
+    pub(crate) status: Option<String>,
+    /// Last named rejection.
+    pub(crate) error: Option<String>,
+    /// Whether a Check or Import worker is running.
+    pub(crate) busy: bool,
+}
+
+/// One completed GitHub theme worker result.
+pub(crate) enum GithubTaskResult {
+    /// Check result without a cache write.
+    Checked(Result<CheckedTheme, String>),
+    /// Import result with the cached pack id.
+    Imported(Result<String, String>),
+    /// Explicit update result for one cached pack.
+    Updated {
+        id: String,
+        result: Result<RefreshOutcome, String>,
+    },
+}
+
 /// Host settings editor state for the gpui Settings surface.
 pub(crate) struct HostSettingsView {
     pub(crate) namespace: Option<String>,
@@ -1561,6 +1590,8 @@ impl DesktopApp {
             theme_pending_import: None,
             theme_export_id: None,
             theme_remove_confirm: None,
+            github_dialog: None,
+            github_receiver: None,
             theme,
             host_settings_view: HostSettingsView {
                 namespace: None,
@@ -7200,6 +7231,215 @@ impl DesktopApp {
         self.refresh_theme(window);
     }
 
+    /// Opens the in-app GitHub import dialog.
+    pub(crate) fn open_github_dialog(&mut self) {
+        self.github_dialog = Some(GithubThemeDialog {
+            status: None,
+            error: None,
+            busy: false,
+        });
+    }
+
+    /// Closes the GitHub import dialog without fetching.
+    pub(crate) fn close_github_dialog(&mut self) {
+        self.github_dialog = None;
+        if self.github_receiver.is_none() {
+            self.theme_message = Some("GitHub theme import cancelled.".to_owned());
+        }
+    }
+
+    /// Fetches and validates a source without caching it.
+    ///
+    /// @param source — URL or `owner/repo[@ref]`.
+    /// @param ref_name — optional repository ref.
+    /// @param path — optional repository document path.
+    pub(crate) fn check_github_source(&mut self, source: &str, ref_name: &str, path: &str) {
+        if self.github_receiver.is_some() {
+            if let Some(dialog) = self.github_dialog.as_mut() {
+                dialog.error = Some("A GitHub theme request is already running.".to_owned());
+            }
+            return;
+        }
+        let spec = match remote::resolve_source(source, ref_name, path) {
+            Ok(spec) => spec,
+            Err(error) => {
+                if let Some(dialog) = self.github_dialog.as_mut() {
+                    dialog.error = Some(error.to_string());
+                    dialog.status = None;
+                }
+                return;
+            }
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = remote::check_source(&spec, &remote::ReqwestFetcher)
+                .map_err(|error| error.to_string());
+            let _ = sender.send(GithubTaskResult::Checked(result));
+        });
+        self.github_receiver = Some(receiver);
+        if let Some(dialog) = self.github_dialog.as_mut() {
+            dialog.busy = true;
+            dialog.error = None;
+            dialog.status = Some("Checking the GitHub theme source…".to_owned());
+        }
+    }
+
+    /// Fetches, validates, and caches a GitHub theme.
+    ///
+    /// @param source — URL or `owner/repo[@ref]`.
+    /// @param ref_name — optional repository ref.
+    /// @param path — optional repository document path.
+    pub(crate) fn import_github_source(&mut self, source: &str, ref_name: &str, path: &str) {
+        if self.github_receiver.is_some() {
+            if let Some(dialog) = self.github_dialog.as_mut() {
+                dialog.error = Some("A GitHub theme request is already running.".to_owned());
+            }
+            return;
+        }
+        let spec = match remote::resolve_source(source, ref_name, path) {
+            Ok(spec) => spec,
+            Err(error) => {
+                if let Some(dialog) = self.github_dialog.as_mut() {
+                    dialog.error = Some(error.to_string());
+                    dialog.status = None;
+                }
+                return;
+            }
+        };
+        let themes = self.ui_themes_path.clone();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = remote::import_source(&themes, &spec, &remote::ReqwestFetcher)
+                .map(|cached| cached.pack.id)
+                .map_err(|error| error.to_string());
+            let _ = sender.send(GithubTaskResult::Imported(result));
+        });
+        self.github_receiver = Some(receiver);
+        if let Some(dialog) = self.github_dialog.as_mut() {
+            dialog.busy = true;
+            dialog.error = None;
+            dialog.status = Some("Importing the GitHub theme…".to_owned());
+        }
+    }
+
+    /// Refreshes one cached GitHub pack with its stored ETag.
+    ///
+    /// @param id — cached pack id.
+    pub(crate) fn update_github_theme(&mut self, id: &str) {
+        if self.github_receiver.is_some() {
+            self.theme_message = Some("A GitHub theme request is already running.".to_owned());
+            return;
+        }
+        let cached = self
+            .theme_catalog
+            .find(id)
+            .is_some_and(|theme| theme.source == ThemeSource::Github);
+        if !cached {
+            self.theme_message = Some(format!("Theme `{id}` is not a cached GitHub theme."));
+            return;
+        }
+        let themes = self.ui_themes_path.clone();
+        let id_owned = id.to_owned();
+        let worker_id = id_owned.clone();
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = remote::refresh_cached(&themes, &worker_id, &remote::ReqwestFetcher)
+                .map_err(|error| error.to_string());
+            let _ = sender.send(GithubTaskResult::Updated {
+                id: worker_id,
+                result,
+            });
+        });
+        self.github_receiver = Some(receiver);
+        self.theme_message = Some(format!("Checking `{id_owned}` for updates…"));
+    }
+
+    /// Applies one completed GitHub worker result.
+    fn poll_github_theme(&mut self, window: &Window) -> bool {
+        let Some(receiver) = &self.github_receiver else {
+            return false;
+        };
+        match receiver.try_recv() {
+            Ok(result) => {
+                self.github_receiver = None;
+                match result {
+                    GithubTaskResult::Checked(Ok(checked)) => {
+                        if let Some(dialog) = self.github_dialog.as_mut() {
+                            dialog.busy = false;
+                            dialog.error = None;
+                            let ref_name = if checked.ref_name.is_empty() {
+                                "the default branch".to_owned()
+                            } else {
+                                format!("ref `{}`", checked.ref_name)
+                            };
+                            dialog.status = Some(format!(
+                                "Found `{}` (`{}`) from {} at {ref_name}.",
+                                checked.name, checked.id, checked.source_url
+                            ));
+                        }
+                    }
+                    GithubTaskResult::Checked(Err(error)) => {
+                        if let Some(dialog) = self.github_dialog.as_mut() {
+                            dialog.busy = false;
+                            dialog.status = None;
+                            dialog.error = Some(error);
+                        }
+                    }
+                    GithubTaskResult::Imported(Ok(id)) => {
+                        self.github_dialog = None;
+                        self.reload_theme_catalog(window);
+                        let shadowed = self
+                            .theme_catalog
+                            .find(&id)
+                            .is_some_and(|theme| theme.source != ThemeSource::Github);
+                        self.theme_message = Some(if shadowed {
+                            format!(
+                                "Cached GitHub theme `{id}`; a local user file with the same id takes precedence."
+                            )
+                        } else {
+                            format!("Imported cached GitHub theme `{id}`.")
+                        });
+                    }
+                    GithubTaskResult::Imported(Err(error)) => {
+                        if let Some(dialog) = self.github_dialog.as_mut() {
+                            dialog.busy = false;
+                            dialog.status = None;
+                            dialog.error = Some(error);
+                        }
+                    }
+                    GithubTaskResult::Updated { id, result } => match result {
+                        Ok(RefreshOutcome::Unchanged) => {
+                            self.theme_message =
+                                Some(format!("Theme `{id}` is up to date; the cache is unchanged."));
+                        }
+                        Ok(RefreshOutcome::Updated(meta)) => {
+                            self.reload_theme_catalog(window);
+                            self.theme_message = Some(format!(
+                                "Updated cached theme `{id}` from {}.",
+                                meta.source_url
+                            ));
+                        }
+                        Err(error) => {
+                            self.theme_message = Some(format!(
+                                "Could not update theme `{id}`: {error}. The cached copy is unchanged."
+                            ));
+                        }
+                    },
+                }
+                true
+            }
+            Err(mpsc::TryRecvError::Empty) => false,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.github_receiver = None;
+                if let Some(dialog) = self.github_dialog.as_mut() {
+                    dialog.busy = false;
+                    dialog.error = Some("The GitHub theme request stopped unexpectedly.".to_owned());
+                }
+                true
+            }
+        }
+    }
+
     /// The composer's model label, naming the selected model or the blocker.
     pub(crate) fn model_label(&self) -> String {
         self.model_picker_label()
@@ -7781,6 +8021,9 @@ impl DesktopApp {
         self.flush_session_state_if_quiet();
         self.poll_run_state();
         self.poll_dialog(window);
+        if self.poll_github_theme(window) {
+            self.repaint_soon = true;
+        }
         self.poll_attachment();
         self.poll_git_auto_refresh();
         if self.explorer.poll(self.transport.as_ref()) {
@@ -7812,6 +8055,7 @@ impl DesktopApp {
             || self.schedule_delete_receiver.is_some()
             || self.diagnostics_receiver.is_some()
             || self.diagnose_receiver.is_some()
+            || self.github_receiver.is_some()
         {
             self.repaint_soon = true;
         }

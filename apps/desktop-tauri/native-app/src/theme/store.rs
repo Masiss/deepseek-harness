@@ -1,10 +1,10 @@
 //! Installed theme packs and resolution into one scheme.
 //!
-//! The catalogue holds the compiled-in packs, user files discovered by
-//! [`super::user::ThemeCatalog`], and the editable `custom` palette migrated from
-//! preferences. User packs resolve through [`resolve_pack_document`] with
-//! [`PackTrust::Untrusted`], the only path where a contrast failure rejects a
-//! pack.
+//! The catalogue holds the compiled-in packs, user files and cached GitHub
+//! documents discovered by [`super::user::ThemeCatalog`], and the editable
+//! `custom` palette migrated from preferences. File and fetched packs resolve
+//! through [`resolve_pack_document`] with [`PackTrust::Untrusted`], the only path
+//! where a contrast failure rejects a pack.
 
 use std::sync::OnceLock;
 
@@ -69,7 +69,7 @@ pub(crate) struct ThemeRequest<'a> {
     pub(crate) pack_id: &'a str,
     /// Editable custom palettes, used when `pack_id` is `custom`.
     pub(crate) custom: &'a CustomTheme,
-    /// Installed built-in and user packs.
+    /// Installed built-in, user, and cached packs.
     pub(crate) catalog: &'a ThemeCatalog,
     /// Accent family preference.
     pub(crate) accent: AccentScheme,
@@ -127,7 +127,7 @@ pub(crate) fn resolve(request: &ThemeRequest<'_>) -> ResolvedTheme {
             Some(theme) if theme.source == ThemeSource::Builtin => {
                 builtin_outcome(&theme.pack, request.accent, scheme)
             }
-            Some(theme) => user_outcome(&theme.pack, request.accent, scheme),
+            Some(theme) => external_outcome(&theme.pack, request.accent, scheme),
             None => Err(vec![format!(
                 "theme `{}` is not installed",
                 request.pack_id
@@ -204,8 +204,8 @@ fn builtin_outcome(
     })
 }
 
-/// Resolves a user pack under the untrusted contrast gate.
-fn user_outcome(
+/// Resolves a file or fetched pack under the untrusted contrast gate.
+fn external_outcome(
     pack: &ThemePack,
     accent: AccentScheme,
     scheme: Scheme,
