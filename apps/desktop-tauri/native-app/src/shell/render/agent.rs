@@ -1,14 +1,27 @@
 //! Agent column: Session header, transcript, approvals, questions, and composer.
 
-use gpui::{div, prelude::*, StatefulInteractiveElement, px, AnyElement, Context, Window};
+use gpui::{div, prelude::*, px, AnyElement, Context, Div, Window};
 
 use crate::explorer::{ExplorerRow, ExplorerRowKind};
 use crate::layout;
+use crate::session_list::relative_time;
 use crate::transcript::{RowKind, TranscriptRow};
 use dsh_client_core::chat::PromptMode;
 use crate::shell::app::DesktopApp;
 use crate::shell::theme::Theme;
+use super::sessions::now_millis;
 use super::widgets;
+
+/// V2 conversation reading column, centered inside the middle pane.
+const READING_COLUMN_WIDTH: f32 = 790.0;
+/// V2 composer shell width, pinned above the status bar.
+const COMPOSER_WIDTH: f32 = 826.0;
+/// Avatar diameter from the approved reference.
+const AVATAR_SIZE: f32 = 29.0;
+/// Transcript body size from the approved reference.
+const BODY_TEXT_SIZE: f32 = 12.6;
+/// Gap between the avatar column and the message body.
+const AVATAR_GAP: f32 = 13.0;
 
 /// Draws the conversation surface for the selected Session.
 pub(crate) fn conversation(
@@ -40,27 +53,7 @@ pub(crate) fn conversation(
     column = column.child(session_tab(app, theme, viewport_width, cx));
     column = column.child(transcript_pane(app, theme, cx));
     column = column.child(attention_pane(app, theme, cx));
-    let attention_height = {
-        let reserved = if !app.pending_questions.is_empty() || !app.pending_approvals.is_empty() {
-            if !app.pending_questions.is_empty() {
-                220.0
-            } else if !app.pending_approvals.is_empty() {
-                140.0
-            } else {
-                0.0
-            }
-        } else {
-            0.0
-        };
-        theme.sp(reserved)
-    };
-    let composer = composer(app, theme, cx);
-    column = if attention_height > px(0.) {
-        column.child(div().flex().flex_col().w_full().h(attention_height).child(composer))
-    } else {
-        column.child(composer)
-    };
-    column.into_any_element()
+    column.child(composer(app, theme, cx)).into_any_element()
 }
 
 fn disconnected_banner(
@@ -194,23 +187,19 @@ fn transcript_pane(
     theme: &Theme,
     cx: &mut Context<DesktopApp>,
 ) -> AnyElement {
-    let mut pane = div()
-        .id("transcript-scroll")
+    let mut content = div()
         .flex()
         .flex_col()
-        .gap(theme.sp(6.))
-        .flex_1()
-        .min_h(px(0.))
+        .gap(theme.sp(14.))
         .w_full()
-        .px(theme.sp(14.))
-        .py(theme.sp(10.))
-        .overflow_y_scroll()
-        .track_scroll(&app.transcript_scroll);
+        .max_w(theme.sp(READING_COLUMN_WIDTH))
+        .mx_auto()
+        .debug_selector(|| "transcript-reading-column".to_owned());
 
     if app.page_loading && app.transcript.is_empty() {
-        pane = pane.child(note(theme, "Loading session…"));
+        content = content.child(note(theme, "Loading session…"));
     } else if let Some(error) = app.page_error.clone() {
-        pane = pane.child(
+        content = content.child(
             div()
                 .flex()
                 .flex_col()
@@ -234,10 +223,10 @@ fn transcript_pane(
                 ),
         );
     } else if app.transcript.is_empty() {
-        pane = pane.child(note(theme, "This session has no events"));
+        content = content.child(note(theme, "This session has no events"));
     } else if app.page_has_more {
         let loading = app.page_loading;
-        pane = pane.child(if loading {
+        content = content.child(if loading {
             note(theme, "Loading older events…").into_any_element()
         } else {
             widgets::Button::new(theme, "Load older events")
@@ -256,16 +245,38 @@ fn transcript_pane(
         .iter()
         .map(|item| (item.message_id.clone(), item.rating.clone()))
         .collect::<std::collections::BTreeMap<_, _>>();
-    for row in app.transcript.rows() {
-        pane = pane.child(transcript_row(
+    let now = now_millis();
+    let mut index = 0;
+    while index < app.transcript.rows().len() {
+        let kind = app.transcript.rows()[index].kind;
+        if is_tool_row(kind) {
+            let mut end = index + 1;
+            while end < app.transcript.rows().len()
+                && is_tool_row(app.transcript.rows()[end].kind)
+            {
+                end += 1;
+            }
+            content = content.child(tool_activity_group(app, theme, index, end, cx));
+            index = end;
+            continue;
+        }
+        let row = &app.transcript.rows()[index];
+        let time = app
+            .transcript
+            .time_of(row.seq)
+            .filter(|time| *time > 0)
+            .map(|time| relative_time(time, now));
+        content = content.child(transcript_row(
             theme,
             row,
             feedback.get(row.message_id.as_deref().unwrap_or_default()),
+            time.as_deref(),
         ));
+        index += 1;
     }
 
     if app.assistant_streaming {
-        pane = pane.child(streaming_draft(theme, &app.assistant_draft));
+        content = content.child(streaming_draft(theme, &app.assistant_draft));
     }
 
     if app.scroll_transcript_to_bottom {
@@ -275,137 +286,710 @@ fn transcript_pane(
     if app.assistant_streaming {
         app.transcript_scroll.scroll_to_bottom();
     }
-    pane.into_any_element()
-}
 
-fn row_accent(theme: &Theme, kind: RowKind) -> gpui::Hsla {
-    match kind {
-        RowKind::User => theme.accent,
-        RowKind::Assistant => theme.text,
-        RowKind::Reasoning => theme.muted,
-        RowKind::ToolResult => theme.muted,
-        RowKind::ToolError => theme.error,
-        RowKind::Approval => theme.warn,
-        RowKind::Job => theme.accent,
-        RowKind::Todo => theme.accent,
-        RowKind::Deliverable => theme.accent,
-        RowKind::Goal => theme.warn,
-        RowKind::Notice => theme.muted,
-    }
-}
-
-fn transcript_row(theme: &Theme, row: &TranscriptRow, rating: Option<&String>) -> AnyElement {
-    let accent = row_accent(theme, row.kind);
-    let is_user = row.kind == RowKind::User;
-    let background = match row.kind {
-        RowKind::User => theme.surface_raised,
-        RowKind::ToolResult | RowKind::ToolError | RowKind::Job => theme.code_background,
-        _ => theme.background,
-    };
-    let mut card = div()
+    div()
+        .id("transcript-scroll")
         .flex()
         .flex_col()
-        .gap(theme.sp(3.))
+        .flex_1()
+        .min_h(px(0.))
         .w_full()
-        .p(theme.sp(10.))
-        .rounded(theme.corner())
-        .bg(background)
-        .when(is_user, |element| {
-            element.border_1().border_color(theme.border)
-        })
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(theme.sp(6.))
-                .child(
-                    div()
-                        .text_size(theme.fs(9.5))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(accent)
-                        .child(row_kind_label(row.kind)),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .text_size(theme.fs(12.))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .truncate()
-                        .child(row.title.clone()),
-                )
-                .when_some(rating, |element, rating| {
-                    element.child(
-                        div()
-                            .text_size(theme.fs(9.5))
-                            .text_color(theme.muted)
-                            .child(format!("Feedback: {rating}")),
-                    )
-                }),
-        )
-        .when(!row.text.is_empty(), |element| {
-            element.child(
-                div()
-                    .w_full()
-                    .text_size(theme.fs(12.5))
-                    .when(
-                        matches!(
-                            row.kind,
-                            RowKind::ToolResult | RowKind::ToolError | RowKind::Job
-                        ),
-                        |element| element.font(theme.mono_font()).text_size(theme.fs(11.)),
-                    )
-                    .child(row.text.clone()),
-            )
-        });
-    if matches!(row.kind, RowKind::Reasoning | RowKind::Notice) {
-        card = card.text_color(theme.muted);
-    }
-    if matches!(row.kind, RowKind::ToolError) {
-        card = card.border_1().border_color(theme.error);
-    }
-    card.into_any_element()
+        .px(theme.sp(14.))
+        .py(theme.sp(14.))
+        .overflow_y_scroll()
+        .track_scroll(&app.transcript_scroll)
+        .child(content)
+        .into_any_element()
 }
 
-fn row_kind_label(kind: RowKind) -> &'static str {
+/// Whether a row belongs to the grouped tool-activity section.
+fn is_tool_row(kind: RowKind) -> bool {
+    matches!(kind, RowKind::ToolResult | RowKind::ToolError)
+}
+
+/// Avatar fill, foreground, and glyph for one transcript row.
+fn avatar(theme: &Theme, kind: RowKind) -> AnyElement {
+    let (background, foreground, glyph) = match kind {
+        RowKind::User => (theme.surface_raised, theme.text, "U"),
+        RowKind::Assistant => (theme.accent, theme.accent_text, "D"),
+        RowKind::Reasoning => (theme.code_background, theme.muted, "R"),
+        RowKind::ToolResult => (theme.code_background, theme.muted, "T"),
+        RowKind::ToolError => (theme.error, theme.background, "!"),
+        RowKind::Approval => (theme.warn, theme.background, "!"),
+        RowKind::Job => (theme.code_background, theme.accent, "J"),
+        RowKind::Todo => (theme.code_background, theme.accent, "T"),
+        RowKind::Deliverable => (theme.code_background, theme.accent, "F"),
+        RowKind::Goal => (theme.code_background, theme.warn, "G"),
+        RowKind::Notice => (theme.code_background, theme.muted, "·"),
+    };
+    div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .flex_none()
+        .w(theme.sp(AVATAR_SIZE))
+        .h(theme.sp(AVATAR_SIZE))
+        .rounded_full()
+        .bg(background)
+        .text_color(foreground)
+        .text_size(theme.fs(12.))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .child(glyph)
+        .into_any_element()
+}
+
+/// Speaker name for one row kind.
+fn speaker_name(kind: RowKind) -> &'static str {
     match kind {
-        RowKind::User => "YOU",
-        RowKind::Assistant => "ASSISTANT",
-        RowKind::Reasoning => "REASONING",
-        RowKind::ToolResult => "TOOL",
-        RowKind::ToolError => "TOOL ERROR",
-        RowKind::Approval => "APPROVAL",
-        RowKind::Job => "JOB",
-        RowKind::Todo => "TASKS",
-        RowKind::Deliverable => "DELIVERABLE",
-        RowKind::Goal => "GOAL",
-        RowKind::Notice => "NOTICE",
+        RowKind::User => "You",
+        RowKind::Assistant => "DSH",
+        RowKind::Reasoning => "Reasoning",
+        RowKind::ToolResult | RowKind::ToolError => "Tool",
+        RowKind::Approval => "Approval",
+        RowKind::Job => "Job",
+        RowKind::Todo => "Tasks",
+        RowKind::Deliverable => "Deliverables",
+        RowKind::Goal => "Goal",
+        RowKind::Notice => "Notice",
     }
+}
+
+/// A row title worth showing beside its speaker, when it adds information.
+fn row_detail(row: &TranscriptRow) -> Option<&str> {
+    match row.kind {
+        RowKind::Approval
+        | RowKind::Job
+        | RowKind::Todo
+        | RowKind::Deliverable
+        | RowKind::Goal
+        | RowKind::Notice => Some(row.title.as_str()).filter(|title| !title.is_empty()),
+        RowKind::User => Some(row.title.as_str()).filter(|title| *title != "You"),
+        _ => None,
+    }
+}
+
+fn transcript_row(
+    theme: &Theme,
+    row: &TranscriptRow,
+    rating: Option<&String>,
+    time: Option<&str>,
+) -> AnyElement {
+    let accent = match row.kind {
+        RowKind::User => theme.accent,
+        RowKind::Assistant => theme.text,
+        RowKind::Reasoning | RowKind::Notice | RowKind::ToolResult => theme.muted,
+        RowKind::ToolError => theme.error,
+        RowKind::Approval | RowKind::Goal => theme.warn,
+        RowKind::Job | RowKind::Todo | RowKind::Deliverable => theme.accent,
+    };
+    let mut header = div()
+        .flex()
+        .flex_row()
+        .items_baseline()
+        .gap(theme.sp(7.))
+        .w_full()
+        .child(
+            div()
+                .text_size(theme.fs(12.5))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(accent)
+                .child(speaker_name(row.kind)),
+        )
+        .when_some(row_detail(row), |element, detail| {
+            element.child(
+                div()
+                    .min_w(px(0.))
+                    .truncate()
+                    .text_size(theme.fs(11.))
+                    .text_color(theme.muted)
+                    .child(detail.to_owned()),
+            )
+        })
+        .child(div().flex_1());
+    if let Some(rating) = rating {
+        header = header.child(
+            div()
+                .text_size(theme.fs(10.))
+                .text_color(theme.muted)
+                .child(format!("Feedback {rating}")),
+        );
+    }
+    if let Some(time) = time {
+        header = header.child(
+            div()
+                .text_size(theme.fs(11.))
+                .text_color(theme.muted)
+                .child(time.to_owned()),
+        );
+    }
+
+    let mut body = div()
+        .flex()
+        .flex_col()
+        .gap(theme.sp(8.))
+        .w_full()
+        .min_w(px(0.))
+        .child(header);
+    if !row.text.is_empty() {
+        let muted_body = matches!(row.kind, RowKind::Reasoning | RowKind::Notice);
+        body = body.child(blocks_element(theme, &row.text, muted_body));
+    }
+
+    let mut element = div()
+        .flex()
+        .flex_row()
+        .items_start()
+        .gap(theme.sp(AVATAR_GAP))
+        .w_full()
+        .child(avatar(theme, row.kind))
+        .child(body);
+    match row.kind {
+        RowKind::ToolError => {
+            element = element
+                .border_l_2()
+                .border_color(theme.error)
+                .pl(theme.sp(8.));
+        }
+        RowKind::Approval => {
+            element = element
+                .border_l_2()
+                .border_color(theme.warn)
+                .pl(theme.sp(8.));
+        }
+        _ => {}
+    }
+    element.into_any_element()
 }
 
 fn streaming_draft(theme: &Theme, draft: &str) -> AnyElement {
     div()
         .flex()
-        .flex_col()
-        .gap(theme.sp(3.))
+        .flex_row()
+        .items_start()
+        .gap(theme.sp(AVATAR_GAP))
         .w_full()
-        .p(theme.sp(10.))
-        .rounded(theme.corner())
-        .bg(theme.surface)
+        .child(avatar(theme, RowKind::Assistant))
         .child(
             div()
-                .text_size(theme.fs(9.5))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(theme.accent)
-                .child("ASSISTANT · STREAMING"),
-        )
-        .child(
-            div()
-                .w_full()
-                .text_size(theme.fs(12.5))
-                .child(if draft.is_empty() { "…".to_owned() } else { draft.to_owned() }),
+                .flex()
+                .flex_col()
+                .gap(theme.sp(8.))
+                .min_w(px(0.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_baseline()
+                        .gap(theme.sp(7.))
+                        .child(
+                            div()
+                                .text_size(theme.fs(12.5))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(theme.accent)
+                                .child("DSH"),
+                        )
+                        .child(
+                            div()
+                                .text_size(theme.fs(11.))
+                                .text_color(theme.muted)
+                                .child("Streaming"),
+                        ),
+                )
+                .child(blocks_element(
+                    theme,
+                    if draft.is_empty() { "…" } else { draft },
+                    false,
+                )),
         )
         .into_any_element()
+}
+
+/// One parsed transcript-text block.
+enum TextBlock {
+    Heading { level: u8, text: String },
+    Paragraph(String),
+    List { ordered: bool, items: Vec<ListItem> },
+    Code { language: String, text: String },
+    Rule,
+}
+
+/// One list item with its rendered marker.
+struct ListItem {
+    marker: String,
+    text: String,
+}
+
+/// Splits transcript text into the simple block forms the runtime emits.
+///
+/// Handles ATX headings, `-`/`*`/`•` bullets, numbered items, fenced code
+/// blocks, horizontal rules, and paragraphs separated by blank lines. Anything
+/// else stays literal text.
+///
+/// @param text - Projected row text.
+/// @returns Blocks in source order.
+fn text_blocks(text: &str) -> Vec<TextBlock> {
+    let mut blocks = Vec::new();
+    let mut paragraph: Vec<String> = Vec::new();
+    let mut list: Option<(bool, Vec<ListItem>)> = None;
+    let mut in_code = false;
+    let mut language = String::new();
+    let mut code_lines: Vec<String> = Vec::new();
+
+    for line in text.split('\n') {
+        let trimmed = line.trim_start();
+        if in_code {
+            if trimmed.starts_with("```") {
+                blocks.push(TextBlock::Code {
+                    language: std::mem::take(&mut language),
+                    text: code_lines.join("\n"),
+                });
+                code_lines.clear();
+                in_code = false;
+            } else {
+                code_lines.push(line.to_owned());
+            }
+            continue;
+        }
+        if let Some(info) = trimmed.strip_prefix("```") {
+            push_paragraph(&mut blocks, &mut paragraph);
+            push_list(&mut blocks, &mut list);
+            language = info.trim().to_owned();
+            in_code = true;
+            continue;
+        }
+        if trimmed.is_empty() {
+            push_paragraph(&mut blocks, &mut paragraph);
+            push_list(&mut blocks, &mut list);
+            continue;
+        }
+        if trimmed == "---" || trimmed == "***" || trimmed == "___" {
+            push_paragraph(&mut blocks, &mut paragraph);
+            push_list(&mut blocks, &mut list);
+            blocks.push(TextBlock::Rule);
+            continue;
+        }
+        if let Some((level, heading)) = heading_line(trimmed) {
+            push_paragraph(&mut blocks, &mut paragraph);
+            push_list(&mut blocks, &mut list);
+            blocks.push(TextBlock::Heading {
+                level,
+                text: heading.to_owned(),
+            });
+            continue;
+        }
+        if let Some(item) = bullet_line(trimmed) {
+            push_paragraph(&mut blocks, &mut paragraph);
+            let entry = ListItem {
+                marker: "•".to_owned(),
+                text: item.to_owned(),
+            };
+            push_item(&mut blocks, &mut list, false, entry);
+            continue;
+        }
+        if let Some(item) = numbered_line(trimmed) {
+            push_paragraph(&mut blocks, &mut paragraph);
+            push_item(&mut blocks, &mut list, true, item);
+            continue;
+        }
+        push_list(&mut blocks, &mut list);
+        paragraph.push(line.to_owned());
+    }
+    if in_code {
+        blocks.push(TextBlock::Code {
+            language,
+            text: code_lines.join("\n"),
+        });
+    }
+    push_paragraph(&mut blocks, &mut paragraph);
+    push_list(&mut blocks, &mut list);
+    blocks
+}
+
+/// Flushes accumulated paragraph lines as one block.
+fn push_paragraph(blocks: &mut Vec<TextBlock>, paragraph: &mut Vec<String>) {
+    if !paragraph.is_empty() {
+        blocks.push(TextBlock::Paragraph(paragraph.join("\n")));
+        paragraph.clear();
+    }
+}
+
+/// Flushes the open list when its kind ends.
+fn push_list(blocks: &mut Vec<TextBlock>, list: &mut Option<(bool, Vec<ListItem>)>) {
+    if let Some((ordered, items)) = list.take() {
+        blocks.push(TextBlock::List { ordered, items });
+    }
+}
+
+/// Appends one item, switching list kind when the marker family changes.
+fn push_item(
+    blocks: &mut Vec<TextBlock>,
+    list: &mut Option<(bool, Vec<ListItem>)>,
+    ordered: bool,
+    item: ListItem,
+) {
+    match list {
+        Some((current, items)) if *current == ordered => items.push(item),
+        Some(_) => {
+            push_list(blocks, list);
+            *list = Some((ordered, vec![item]));
+        }
+        None => *list = Some((ordered, vec![item])),
+    }
+}
+
+/// Recognizes an ATX heading and returns its level and text.
+fn heading_line(line: &str) -> Option<(u8, &str)> {
+    let hashes = line.len() - line.trim_start_matches('#').len();
+    if !(1..=6).contains(&hashes) {
+        return None;
+    }
+    let rest = line[hashes..].strip_prefix(' ')?;
+    Some((hashes as u8, rest.trim_end_matches('#')))
+}
+
+/// Recognizes a bullet marker and returns its text.
+fn bullet_line(line: &str) -> Option<&str> {
+    ["- ", "* ", "• "]
+        .iter()
+        .find_map(|marker| line.strip_prefix(marker))
+}
+
+/// Recognizes a numbered marker and returns the marker and text.
+fn numbered_line(line: &str) -> Option<ListItem> {
+    let (digits, rest) = line.split_once('.')?;
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let text = rest.strip_prefix(' ')?;
+    Some(ListItem {
+        marker: format!("{digits}."),
+        text: text.to_owned(),
+    })
+}
+
+/// Renders parsed text as stacked blocks.
+fn blocks_element(theme: &Theme, text: &str, muted: bool) -> AnyElement {
+    let mut column = div().flex().flex_col().gap(theme.sp(8.)).w_full();
+    for block in text_blocks(text) {
+        column = column.child(block_element(theme, &block, muted));
+    }
+    column.into_any_element()
+}
+
+/// Renders one parsed block.
+fn block_element(theme: &Theme, block: &TextBlock, muted: bool) -> AnyElement {
+    match block {
+        TextBlock::Heading { level, text } => {
+            let size = match level {
+                1 => 15.0,
+                2 => 13.6,
+                _ => 12.9,
+            };
+            div()
+                .w_full()
+                .pt(theme.sp(4.))
+                .text_size(theme.fs(size))
+                .line_height(theme.fs(size + 4.))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(if muted { theme.muted } else { theme.text })
+                .child(text.clone())
+                .into_any_element()
+        }
+        TextBlock::Paragraph(text) => div()
+            .w_full()
+            .text_size(theme.fs(BODY_TEXT_SIZE))
+            .line_height(theme.fs(21.2))
+            .text_color(if muted { theme.muted } else { theme.text })
+            .child(text.clone())
+            .into_any_element(),
+        TextBlock::List { ordered, items } => {
+            let mut column = div().flex().flex_col().gap(theme.sp(3.)).w_full();
+            for item in items {
+                let marker = if *ordered {
+                    item.marker.clone()
+                } else {
+                    "•".to_owned()
+                };
+                column = column.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_start()
+                        .gap(theme.sp(8.))
+                        .w_full()
+                        .child(
+                            div()
+                                .flex_none()
+                                .min_w(theme.sp(14.))
+                                .text_size(theme.fs(BODY_TEXT_SIZE))
+                                .line_height(theme.fs(21.2))
+                                .text_color(theme.muted)
+                                .child(marker),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .text_size(theme.fs(BODY_TEXT_SIZE))
+                                .line_height(theme.fs(21.2))
+                                .text_color(if muted { theme.muted } else { theme.text })
+                                .child(item.text.clone()),
+                        ),
+                );
+            }
+            column.into_any_element()
+        }
+        TextBlock::Code { language, text } => div()
+            .flex()
+            .flex_col()
+            .gap(theme.sp(3.))
+            .w_full()
+            .p(theme.sp(8.))
+            .rounded(theme.corner())
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.code_background)
+            .when(!language.is_empty(), |element| {
+                element.child(
+                    div()
+                        .text_size(theme.fs(9.5))
+                        .text_color(theme.muted)
+                        .child(language.clone()),
+                )
+            })
+            .child(
+                div()
+                    .w_full()
+                    .font(theme.mono_font())
+                    .text_size(theme.fs(11.8))
+                    .line_height(theme.fs(17.))
+                    .text_color(theme.text)
+                    .child(text.clone()),
+            )
+            .into_any_element(),
+        TextBlock::Rule => div()
+            .w_full()
+            .h(px(1.))
+            .my(theme.sp(4.))
+            .bg(theme.border)
+            .into_any_element(),
+    }
+}
+
+/// Renders one contiguous run of tool rows as a collapsible activity section.
+fn tool_activity_group(
+    app: &mut DesktopApp,
+    theme: &Theme,
+    start: usize,
+    end: usize,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
+    let collapsed = app.transcript.tool_group_collapsed();
+    let count = end - start;
+    let first_seq = app.transcript.rows()[start].seq;
+    let has_error = app.transcript.rows()[start..end]
+        .iter()
+        .any(|row| row.kind == RowKind::ToolError);
+    let expanded = !collapsed || has_error;
+    let mut known_duration = 0;
+    let mut total_duration = 0;
+    {
+        let rows = app.transcript.rows();
+        for row in &rows[start..end] {
+            if let Some(duration) = app.transcript.duration_of(row.seq) {
+                known_duration += 1;
+                total_duration += duration;
+            }
+        }
+    }
+    let mut list = div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .pl(theme.sp(8.))
+        .border_l_1()
+        .border_color(theme.border);
+
+    if expanded {
+        let rows = app.transcript.rows();
+        for index in start..end {
+            let row = &rows[index];
+            list = list.child(activity_row(
+                theme,
+                row,
+                app.transcript.tool_name_of(row.seq),
+                app.transcript.duration_of(row.seq),
+            ));
+        }
+    }
+    let duration_label = (known_duration > 0).then(|| format_duration(total_duration));
+    let header = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(theme.sp(8.))
+        .w_full()
+        .py(theme.sp(5.))
+        .cursor_pointer()
+        .hover(|style| style.text_color(theme.accent))
+        .text_size(theme.fs(12.))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .id(gpui::SharedString::from(format!(
+            "tool-activity-toggle-{first_seq}"
+        )))
+        .child(
+            div()
+                .text_size(theme.fs(10.))
+                .text_color(theme.muted)
+                .child(if expanded { "▾" } else { "▸" }),
+        )
+        .child(div().child("Tool activity"))
+        .child(
+            div()
+                .text_color(theme.muted)
+                .child(format!("· {count}")),
+        )
+        .when_some(duration_label, |element, duration| {
+            element.child(
+                div()
+                    .text_color(theme.muted)
+                    .child(format!("· {duration}")),
+            )
+        })
+        .on_click(cx.listener(|app, _, _, cx| {
+            app.transcript.toggle_tool_group();
+            cx.notify();
+        }));
+
+    let header = header
+        .border_t_1()
+        .border_color(theme.border);
+    let mut section = div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .pl(theme.sp(44.))
+        .pt(theme.sp(4.))
+        .child(header);
+    if expanded {
+        section = section.child(list);
+    }
+    section.into_any_element()
+}
+
+/// Renders one tool row inside the activity section.
+fn activity_row(
+    theme: &Theme,
+    row: &TranscriptRow,
+    tool: Option<&str>,
+    duration: Option<i64>,
+) -> AnyElement {
+    let failed = row.kind == RowKind::ToolError;
+    let (body, summary) = split_tool_text(&row.text);
+    let detail = body
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or(&row.title)
+        .chars()
+        .take(160)
+        .collect::<String>();
+    let mut content = div()
+        .flex()
+        .flex_col()
+        .gap(theme.sp(3.))
+        .flex_1()
+        .min_w(px(0.))
+        .child(
+            div()
+                .min_w(px(0.))
+                .truncate()
+                .text_size(theme.fs(11.6))
+                .text_color(theme.text)
+                .child(detail),
+        );
+    if !body.trim().is_empty() {
+        content = content.child(
+            div()
+                .w_full()
+                .font(theme.mono_font())
+                .text_size(theme.fs(11.2))
+                .line_height(theme.fs(16.))
+                .text_color(theme.muted)
+                .child(body.to_owned()),
+        );
+    }
+    if let Some(meta) = summary.and_then(summary_without_duration) {
+        content = content.child(
+            div()
+                .text_size(theme.fs(10.5))
+                .text_color(theme.muted)
+                .child(meta.to_owned()),
+        );
+    }
+    div()
+        .flex()
+        .flex_row()
+        .items_start()
+        .gap(theme.sp(8.))
+        .w_full()
+        .py(theme.sp(3.))
+        .child(
+            div()
+                .flex_none()
+                .w(theme.sp(16.))
+                .text_size(theme.fs(11.6))
+                .text_color(if failed { theme.error } else { theme.accent })
+                .child(if failed { "!" } else { "✓" }),
+        )
+        .child(
+            div()
+                .flex_none()
+                .w(theme.sp(52.))
+                .truncate()
+                .text_size(theme.fs(11.6))
+                .text_color(theme.text)
+                .child(tool.unwrap_or("tool").to_owned()),
+        )
+        .child(content)
+        .child(
+            div()
+                .flex_none()
+                .text_size(theme.fs(10.8))
+                .text_color(theme.muted)
+                .child(duration.map_or_else(|| "—".to_owned(), format_duration)),
+        )
+        .into_any_element()
+}
+
+/// Splits the projection's trailing tool summary line from the output body.
+fn split_tool_text(text: &str) -> (&str, Option<&str>) {
+    if let Some(index) = text.rfind("\n— ") {
+        return (&text[..index], Some(&text[index + "\n— ".len()..]));
+    }
+    if let Some(summary) = text.strip_prefix("— ") {
+        return ("", Some(summary));
+    }
+    (text, None)
+}
+
+/// Drops the duration part of a tool summary already shown in the duration column.
+fn summary_without_duration(summary: &str) -> Option<&str> {
+    summary
+        .split_once(" · ")
+        .map(|(_, rest)| rest)
+        .filter(|rest| !rest.is_empty())
+}
+
+/// Formats a millisecond duration for the activity column.
+fn format_duration(ms: i64) -> String {
+    if ms < 1_000 {
+        format!("{ms}ms")
+    } else if ms < 60_000 {
+        format!("{:.1}s", ms as f64 / 1_000.0)
+    } else {
+        let seconds = ms / 1_000;
+        format!("{}m {}s", seconds / 60, seconds % 60)
+    }
 }
 
 fn attention_pane(
@@ -413,7 +997,17 @@ fn attention_pane(
     theme: &Theme,
     cx: &mut Context<DesktopApp>,
 ) -> AnyElement {
-    let mut pane = div().flex().flex_col().gap(theme.sp(6.)).px(theme.sp(14.));
+    let has_attention = !app.pending_questions.is_empty() || !app.pending_approvals.is_empty();
+    if !has_attention {
+        return div().into_any_element();
+    }
+    let mut column = div()
+        .flex()
+        .flex_col()
+        .gap(theme.sp(8.))
+        .w_full()
+        .max_w(theme.sp(READING_COLUMN_WIDTH))
+        .mx_auto();
 
     let question_count = app
         .pending_questions
@@ -487,6 +1081,13 @@ fn attention_pane(
                 let selected = chosen.contains(&label);
                 let key = format!("question-{index}-{label}");
                 let value = label.clone();
+                let mark = if selected {
+                    "\u{2713} "
+                } else if multi {
+                    "\u{2610} "
+                } else {
+                    ""
+                };
                 option_row = option_row.child(
                     div()
                         .px(theme.sp(8.))
@@ -498,7 +1099,7 @@ fn attention_pane(
                         .cursor_pointer()
                         .text_size(theme.fs(11.))
                         .id(gpui::SharedString::from(key))
-                        .child(format!("{}{}", if multi { "☐ " } else { "" }, label))
+                        .child(format!("{mark}{label}"))
                         .on_click(cx.listener(move |app, _, _, cx| {
                             if let Some(card) = app.pending_questions.first_mut() {
                                 card.choose(index, &value);
@@ -551,15 +1152,28 @@ fn attention_pane(
                         })),
                 ),
         );
-        pane = pane.child(widgets::card(theme, body));
+        column = column.child(widgets::card(theme, body));
     }
+
+    let scope = app
+        .pending_approvals
+        .first()
+        .and_then(|pending| pending.request.call_id.as_deref())
+        .and_then(|call_id| app.transcript.call_scope(call_id))
+        .map(str::to_owned);
 
     if let Some(pending) = app.pending_approvals.first().cloned() {
         let queued = app.pending_approvals.len();
+        let reason = pending
+            .request
+            .display_reason
+            .as_ref()
+            .map(|display| display.en.clone())
+            .or_else(|| pending.request.reason.clone());
         let mut card = div()
             .flex()
             .flex_col()
-            .gap(theme.sp(5.))
+            .gap(theme.sp(6.))
             .w_full()
             .child(
                 div()
@@ -572,7 +1186,13 @@ fn attention_pane(
                             .text_size(theme.fs(12.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_color(theme.warn)
-                            .child(format!("Permission: {}", pending.request.tool_name)),
+                            .child("Approval required"),
+                    )
+                    .child(
+                        div()
+                            .text_size(theme.fs(11.5))
+                            .text_color(theme.text)
+                            .child(pending.request.tool_name.clone()),
                     )
                     .when(queued > 1, |element| {
                         element.child(
@@ -583,53 +1203,70 @@ fn attention_pane(
                         )
                     }),
             );
-        if let Some(reason) = &pending.request.reason {
+        if let Some(reason) = reason {
             card = card.child(
                 div()
                     .text_size(theme.fs(11.))
                     .text_color(theme.muted)
-                    .child(reason.clone()),
+                    .child(reason),
+            );
+        }
+        if let Some(scope) = scope {
+            card = card.child(
+                div()
+                    .w_full()
+                    .p(theme.sp(8.))
+                    .rounded(theme.corner())
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.code_background)
+                    .debug_selector(|| "approval-scope".to_owned())
+                    .font(theme.mono_font())
+                    .text_size(theme.fs(11.2))
+                    .text_color(theme.text)
+                    .child(scope),
             );
         }
         card = card.child(
             div()
                 .flex()
                 .flex_row()
+                .justify_end()
                 .gap(theme.sp(6.))
                 .child(
                     widgets::Button::new(theme, "Allow once")
                         .primary()
                         .build()
                         .id("approval-allow")
+                        .debug_selector(|| "approval-allow".to_owned())
                         .on_click(cx.listener(|app, _, _, cx| {
                             app.decide_approval(true);
                             cx.notify();
                         })),
                 )
                 .child(
-                    widgets::Button::new(theme, "Reject")
+                    widgets::Button::new(theme, "Deny")
                         .danger()
                         .build()
-                        .id("approval-reject")
+                        .id("approval-deny")
+                        .debug_selector(|| "approval-deny".to_owned())
                         .on_click(cx.listener(|app, _, _, cx| {
                             app.decide_approval(false);
                             cx.notify();
                         })),
-                )
-                .child(
-                    widgets::Button::new(theme, "Delegate")
-                        .build()
-                        .id("approval-delegate")
-                        .on_click(cx.listener(|app, _, _, cx| {
-                            app.delegate_approval();
-                            cx.notify();
-                        })),
                 ),
         );
-        pane = pane.child(widgets::card(theme, card));
+        column = column.child(widgets::card(theme, card));
     }
 
-    pane.into_any_element()
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .w_full()
+        .px(theme.sp(14.))
+        .child(column)
+        .into_any_element()
 }
 
 const QUESTION_KEYS: [&str; 4] = ["question-0", "question-1", "question-2", "question-3"];
@@ -639,21 +1276,52 @@ fn composer(
     theme: &Theme,
     cx: &mut Context<DesktopApp>,
 ) -> AnyElement {
-    let input = app.text_field("composer", "Message (Ctrl+Enter to send)", true, cx);
+    let input = app.text_field("composer", "Message DeepSeek · Ctrl+Enter to send", true, cx);
     if let Some(text) = app.pending_composer_text.take() {
         input.update(cx, |input, cx| input.set_text(text, cx));
     }
-    let enabled = !app.chat_loading && app.transport.is_some();
+    let transport = app.transport.is_some();
+    let busy = app.chat_loading;
+    let uploading = app.attachment_receiver.is_some();
+    let enabled = !busy && transport;
     let can_send = enabled
         && !app.chat_text.trim().is_empty()
         && app.attachment_receiver.is_none();
     let attachment_name = app.attachment_name.clone();
-    let uploading = app.attachment_receiver.is_some();
     let has_attachment = app.attachment.is_some();
     let model_label = app.model_label();
     let menu_open = app.model_menu_open;
-    let busy = app.chat_loading;
-    let transport = app.transport.is_some();
+    let mode_label = current_mode_label(app);
+    let attach_enabled = !uploading && !busy;
+    let attach_hint = if busy {
+        "Wait for the current turn before attaching."
+    } else if uploading {
+        "The current attachment is still uploading."
+    } else {
+        "Attach a file to the next prompt."
+    };
+    let send_hint = if busy {
+        "Stop the current turn."
+    } else if !transport {
+        "Connect to the Host to send."
+    } else if uploading {
+        "Wait for the attachment upload."
+    } else if app.chat_text.trim().is_empty() {
+        "Type a message first."
+    } else {
+        "Send (Ctrl+Enter)."
+    };
+    let disabled_reason = if busy {
+        None
+    } else if !transport {
+        Some("Connect to the Host before sending.")
+    } else if uploading {
+        Some("Wait for the attachment to finish uploading.")
+    } else if app.chat_text.trim().is_empty() {
+        Some("Type a message first.")
+    } else {
+        None
+    };
 
     let mut body = div()
         .flex()
@@ -665,6 +1333,7 @@ fn composer(
         .border_1()
         .border_color(theme.border)
         .bg(theme.code_background)
+        .debug_selector(|| "composer-shell".to_owned())
         .child(
             div()
                 .w_full()
@@ -686,196 +1355,169 @@ fn composer(
         .child(
             div()
                 .flex()
-                .flex_row()
-                .items_center()
-                .gap(theme.sp(6.))
+                .flex_col()
+                .gap(theme.sp(4.))
+                .w_full()
                 .child(
-                    widgets::Button::new(theme, "＋ Attach")
-                        .enabled(!uploading && !busy)
-                        .build()
-                        .id("composer-attach")
-                        .on_click(cx.listener(|app, _, _, cx| {
-                            app.pick_attachment();
-                            cx.notify();
-                        })),
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .w_full()
+                        .gap(theme.sp(8.))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(2.))
+                                .min_w(px(0.))
+                                .child(
+                                    icon_button(theme, "composer-attach", "＋", attach_hint, attach_enabled)
+                                        .on_click(cx.listener(|app, _, _, cx| {
+                                            if app.chat_loading || app.attachment_receiver.is_some() {
+                                                return;
+                                            }
+                                            app.pick_attachment();
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(
+                                    icon_button(
+                                        theme,
+                                        "composer-file-picker",
+                                        "＠",
+                                        "Insert a workspace file reference.",
+                                        transport,
+                                    )
+                                    .on_click(cx.listener(|app, _, _, cx| {
+                                        if app.transport.is_none() {
+                                            return;
+                                        }
+                                        app.file_picker_open = !app.file_picker_open;
+                                        if app.file_picker_open {
+                                            app.file_picker_query.clear();
+                                            app.set_input("file-picker-query", "", cx);
+                                        }
+                                        cx.notify();
+                                    })),
+                                )
+                                .when(!attachment_name.is_empty(), |element| {
+                                    element.child(
+                                        div()
+                                            .max_w(theme.sp(180.))
+                                            .truncate()
+                                            .text_size(theme.fs(10.))
+                                            .text_color(theme.muted)
+                                            .child(attachment_name.clone()),
+                                    )
+                                })
+                                .when(uploading, |element| {
+                                    element.child(
+                                        div()
+                                            .text_size(theme.fs(10.))
+                                            .text_color(theme.muted)
+                                            .child("Uploading…"),
+                                    )
+                                })
+                                .when(has_attachment, |element| {
+                                    element.child(
+                                        icon_button(
+                                                theme,
+                                                "composer-clear-attachment",
+                                                "×",
+                                                "Remove the attachment.",
+                                                true,
+                                            )
+                                            .on_click(cx.listener(|app, _, _, cx| {
+                                                app.attachment = None;
+                                                app.attachment_name.clear();
+                                                cx.notify();
+                                            })),
+                                    )
+                                }),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(4.))
+                                .child(
+                                    widgets::Button::new(
+                                        theme,
+                                        format!("{model_label} ▾"),
+                                    )
+                                    .enabled(transport)
+                                    .build()
+                                    .id("composer-model")
+                                    .debug_selector(|| "composer-model".to_owned())
+                                    .when(!transport, |button| {
+                                        button.tooltip(widgets::HintView::tooltip(
+                                            theme,
+                                            "Connect to the Host to choose a model.",
+                                        ))
+                                    })
+                                    .on_click(cx.listener(move |app, _, _, cx| {
+                                        app.model_menu_open = !menu_open;
+                                        cx.notify();
+                                    })),
+                                )
+                                .child(
+                                    widgets::Button::new(
+                                        theme,
+                                        format!("{mode_label} ▾"),
+                                    )
+                                    .enabled(transport)
+                                    .build()
+                                    .id("composer-mode")
+                                    .debug_selector(|| "composer-mode".to_owned())
+                                    .when(!transport, |button| {
+                                        button.tooltip(widgets::HintView::tooltip(
+                                            theme,
+                                            "Connect to the Host to choose a send mode.",
+                                        ))
+                                    })
+                                    .on_click(cx.listener(move |app, _, _, cx| {
+                                        app.model_menu_open = !menu_open;
+                                        cx.notify();
+                                    })),
+                                )
+                                .child(
+                                    icon_button(
+                                        theme,
+                                        if busy { "composer-stop" } else { "composer-send" },
+                                        if busy { "■" } else { "↑" },
+                                        send_hint,
+                                        busy || can_send,
+                                    )
+                                    .on_click(cx.listener(|app, _, _, cx| {
+                                        if app.chat_loading {
+                                            app.cancel_turn();
+                                            cx.notify();
+                                            return;
+                                        }
+                                        if !app.chat_text.trim().is_empty()
+                                            && app.transport.is_some()
+                                            && app.attachment_receiver.is_none()
+                                        {
+                                            app.send_prompt();
+                                            app.set_input("composer", "", cx);
+                                        }
+                                        cx.notify();
+                                    })),
+                                ),
+                        ),
                 )
-                .when(!attachment_name.is_empty(), |element| {
+                .when_some(disabled_reason, |element, reason| {
                     element.child(
                         div()
-                            .max_w(theme.sp(180.))
-                            .truncate()
-                            .text_size(theme.fs(10.))
+                            .text_size(theme.fs(9.5))
                             .text_color(theme.muted)
-                            .child(attachment_name.clone()),
+                            .child(reason),
                     )
-                })
-                .when(uploading, |element| {
-                    element.child(
-                        div()
-                            .text_size(theme.fs(10.))
-                            .text_color(theme.muted)
-                            .child("Uploading…"),
-                    )
-                })
-                .when(has_attachment, |element| {
-                    element.child(
-                        widgets::Button::new(theme, "×")
-                            .build()
-                            .id("composer-clear-attachment")
-                            .on_click(cx.listener(|app, _, _, cx| {
-                                app.attachment = None;
-                                app.attachment_name.clear();
-                                cx.notify();
-                            })),
-                    )
-                })
-                .child(
-                    widgets::Button::new(theme, model_label)
-                        .enabled(transport)
-                        .build()
-                        .id("composer-model")
-                        .on_click(cx.listener(move |app, _, _, cx| {
-                            app.model_menu_open = !menu_open;
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    widgets::Button::new(
-                        theme,
-                        if app.prompt_mode == PromptMode::Queue {
-                            "Queue"
-                        } else {
-                            "Queue"
-                        },
-                    )
-                    .enabled(transport && app.prompt_mode != PromptMode::Queue)
-                    .build()
-                    .id("composer-mode-queue")
-                    .on_click(cx.listener(|app, _, _, cx| {
-                        app.prompt_mode = PromptMode::Queue;
-                        cx.notify();
-                    })),
-                )
-                .child(
-                    widgets::Button::new(theme, "Steer")
-                        .enabled(transport && app.prompt_mode != PromptMode::Steer)
-                        .build()
-                        .id("composer-mode-steer")
-                        .on_click(cx.listener(|app, _, _, cx| {
-                            app.prompt_mode = PromptMode::Steer;
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    widgets::Button::new(
-                        theme,
-                        if app.transcript.plan_active() {
-                            "Plan (on) → Build"
-                        } else {
-                            "Plan"
-                        },
-                    )
-                    .enabled(transport && app.plan_command_available())
-                    .build()
-                    .id("composer-mode-plan")
-                    .on_click(cx.listener(|app, _, _, cx| {
-                        app.toggle_plan_mode();
-                        cx.notify();
-                    })),
-                )
-                .child(
-                    widgets::Button::new(theme, "Ask")
-                        .enabled(false)
-                        .build()
-                        .id("composer-mode-ask"),
-                )
-                .when(!app.plan_command_available(), |element| {
-                    element.child(
-                        div()
-                            .text_size(theme.fs(9.))
-                            .text_color(theme.muted)
-                            .child("Plan/Ask unavailable in this profile"),
-                    )
-                })
-                .child(
-                    widgets::Button::new(theme, "History")
-                        .enabled(!app.prompt_history.is_empty())
-                        .build()
-                        .id("composer-history")
-                        .on_click(cx.listener(|app, _, _, cx| {
-                            app.prompt_history_open = !app.prompt_history_open;
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    widgets::Button::new(theme, "Next")
-                        .enabled(!app.prompt_history.is_empty())
-                        .build()
-                        .id("composer-history-next")
-                        .on_click(cx.listener(|app, _, _, cx| {
-                            app.recall_prompt_history(-1);
-                            if let Some(text) = app.pending_composer_text.clone() {
-                                app.set_input("composer", &text, cx);
-                            }
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    widgets::Button::new(theme, "＠")
-                        .enabled(transport)
-                        .build()
-                        .id("composer-file-picker")
-                        .on_click(cx.listener(|app, _, _, cx| {
-                            app.file_picker_open = !app.file_picker_open;
-                            if app.file_picker_open {
-                                app.file_picker_query.clear();
-                                app.set_input("file-picker-query", "", cx);
-                            }
-                            cx.notify();
-                        })),
-                )
-                .child(div().flex_1())
-                .when(busy, |element| {
-                    element.child(
-                        widgets::Button::new(theme, "Stop")
-                            .danger()
-                            .build()
-                            .id("composer-stop")
-                            .on_click(cx.listener(|app, _, _, cx| {
-                                app.cancel_turn();
-                                cx.notify();
-                            })),
-                    )
-                })
-                .when(busy, |element| {
-                    element.child(
-                        widgets::Button::new(theme, "Queue")
-                            .build()
-                            .id("composer-queue")
-                            .on_click(cx.listener(|app, _, _, cx| {
-                                app.queue_prompt();
-                                app.set_input("composer", "", cx);
-                                cx.notify();
-                            })),
-                    )
-                })
-                .child(
-                    widgets::Button::new(theme, "Send")
-                        .primary()
-                        .enabled(can_send)
-                        .build()
-                        .id("composer-send")
-                        .on_click(cx.listener(|app, _, _, cx| {
-                            if !app.chat_text.trim().is_empty()
-                                && app.transport.is_some()
-                                && app.attachment_receiver.is_none()
-                            {
-                                app.send_prompt();
-                                app.set_input("composer", "", cx);
-                            }
-                            cx.notify();
-                        })),
-                ),
+                }),
         );
     if let Some(error) = &app.attachment_error {
         body = body.child(
@@ -890,66 +1532,19 @@ fn composer(
         .flex()
         .flex_col()
         .items_center()
+        .w_full()
         .px(theme.sp(14.))
-        .pb(theme.sp(8.))
-        .child(div().w_full().max_w(theme.sp(800.)).child(body));
-    if app.prompt_history_open {
-        let prompts: Vec<String> = app.prompt_history.clone();
-        let mut list = div()
-            .flex()
-            .flex_col()
-            .w_full()
-            .max_w(theme.sp(800.))
-            .max_h(theme.sp(140.))
-            .id("prompt-history-scroll").overflow_y_scroll()
-            .bg(theme.surface_raised)
-            .rounded(theme.corner())
-            .border_1()
-            .border_color(theme.border)
-            .px(theme.sp(6.))
-            .py(theme.sp(4.))
-            .gap(px(1.));
-        if prompts.is_empty() {
-            list = list.child(
-                div()
-                    .text_size(theme.fs(10.))
-                    .text_color(theme.muted)
-                    .child("No prompt history yet."),
-            );
-        }
-        for (index, prompt) in prompts.into_iter().rev().enumerate() {
-            let text = prompt.clone();
-            list = list.child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .w_full()
-                    .px(theme.sp(6.))
-                    .py(px(2.))
-                    .rounded(theme.corner())
-                    .cursor_pointer()
-                    .hover(|style| style.bg(theme.surface))
-                    .id(gpui::SharedString::from(format!("prompt-history-{index}")))
-                    .child(
-                        div()
-                            .text_size(theme.fs(10.5))
-                            .truncate()
-                            .child(prompt),
-                    )
-                    .on_click(cx.listener(move |app, _, _, cx| {
-                        app.chat_text = text.clone();
-                        app.pending_composer_text = Some(text.clone());
-                        app.prompt_history_open = false;
-                        app.set_input("composer", &text, cx);
-                        cx.notify();
-                    })),
-            );
-        }
-        column = column.child(list);
+        .pb(theme.sp(8.));
+    if menu_open {
+        column = column.child(composer_menu(app, theme, cx));
     }
     if app.file_picker_open {
-        let query_input = app.text_field("file-picker-query", "Filter loaded files by name or path", false, cx);
+        let query_input = app.text_field(
+            "file-picker-query",
+            "Filter loaded files by name or path",
+            false,
+            cx,
+        );
         let query = app.file_picker_query.to_ascii_lowercase();
         let rows: Vec<ExplorerRow> = app
             .explorer
@@ -967,9 +1562,10 @@ fn composer(
             .flex()
             .flex_col()
             .w_full()
-            .max_w(theme.sp(800.))
+            .max_w(theme.sp(COMPOSER_WIDTH))
             .max_h(theme.sp(140.))
-            .id("file-picker-scroll").id("prompt-history-scroll").overflow_y_scroll()
+            .id("file-picker-scroll")
+            .overflow_y_scroll()
             .bg(theme.surface_raised)
             .rounded(theme.corner())
             .border_1()
@@ -1025,7 +1621,7 @@ fn composer(
             .child(
                 div()
                     .w_full()
-                    .max_w(theme.sp(800.))
+                    .max_w(theme.sp(COMPOSER_WIDTH))
                     .h(theme.control_height())
                     .px(theme.sp(6.))
                     .rounded(theme.corner())
@@ -1041,40 +1637,328 @@ fn composer(
             )
             .child(list);
     }
-    if menu_open {
-        column = column.child(model_menu(app, theme, cx));
-    }
+    column = column.child(
+        div()
+            .w_full()
+            .max_w(theme.sp(COMPOSER_WIDTH))
+            .mx_auto()
+            .child(body),
+    );
     column.into_any_element()
 }
 
-fn model_menu(
+/// The mode the composer will send with, naming plan mode when it is on.
+fn current_mode_label(app: &DesktopApp) -> &'static str {
+    if app.transcript.plan_active() {
+        return "Plan";
+    }
+    match app.prompt_mode {
+        PromptMode::Queue => "Queue",
+        PromptMode::Steer => "Steer",
+    }
+}
+
+/// A compact icon control for the composer's tool row.
+fn icon_button(
+    theme: &Theme,
+    id: &'static str,
+    glyph: &'static str,
+    hint: &'static str,
+    enabled: bool,
+) -> gpui::Stateful<Div> {
+    let button = div()
+        .flex()
+        .items_center()
+        .justify_center()
+        .flex_none()
+        .w(theme.sp(27.))
+        .h(theme.sp(27.))
+        .rounded(theme.corner())
+        .text_size(theme.fs(13.))
+        .text_color(theme.muted)
+        .child(glyph)
+        .id(id)
+        .debug_selector(move || id.to_owned())
+        .tooltip(widgets::HintView::tooltip(theme, hint));
+    if enabled {
+        button
+            .cursor_pointer()
+            .hover(|style| style.bg(theme.surface_raised).text_color(theme.text))
+    } else {
+        button.opacity(0.45)
+    }
+}
+
+/// One selectable row inside the composer menu.
+fn menu_row(
+    theme: &Theme,
+    id: &'static str,
+    label: String,
+    selected: bool,
+    enabled: bool,
+    hint: &'static str,
+) -> gpui::Stateful<Div> {
+    let row = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(theme.sp(6.))
+        .w_full()
+        .px(theme.sp(8.))
+        .py(theme.sp(4.))
+        .rounded(theme.corner())
+        .text_size(theme.fs(11.))
+        .text_color(if enabled { theme.text } else { theme.muted })
+        .child(
+            div()
+                .flex_none()
+                .w(theme.sp(12.))
+                .text_color(theme.accent)
+                .child(if selected { "\u{2713}" } else { "" }),
+        )
+        .child(label)
+        .id(id)
+        .debug_selector(move || id.to_owned())
+        .tooltip(widgets::HintView::tooltip(theme, hint));
+    if enabled {
+        row.cursor_pointer()
+            .hover(|style| style.bg(theme.surface))
+    } else {
+        row.opacity(0.45)
+    }
+}
+
+/// Composer popover: send mode, running-turn action, prompt history, and model.
+fn composer_menu(
     app: &mut DesktopApp,
     theme: &Theme,
     cx: &mut Context<DesktopApp>,
 ) -> AnyElement {
+    let transport = app.transport.is_some();
+    let busy = app.chat_loading;
+    let plan_available = app.plan_command_available();
+    let plan_active = app.transcript.plan_active();
+    let queue_mode = app.prompt_mode == PromptMode::Queue;
+    let steer_mode = app.prompt_mode == PromptMode::Steer;
+    let has_text = !app.chat_text.trim().is_empty();
+    let has_history = !app.prompt_history.is_empty();
     let mut list = div()
         .flex()
         .flex_col()
         .gap(px(1.))
         .w_full()
-        .max_w(theme.sp(800.))
-        .mt(theme.sp(4.))
+        .max_w(theme.sp(COMPOSER_WIDTH))
+        .mx_auto()
+        .mb(theme.sp(4.))
         .p(theme.sp(6.))
         .rounded(theme.corner())
         .border_1()
         .border_color(theme.border)
         .bg(theme.surface_raised)
         .shadow_lg()
+        .debug_selector(|| "composer-menu".to_owned())
+        .child(
+            div()
+                .px(theme.sp(8.))
+                .pt(theme.sp(3.))
+                .pb(theme.sp(2.))
+                .text_size(theme.fs(9.5))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(theme.muted)
+                .child("Mode"),
+        )
+        .child(
+            menu_row(
+                theme,
+                "composer-mode-queue",
+                "Queue".to_owned(),
+                queue_mode,
+                transport,
+                if transport {
+                    "Send the next prompt to the run queue."
+                } else {
+                    "Connect to the Host to choose a send mode."
+                },
+            )
+            .on_click(cx.listener(|app, _, _, cx| {
+                if app.transport.is_none() {
+                    return;
+                }
+                app.prompt_mode = PromptMode::Queue;
+                app.model_menu_open = false;
+                cx.notify();
+            })),
+        )
+        .child(
+            menu_row(
+                theme,
+                "composer-mode-steer",
+                "Steer".to_owned(),
+                steer_mode,
+                transport,
+                if transport {
+                    "Steer the running turn with the next prompt."
+                } else {
+                    "Connect to the Host to choose a send mode."
+                },
+            )
+            .on_click(cx.listener(|app, _, _, cx| {
+                if app.transport.is_none() {
+                    return;
+                }
+                app.prompt_mode = PromptMode::Steer;
+                app.model_menu_open = false;
+                cx.notify();
+            })),
+        )
+        .child(
+            menu_row(
+                theme,
+                "composer-mode-plan",
+                format!("Plan mode · {}", if plan_active { "on" } else { "off" }),
+                plan_active,
+                transport && plan_available,
+                if plan_available {
+                    "Toggle plan mode through the runtime's /plan command."
+                } else {
+                    "This profile has no /plan command."
+                },
+            )
+            .on_click(cx.listener(|app, _, _, cx| {
+                if app.transport.is_none() || !app.plan_command_available() {
+                    return;
+                }
+                app.toggle_plan_mode();
+                app.model_menu_open = false;
+                cx.notify();
+            })),
+        )
+        .child(
+            menu_row(
+                theme,
+                "composer-mode-ask",
+                "Ask".to_owned(),
+                false,
+                false,
+                "Ask is not available in this profile.",
+            ),
+        )
+        .when(busy, |element| {
+            element
+                .child(
+                    div()
+                        .px(theme.sp(8.))
+                        .pt(theme.sp(6.))
+                        .pb(theme.sp(2.))
+                        .text_size(theme.fs(9.5))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(theme.muted)
+                        .child("While running"),
+                )
+                .child(
+                    menu_row(
+                        theme,
+                        "composer-queue",
+                        if steer_mode {
+                            "Steer this run".to_owned()
+                        } else {
+                            "Queue this message".to_owned()
+                        },
+                        false,
+                        transport && has_text,
+                        if has_text {
+                            "Send the draft with the selected mode."
+                        } else {
+                            "Type a message first."
+                        },
+                    )
+                    .on_click(cx.listener(|app, _, _, cx| {
+                        if app.chat_loading
+                            && !app.chat_text.trim().is_empty()
+                            && app.transport.is_some()
+                        {
+                            app.queue_prompt();
+                            app.set_input("composer", "", cx);
+                            app.model_menu_open = false;
+                        }
+                        cx.notify();
+                    })),
+                )
+        })
+        .child(
+            div()
+                .px(theme.sp(8.))
+                .pt(theme.sp(6.))
+                .pb(theme.sp(2.))
+                .text_size(theme.fs(9.5))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(theme.muted)
+                .child("Prompt history"),
+        )
+        .child(
+            menu_row(
+                theme,
+                "composer-history",
+                "Previous prompt".to_owned(),
+                false,
+                has_history,
+                if has_history {
+                    "Recall an earlier prompt into the composer."
+                } else {
+                    "No prompt history yet."
+                },
+            )
+            .on_click(cx.listener(|app, _, _, cx| {
+                if app.prompt_history.is_empty() {
+                    return;
+                }
+                app.recall_prompt_history(1);
+                if let Some(text) = app.pending_composer_text.clone() {
+                    app.set_input("composer", &text, cx);
+                }
+                app.model_menu_open = false;
+                cx.notify();
+            })),
+        )
+        .child(
+            menu_row(
+                theme,
+                "composer-history-next",
+                "Next prompt".to_owned(),
+                false,
+                has_history,
+                if has_history {
+                    "Recall a newer prompt into the composer."
+                } else {
+                    "No prompt history yet."
+                },
+            )
+            .on_click(cx.listener(|app, _, _, cx| {
+                if app.prompt_history.is_empty() {
+                    return;
+                }
+                app.recall_prompt_history(-1);
+                if let Some(text) = app.pending_composer_text.clone() {
+                    app.set_input("composer", &text, cx);
+                }
+                app.model_menu_open = false;
+                cx.notify();
+            })),
+        )
         .child(
             div()
                 .flex()
                 .flex_row()
                 .items_center()
                 .justify_between()
+                .px(theme.sp(8.))
+                .pt(theme.sp(6.))
+                .pb(theme.sp(2.))
                 .child(
                     div()
-                        .text_size(theme.fs(10.))
+                        .text_size(theme.fs(9.5))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(theme.muted)
                         .child("Model"),
                 )
                 .child(
@@ -1115,6 +1999,7 @@ fn model_menu(
         for group in &catalog.groups {
             list = list.child(
                 div()
+                    .px(theme.sp(8.))
                     .pt(theme.sp(4.))
                     .text_size(theme.fs(10.))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
@@ -1408,4 +2293,165 @@ fn note(theme: &Theme, text: &str) -> AnyElement {
         .text_color(theme.muted)
         .child(text.to_owned())
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn text_blocks_render_headings_bullets_code_and_paragraphs() {
+        let blocks = text_blocks(
+            "# Summary\nIntro line\n- first\n- second\n1. one\n2. two\n```rust\nfn main() {}\n```\nDone.",
+        );
+        assert!(matches!(
+            &blocks[0],
+            TextBlock::Heading { level: 1, text } if text == "Summary"
+        ));
+        assert!(matches!(&blocks[1], TextBlock::Paragraph(text) if text == "Intro line"));
+        let TextBlock::List { ordered: false, items } = &blocks[2] else {
+            panic!("expected a bullet list");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].marker, "•");
+        assert_eq!(items[0].text, "first");
+        let TextBlock::List { ordered: true, items } = &blocks[3] else {
+            panic!("expected numbered items");
+        };
+        assert_eq!(items[1].marker, "2.");
+        let TextBlock::Code { language, text } = &blocks[4] else {
+            panic!("expected a code block");
+        };
+        assert_eq!(language, "rust");
+        assert_eq!(text, "fn main() {}");
+        assert!(matches!(&blocks[5], TextBlock::Paragraph(text) if text == "Done."));
+    }
+
+    #[test]
+    fn text_blocks_keep_unclosed_fences_and_rules() {
+        let blocks = text_blocks("above\n---\n```sh\ncargo test");
+        assert!(matches!(&blocks[0], TextBlock::Paragraph(text) if text == "above"));
+        assert!(matches!(&blocks[1], TextBlock::Rule));
+        let TextBlock::Code { language, text } = &blocks[2] else {
+            panic!("expected the unclosed fence to stay code");
+        };
+        assert_eq!(language, "sh");
+        assert_eq!(text, "cargo test");
+    }
+
+    #[test]
+    fn tool_text_separates_the_projection_summary_from_output() {
+        let (body, summary) = split_tool_text("out\n[stderr]\nboom\n— 150ms · stderr 4B");
+        assert_eq!(body, "out\n[stderr]\nboom");
+        assert_eq!(summary, Some("150ms · stderr 4B"));
+        assert_eq!(summary_without_duration("150ms · stderr 4B"), Some("stderr 4B"));
+        assert_eq!(summary_without_duration("150ms"), None);
+        assert_eq!(split_tool_text("out"), ("out", None));
+    }
+
+    #[test]
+    fn durations_read_in_activity_units() {
+        assert_eq!(format_duration(640), "640ms");
+        assert_eq!(format_duration(1_500), "1.5s");
+        assert_eq!(format_duration(65_000), "1m 5s");
+    }
+
+    #[test]
+    fn conversation_column_and_composer_hold_the_v2_width_caps() {
+        let mut harness = crate::harness::Harness::open_with(1920., 1080., |app| {
+            app.selected_session = Some("layout-session".to_owned());
+        });
+        let reading = harness
+            .bounds("transcript-reading-column")
+            .expect("conversation reading column renders");
+        assert!(
+            (f32::from(reading.size.width) - READING_COLUMN_WIDTH).abs() < 0.5,
+            "reading column was {}",
+            f32::from(reading.size.width)
+        );
+        let agent = harness.bounds("agent-column").expect("agent column renders");
+        let expected_x = agent.origin.x + (agent.size.width - reading.size.width) / 2.0;
+        assert!(
+            f32::from(reading.origin.x - expected_x).abs() < 1.0,
+            "reading column was not centered: x={} agent={}",
+            f32::from(reading.origin.x),
+            f32::from(agent.origin.x)
+        );
+        let composer = harness
+            .bounds("composer-shell")
+            .expect("composer renders");
+        assert!(
+            (f32::from(composer.size.width) - COMPOSER_WIDTH).abs() < 0.5,
+            "composer was {}",
+            f32::from(composer.size.width)
+        );
+        for selector in [
+            "composer-attach",
+            "composer-file-picker",
+            "composer-model",
+            "composer-mode",
+            "composer-send",
+        ] {
+            assert!(harness.bounds(selector).is_some(), "{selector} missing");
+        }
+    }
+
+    #[test]
+    fn composer_mode_selector_reaches_queue_steer_plan_and_ask() {
+        let mut harness = crate::harness::Harness::open_with(1920., 1080., |app| {
+            app.selected_session = Some("mode-session".to_owned());
+        });
+        assert!(harness.click("composer-mode"), "mode button did not click");
+        assert!(harness.bounds("composer-menu").is_some(), "menu did not open");
+        for selector in [
+            "composer-mode-queue",
+            "composer-mode-steer",
+            "composer-mode-plan",
+            "composer-mode-ask",
+        ] {
+            assert!(harness.bounds(selector).is_some(), "{selector} missing");
+        }
+    }
+
+    #[test]
+    fn approval_card_shows_the_scoped_command_and_only_once_or_deny() {
+        use dsh_client_core::follow::SessionWireEvent;
+        let mut harness = crate::harness::Harness::open_with(1920., 1080., |app| {
+            app.selected_session = Some("approval-session".to_owned());
+            app.transcript.apply(&SessionWireEvent {
+                event_type: "tool/call".into(),
+                seq: 1,
+                time: 1_760_000_000_000,
+                data: serde_json::json!({
+                    "callId": "call-1",
+                    "name": "bash",
+                    "arguments": "{\"command\":\"cargo test --release\"}"
+                }),
+                ignorable: None,
+                source_event_seqs: None,
+                surface_op: None,
+            });
+            let mut request = serde_json::Map::new();
+            request.insert(
+                "toolName".to_owned(),
+                serde_json::Value::String("bash".to_owned()),
+            );
+            request.insert(
+                "callId".to_owned(),
+                serde_json::Value::String("call-1".to_owned()),
+            );
+            let invocation = dsh_client_core::remote_events::RemoteEventInvocation::for_test(
+                "approval/request",
+                request,
+            );
+            app.pending_approvals.push(
+                dsh_client_core::approvals::PendingApproval::from_invocation(invocation)
+                    .expect("approval request"),
+            );
+        });
+        assert!(harness.bounds("approval-scope").is_some());
+        assert!(harness.bounds("approval-allow").is_some());
+        assert!(harness.bounds("approval-deny").is_some());
+        assert!(harness.bounds("approval-delegate").is_none());
+    }
 }

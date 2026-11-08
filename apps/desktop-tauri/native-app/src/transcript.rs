@@ -32,6 +32,14 @@ pub enum RowKind {
     Notice,
 }
 
+/// A tool call's identity and scoped argument summary, retained by call id.
+#[derive(Debug, Clone)]
+struct CallMetadata {
+    seq: i64,
+    name: String,
+    scope: String,
+}
+
 /// One rendered line group.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TranscriptRow {
@@ -67,6 +75,16 @@ pub struct Transcript {
     plan_seq: i64,
     /// `tool/call` arrival times by call id, for result durations.
     call_times: HashMap<String, (i64, i64)>,
+    /// Tool name and scoped arguments by call id, for result rows and approvals.
+    call_metadata: HashMap<String, CallMetadata>,
+    /// Event time per projected row sequence, for the speaker line.
+    row_times: HashMap<i64, i64>,
+    /// Wall time between a tool call and its result, per result row sequence.
+    row_durations: HashMap<i64, i64>,
+    /// Tool name per tool-result row sequence.
+    row_tools: HashMap<i64, String>,
+    /// Whether the grouped tool-activity section is collapsed.
+    tool_group_collapsed: bool,
 }
 
 impl Default for Transcript {
@@ -83,6 +101,11 @@ impl Default for Transcript {
             plan_active: false,
             plan_seq: -1,
             call_times: HashMap::new(),
+            call_metadata: HashMap::new(),
+            row_times: HashMap::new(),
+            row_durations: HashMap::new(),
+            row_tools: HashMap::new(),
+            tool_group_collapsed: true,
         }
     }
 }
@@ -101,6 +124,11 @@ impl Transcript {
         self.plan_active = false;
         self.plan_seq = -1;
         self.call_times.clear();
+        self.call_metadata.clear();
+        self.row_times.clear();
+        self.row_durations.clear();
+        self.row_tools.clear();
+        self.tool_group_collapsed = true;
     }
 
     /// Merges durable events in sequence order, ignoring any already projected.
@@ -143,6 +171,7 @@ impl Transcript {
                     self.call_times.insert(call_id, (event.seq, event.time));
                 }
             }
+            self.record_call_metadata(event);
             let at = self.rows.partition_point(|row| row.seq < event.seq);
             if event.event_type == "plan/mode" && event.seq >= self.plan_seq {
                 self.plan_active = event
@@ -180,9 +209,21 @@ impl Transcript {
                 "tool/result" => call_duration_of(&mut self.call_times, event),
                 _ => None,
             };
+            let tool_name = matches!(event.event_type.as_str(), "tool/result")
+                .then(|| call_id_of(event))
+                .flatten()
+                .and_then(|call_id| self.call_metadata.get(&call_id))
+                .map(|metadata| metadata.name.clone());
             for (offset, row) in project(event, duration_ms).into_iter().enumerate() {
                 self.bytes += row.text.len();
                 self.has_cjk |= crate::fonts::contains_cjk(&row.text);
+                self.row_times.insert(row.seq, event.time);
+                if let Some(duration) = duration_ms {
+                    self.row_durations.insert(row.seq, duration);
+                }
+                if let Some(name) = &tool_name {
+                    self.row_tools.insert(row.seq, name.clone());
+                }
                 self.rows.insert(at + offset, row);
             }
         }
@@ -250,11 +291,134 @@ impl Transcript {
         self.rows.is_empty()
     }
 
+    /// Event time for a projected row, used for its speaker timestamp.
+    ///
+    /// @param seq - Sequence carried by the projected row.
+    /// @returns Unix milliseconds when the row was projected from an event.
+    pub fn time_of(&self, seq: i64) -> Option<i64> {
+        self.row_times.get(&seq).copied()
+    }
+
+    /// Wall time a tool call took, as stamped by its result event.
+    ///
+    /// @param seq - Sequence carried by the tool-result row.
+    /// @returns Elapsed milliseconds when the call and result were paired.
+    pub fn duration_of(&self, seq: i64) -> Option<i64> {
+        self.row_durations.get(&seq).copied()
+    }
+
+    /// Tool name that produced one result row.
+    ///
+    /// @param seq - Sequence carried by the tool-result row.
+    /// @returns The call's tool name when its `tool/call` event was projected.
+    pub fn tool_name_of(&self, seq: i64) -> Option<&str> {
+        self.row_tools.get(&seq).map(String::as_str)
+    }
+
+    /// Scoped argument summary for a pending approval's call.
+    ///
+    /// @param call_id - Tool call identity carried by the approval request.
+    /// @returns The tool name and its first meaningful argument, when logged.
+    pub fn call_scope(&self, call_id: &str) -> Option<&str> {
+        self.call_metadata
+            .get(call_id)
+            .map(|metadata| metadata.scope.as_str())
+    }
+
+    /// Whether the grouped tool-activity section hides its rows.
+    pub fn tool_group_collapsed(&self) -> bool {
+        self.tool_group_collapsed
+    }
+
+    /// Flips the grouped tool-activity disclosure.
+    pub fn toggle_tool_group(&mut self) {
+        self.tool_group_collapsed = !self.tool_group_collapsed;
+    }
+
+    /// Records a call's name and scoped arguments for later result and approval
+    /// rows, bounded like the in-flight call table.
+    ///
+    /// @param event - A `tool/call` or `assistant/message` event.
+    fn record_call_metadata(&mut self, event: &SessionWireEvent) {
+        match event.event_type.as_str() {
+            "tool/call" => {
+                let Some(call_id) = call_id_of(event) else {
+                    return;
+                };
+                let name = event
+                    .data
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("tool");
+                let arguments = event
+                    .data
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .unwrap_or("{}");
+                self.insert_call_metadata(&call_id, event.seq, name, arguments);
+            }
+            "assistant/message" => {
+                let message = event.data.get("message").unwrap_or(&event.data);
+                let Some(blocks) = message.get("content").and_then(Value::as_array) else {
+                    return;
+                };
+                for block in blocks {
+                    if block.get("type").and_then(Value::as_str) != Some("tool-call") {
+                        continue;
+                    }
+                    let Some(call_id) = block.get("id").and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let name = block.get("name").and_then(Value::as_str).unwrap_or("tool");
+                    let arguments = block
+                        .get("arguments")
+                        .and_then(Value::as_str)
+                        .unwrap_or("{}");
+                    self.insert_call_metadata(call_id, event.seq, name, arguments);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Stores one call's namespaced summary, evicting the oldest entry at the cap.
+    ///
+    /// @param call_id - Tool call identity.
+    /// @param seq - Sequence of the event that named the call.
+    /// @param name - Tool name.
+    /// @param arguments - Raw JSON arguments used for the scoped summary.
+    fn insert_call_metadata(&mut self, call_id: &str, seq: i64, name: &str, arguments: &str) {
+        if self.call_metadata.len() >= 2048 {
+            if let Some(oldest) = self
+                .call_metadata
+                .iter()
+                .min_by_key(|(_, metadata)| metadata.seq)
+                .map(|(id, _)| id.clone())
+            {
+                self.call_metadata.remove(&oldest);
+            }
+        }
+        self.call_metadata.insert(
+            call_id.to_owned(),
+            CallMetadata {
+                seq,
+                name: name.to_owned(),
+                scope: format!("{name}: {}", tool_summary(name, arguments)),
+            },
+        );
+    }
+
     /// Enforces the row and byte budgets from the oldest row.
     fn trim(&mut self) {
         while self.rows.len() > MAX_ROWS || self.bytes > MAX_BYTES {
             let dropped = self.rows.remove(0);
             self.bytes -= dropped.text.len();
+            // Rows may share a sequence; keep metadata another row still reads.
+            if self.rows.first().map(|row| row.seq) != Some(dropped.seq) {
+                self.row_times.remove(&dropped.seq);
+                self.row_durations.remove(&dropped.seq);
+                self.row_tools.remove(&dropped.seq);
+            }
         }
         if let Some(oldest) = self.oldest_seq() {
             self.applied = self.applied.split_off(&oldest);
@@ -877,6 +1041,54 @@ mod tests {
         assert!(row.text.contains("0ms"), "{row:?}");
         assert!(row.text.contains("exit code 2"), "{row:?}");
         assert!(row.text.contains("stderr 4B"), "{row:?}");
+    }
+
+    #[test]
+    fn rows_expose_timestamps_durations_and_tool_names() {
+        let mut transcript = Transcript::default();
+        let call = SessionWireEvent {
+            event_type: "tool/call".into(),
+            seq: 1,
+            time: 1_760_000_000_000,
+            data: serde_json::json!({
+                "callId": "call-1", "name": "bash",
+                "arguments": "{\"command\":\"cargo test\"}"
+            }),
+            ignorable: None,
+            source_event_seqs: None,
+            surface_op: None,
+        };
+        let result = SessionWireEvent {
+            event_type: "tool/result".into(),
+            seq: 2,
+            time: 1_760_000_000_640,
+            data: serde_json::json!({
+                "message": {
+                    "source": {"kind": "tool", "callId": "call-1"},
+                    "content": [{"type": "text", "text": "ok"}],
+                    "isError": false
+                }
+            }),
+            ignorable: None,
+            source_event_seqs: None,
+            surface_op: None,
+        };
+        transcript.merge([&call, &result]);
+        let row = transcript.rows().last().expect("result row");
+        assert_eq!(transcript.time_of(row.seq), Some(1_760_000_000_640));
+        assert_eq!(transcript.duration_of(row.seq), Some(640));
+        assert_eq!(transcript.tool_name_of(row.seq), Some("bash"));
+        assert_eq!(transcript.call_scope("call-1"), Some("bash: cargo test"));
+    }
+
+    #[test]
+    fn tool_group_disclosure_toggles_and_resets_with_the_session() {
+        let mut transcript = Transcript::default();
+        assert!(transcript.tool_group_collapsed());
+        transcript.toggle_tool_group();
+        assert!(!transcript.tool_group_collapsed());
+        transcript.reset();
+        assert!(transcript.tool_group_collapsed());
     }
 
     #[test]
