@@ -179,3 +179,42 @@ mod tests {
         assert_eq!(selected, ["B"]);
     }
 }
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    fn card(multi: bool) -> QuestionCard {
+        QuestionCard::for_test(vec![UserQuestion {
+            id: "pick".into(),
+            question: "Pick".into(),
+            detail: None,
+            header: None,
+            options: ["Alpha", "Beta"]
+                .iter()
+                .map(|label| dsh_client_core::user_questions::UserQuestionOption {
+                    label: (*label).into(),
+                    description: None,
+                })
+                .collect(),
+            multi_select: multi,
+        }])
+    }
+
+    #[test]
+    fn single_select_replaces_the_previous_option() {
+        let mut card = card(false);
+        card.choose(0, "Alpha");
+        card.choose(0, "Beta");
+        assert_eq!(card.chosen(0), ["Beta"]);
+    }
+
+    #[test]
+    fn multi_select_toggles_options_in_click_order() {
+        let mut card = card(true);
+        card.choose(0, "Alpha");
+        card.choose(0, "Beta");
+        card.choose(0, "Alpha");
+        assert_eq!(card.chosen(0), ["Beta"]);
+    }
+}
