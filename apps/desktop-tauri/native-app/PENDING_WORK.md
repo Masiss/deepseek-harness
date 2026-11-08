@@ -1,7 +1,7 @@
 # Việc còn lại — Desktop native UI
 
 Cập nhật: 2026-11-08. Mọi slice trong `DSH_Design_System_v1.2/IMPLEMENTATION_PLAN.md` đã được
-triển khai trên nhánh làm việc (commit local, chưa push khi tài liệu này được viết):
+triển khai trên nhánh làm việc (đã push lên fork `Masiss/deepseek-harness`):
 A1, A2, A3, B, C, D, G0, G1, G2, G3, G4a, G4b, P1, P2.
 
 Trạng thái kiểm chứng tại thời điểm đó:
@@ -9,9 +9,9 @@ Trạng thái kiểm chứng tại thời điểm đó:
 - `cargo test --release` (native-app): 361 passed, 0 failed, 1 ignored.
 - `cargo test` (client-core): 114 + 8 + 11 passed.
 - `vitest packages/api/workspace-controller`: 227 passed; `bun run typecheck`: 5/5.
-- Screenshot binary release dưới weston headless + Xwayland:
-  `/tmp/dsh-final-shots/{light,dark}-{1366x768,1440x900,1920x1080}.png` (chỉ trạng thái
-  disconnected/empty, chưa có Host session thật).
+- Screenshot binary release dưới weston headless + Xwayland, lưu tại `screenshots/`:
+  `{light,dark}-{1366x768,1440x900,1920x1080}.png` (chỉ trạng thái disconnected/empty, chưa có Host
+  session thật). Cách chụp lại ở `screenshots/README.md`.
 
 ## Việc còn lại
 
@@ -68,3 +68,4 @@ OOM khi máy còn mở trình duyệt.
 - `DSH_Design_System_v1.2/GIT_SURFACE_V1.3.md` — inventory surface Git và bảng verb Host.
 - `DSH_Design_System_v1.2/prototype-git-v1.3.html` — prototype tham chiếu (dữ liệu mẫu).
 - `USER_GUIDE.md`, `USER_FLOWS.md` — hướng dẫn và luồng người dùng hiện tại.
+- `screenshots/README.md` — ảnh chụp native và recipe chụp lại.
