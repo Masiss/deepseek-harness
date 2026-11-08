@@ -22,8 +22,9 @@ use dsh_client_core::{
     diagnostics::{DiagnoseResponse, DiagnosticItem, DiagnosticsClient, DiagnosticsResponse},
     follow::{self, FollowFrame, FollowRequest},
     git::{
-        GitBranches, GitCheckoutResult, GitClient, GitCommitResult, GitDiff, GitFile,
-        GitOperationResult, GitOperationState, GitPathResult, GitRemoteResult, GitStatus,
+        GitApplyRequest, GitApplyResult, GitApplyTarget, GitBranches, GitCheckoutResult, GitClient,
+        GitCommitOptions, GitCommitResult, GitDiff, GitFile, GitLog, GitOperationResult,
+        GitOperationState, GitRemoteResult, GitStatus,
     },
     goals::{CreateGoalRequest, EditGoalRequest, GoalRef, GoalView, GoalsClient},
     marketplace::{MarketplaceClient, MarketplaceInstallOptions},
@@ -63,6 +64,7 @@ use dsh_client_core::{
     },
     Error,
 };
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -283,6 +285,52 @@ fn discard_confirmation_is_fresh(
         })
 }
 
+/// Whether a bulk discard confirmation still describes every ticked path.
+fn discard_many_is_fresh(
+    status: Option<&GitStatus>,
+    session_id: &str,
+    selected_session_id: Option<&str>,
+    files: &[GitFile],
+) -> bool {
+    !files.is_empty()
+        && files.iter().all(|file| {
+            discard_confirmation_is_fresh(
+                status,
+                session_id,
+                selected_session_id,
+                &file.path,
+                &file.status,
+                file.staged,
+                file.worktree,
+            )
+        })
+}
+
+/// Whether a hunk confirmation still describes the status and patch the user reviewed.
+fn hunk_confirmation_is_fresh(
+    status: Option<&GitStatus>,
+    diff: Option<&GitDiff>,
+    session_id: &str,
+    selected_session_id: Option<&str>,
+    path: &str,
+    expected_status: &str,
+    staged: bool,
+    worktree: bool,
+    signature: &str,
+) -> bool {
+    discard_confirmation_is_fresh(
+        status,
+        session_id,
+        selected_session_id,
+        path,
+        expected_status,
+        staged,
+        worktree,
+    ) && diff.is_some_and(|diff| {
+        super::git_review::patch_signature(&diff.path, diff.staged, &diff.patch) == signature
+    })
+}
+
 /// Whether a checkout confirmation still describes the latest repository state.
 fn checkout_confirmation_is_fresh(
     status: Option<&GitStatus>,
@@ -359,6 +407,23 @@ pub(crate) enum GitConfirmation {
         staged: bool,
         worktree: bool,
     },
+    /// Discard several ticked work-tree changes.
+    DiscardMany {
+        session_id: String,
+        files: Vec<GitFile>,
+    },
+    /// Discard one hunk through `git/apply`.
+    DiscardHunk {
+        session_id: String,
+        path: String,
+        status: String,
+        staged: bool,
+        worktree: bool,
+        /// File header plus the one hunk, as `git/apply` expects it.
+        patch: String,
+        /// Content signature of the diff the user reviewed.
+        signature: String,
+    },
     Checkout {
         session_id: String,
         current: Option<String>,
@@ -377,13 +442,32 @@ enum GitPathVerb {
     Discard,
 }
 
+impl GitPathVerb {
+    /// The operation name the Host reports for this verb.
+    fn operation(self) -> &'static str {
+        match self {
+            Self::Stage => "stage",
+            Self::Unstage => "unstage",
+            Self::Discard => "discard",
+        }
+    }
+}
+
 enum GitUpdate {
     Status(Result<GitStatus, Error>),
     Branches(Result<GitBranches, Error>),
     Checkout(Result<GitCheckoutResult, Error>),
     Diff(Result<GitDiff, Error>),
-    Path(Result<GitPathResult, Error>),
+    /// One verb over several paths; `paths` lists the calls that landed before
+    /// the first failure.
+    Paths {
+        operation: &'static str,
+        paths: Vec<String>,
+        failure: Option<Error>,
+    },
+    Apply(Result<GitApplyResult, Error>),
     Commit(Result<GitCommitResult, Error>),
+    Log(Result<GitLog, Error>),
     State(Result<GitOperationState, Error>),
     StatusAndState(
         Result<GitStatus, Error>,
@@ -762,6 +846,8 @@ pub(crate) struct DesktopApp {
     pub(crate) git_push_confirm: bool,
     /// Set when a state refresh waits for the current Git worker.
     pub(crate) git_state_pending: bool,
+    /// Set when the selected path's diff must be read once the worker is free.
+    git_diff_pending: bool,
     /// Failure of the last Git verb, already classified for display.
     pub(crate) git_error: Option<String>,
     /// Whether a Git verb is in flight.
@@ -774,6 +860,32 @@ pub(crate) struct DesktopApp {
     pub(crate) git_refresh_pending: bool,
     /// Last watcher timestamp the Git auto-refresh check consumed.
     pub(crate) git_refresh_probe_started_at: Option<std::time::Instant>,
+    /// Paths ticked in the Files tab bulk selection.
+    pub(crate) git_selection: Vec<String>,
+    /// Files-tab filter text, mirrored from its text field.
+    pub(crate) git_filter: String,
+    /// Reviewed signature per changed path.
+    pub(crate) git_reviewed: HashMap<String, String>,
+    /// Commit draft, mirrored from `git-commit-message`.
+    pub(crate) git_commit_message: String,
+    /// Whether the next commit replaces HEAD.
+    pub(crate) git_amend: bool,
+    /// Whether the next commit appends a `Signed-off-by` trailer.
+    pub(crate) git_sign_off: bool,
+    /// Whether the recent-message list is expanded.
+    pub(crate) git_recent_open: bool,
+    /// Recent commit subjects from `git/log`, newest first.
+    pub(crate) git_recent_messages: Vec<String>,
+    /// Failure of the last recent-message read, kept apart from `git_error`.
+    pub(crate) git_log_error: Option<String>,
+    /// Whether a recent-message read is in flight.
+    pub(crate) git_log_loading: bool,
+    /// Set when the recent-message list must be read on the next settle.
+    git_log_pending: bool,
+    /// Set when a successful commit continues with a push.
+    git_push_pending: bool,
+    /// Set when the commit input must be cleared on the next frame.
+    pub(crate) git_commit_input_clear: bool,
     /// Whether the Session switcher popover is open.
     pub(crate) show_session_menu: bool,
     /// Whether the status bar's tool popover is open.
@@ -1186,7 +1298,21 @@ impl DesktopApp {
             git_confirmation: None,
             git_refresh_pending: false,
             git_refresh_probe_started_at: None,
+            git_selection: Vec::new(),
+            git_filter: String::new(),
+            git_reviewed: HashMap::new(),
+            git_commit_message: String::new(),
+            git_amend: false,
+            git_sign_off: false,
+            git_recent_open: false,
+            git_recent_messages: Vec::new(),
+            git_log_error: None,
+            git_log_loading: false,
+            git_log_pending: false,
+            git_push_pending: false,
+            git_commit_input_clear: false,
             git_state_pending: false,
+            git_diff_pending: false,
             git_error: None,
             git_loading: false,
             git_receiver: None,
@@ -2085,7 +2211,18 @@ impl DesktopApp {
         self.git_confirmation = None;
         self.git_refresh_pending = false;
         self.git_refresh_probe_started_at = None;
+        self.git_selection.clear();
+        self.git_reviewed.clear();
+        self.git_commit_message.clear();
+        self.git_amend = false;
+        self.git_recent_messages.clear();
+        self.git_log_error = None;
+        self.git_log_loading = false;
+        self.git_log_pending = false;
+        self.git_push_pending = false;
+        self.git_commit_input_clear = false;
         self.git_state_pending = false;
+        self.git_diff_pending = false;
         self.git_error = None;
         self.git_loading = false;
         self.git_receiver = None;
@@ -2236,16 +2373,204 @@ impl DesktopApp {
         self.git_error = None;
     }
 
+    /// Picks the path and side the Diff tab shows after a status refresh.
+    ///
+    /// Keeps the selected path while it is still changed and the shown side still
+    /// has content; otherwise it selects the first work-tree change.
+    fn ensure_git_selection(&mut self) {
+        let files = self
+            .git_status
+            .as_ref()
+            .map(|status| status.files.clone())
+            .unwrap_or_default();
+        if let Some(path) = self.git_selected_path.clone() {
+            if let Some(file) = files.iter().find(|file| file.path == path) {
+                let shown_side_has_content = if self.git_diff_staged {
+                    file.staged
+                } else {
+                    file.worktree
+                };
+                if !shown_side_has_content {
+                    self.git_diff_staged = file.staged;
+                }
+                return;
+            }
+        }
+        match files
+            .iter()
+            .find(|file| file.worktree)
+            .or_else(|| files.first())
+        {
+            Some(file) => {
+                self.git_selected_path = Some(file.path.clone());
+                self.git_diff_staged = !file.worktree;
+            }
+            None => {
+                self.git_selected_path = None;
+                self.git_diff = None;
+            }
+        }
+    }
+
     /// Selects one changed path and loads its diff for the current side.
     pub(crate) fn select_git_path(&mut self, path: String) {
         self.git_selected_path = Some(path);
+        self.request_git_diff();
+    }
+
+    /// Drops the loaded patch and schedules its read once the worker is free.
+    ///
+    /// The patch is dropped immediately so the pane never pairs one path's
+    /// content with another path's header.
+    fn request_git_diff(&mut self) {
+        self.git_diff = None;
         self.refresh_git_diff();
+    }
+
+    /// Selects one path from the Files tab and reads the group's diff side.
+    ///
+    /// @param path — path to show in the Diff tab.
+    /// @param staged — whether the group reads the index side.
+    pub(crate) fn select_git_file(&mut self, path: String, staged: bool) {
+        self.git_selected_path = Some(path);
+        self.git_diff_staged = staged;
+        self.request_git_diff();
+    }
+
+    /// Toggles one path in the Files-tab bulk selection.
+    /// @param path — changed path to add or remove.
+    pub(crate) fn toggle_git_selection(&mut self, path: String) {
+        if let Some(index) = self.git_selection.iter().position(|item| item == &path) {
+            self.git_selection.remove(index);
+        } else {
+            self.git_selection.push(path);
+        }
+    }
+
+    /// Clears the Files-tab bulk selection.
+    pub(crate) fn clear_git_selection(&mut self) {
+        self.git_selection.clear();
+    }
+
+    /// Whether the Files-tab bulk selection contains one path.
+    /// @param path — changed path to test.
+    /// @returns whether the path is ticked.
+    pub(crate) fn git_selection_contains(&self, path: &str) -> bool {
+        self.git_selection.iter().any(|item| item == path)
+    }
+
+    /// The ticked paths, read from the latest status so actions use Host data.
+    pub(crate) fn selected_git_files(&self) -> Vec<GitFile> {
+        let Some(status) = self.git_status.as_ref() else {
+            return Vec::new();
+        };
+        status
+            .files
+            .iter()
+            .filter(|file| self.git_selection_contains(&file.path))
+            .cloned()
+            .collect()
+    }
+
+    /// Stages every ticked path that has a work-tree change.
+    pub(crate) fn stage_git_selection(&mut self) {
+        let targets = self
+            .selected_git_files()
+            .into_iter()
+            .filter(|file| file.worktree)
+            .map(|file| (file.path, None))
+            .collect::<Vec<_>>();
+        if targets.is_empty() {
+            self.git_error = Some("No ticked path has an unstaged change to stage.".to_owned());
+            return;
+        }
+        self.run_git_paths(GitPathVerb::Stage, targets);
+    }
+
+    /// Unstages every ticked path that has an index change.
+    pub(crate) fn unstage_git_selection(&mut self) {
+        let targets = self
+            .selected_git_files()
+            .into_iter()
+            .filter(|file| file.staged)
+            .map(|file| (file.path, None))
+            .collect::<Vec<_>>();
+        if targets.is_empty() {
+            self.git_error = Some("No ticked path has a staged change to unstage.".to_owned());
+            return;
+        }
+        self.run_git_paths(GitPathVerb::Unstage, targets);
+    }
+
+    /// Opens a confirmation before discarding every ticked work-tree change.
+    pub(crate) fn discard_git_selection(&mut self) {
+        let Some(session_id) = self.selected_session.clone() else {
+            return;
+        };
+        let files = self
+            .selected_git_files()
+            .into_iter()
+            .filter(|file| file.worktree && !git_status_cannot_discard(&file.status))
+            .collect::<Vec<_>>();
+        if files.is_empty() {
+            self.git_error =
+                Some("No ticked path has a discarding work-tree change.".to_owned());
+            return;
+        }
+        self.git_confirmation = Some(GitConfirmation::DiscardMany { session_id, files });
+    }
+
+    /// Toggles Reviewed for the selected path at its current status signature.
+    pub(crate) fn toggle_git_reviewed(&mut self) {
+        let Some(path) = self.git_selected_path.clone() else {
+            return;
+        };
+        let Some(file) = self.git_file(&path) else {
+            return;
+        };
+        let signature = super::git_review::file_signature(&file);
+        if self.git_reviewed.get(&path) == Some(&signature) {
+            self.git_reviewed.remove(&path);
+        } else {
+            self.git_reviewed.insert(path, signature);
+        }
+    }
+
+    /// Whether the selected path is marked reviewed at its current signature.
+    /// @param path — changed path to test.
+    /// @returns whether the stored signature matches the latest status entry.
+    pub(crate) fn git_is_reviewed(&self, path: &str) -> bool {
+        let Some(file) = self.git_file(path) else {
+            return false;
+        };
+        self.git_reviewed.get(path) == Some(&super::git_review::file_signature(&file))
+    }
+
+    /// Marks every changed path reviewed at its current status signature.
+    pub(crate) fn review_all_git_paths(&mut self) {
+        let Some(status) = self.git_status.as_ref() else {
+            return;
+        };
+        for file in &status.files {
+            self.git_reviewed
+                .insert(file.path.clone(), super::git_review::file_signature(file));
+        }
+    }
+
+    /// One changed path from the latest status.
+    /// @param path — changed path to find.
+    /// @returns a copy of its status entry, or `None` when it is gone.
+    pub(crate) fn git_file(&self, path: &str) -> Option<GitFile> {
+        self.git_status
+            .as_ref()
+            .and_then(|status| status.files.iter().find(|file| file.path == path))
+            .cloned()
     }
 
     /// Toggles the diff side for the selected path.
     pub(crate) fn set_git_diff_staged(&mut self, staged: bool) {
         self.git_diff_staged = staged;
-        self.refresh_git_diff();
+        self.request_git_diff();
     }
 
     /// Loads the selected path's diff from the Host.
@@ -2256,11 +2581,15 @@ impl DesktopApp {
             self.git_selected_path.clone(),
         ) else {
             self.git_diff = None;
+            self.git_diff_pending = false;
             return;
         };
         if self.git_receiver.is_some() {
+            self.git_diff_pending = true;
             return;
         }
+        self.git_diff_pending = false;
+        self.git_diff = None;
         let staged = self.git_diff_staged;
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
@@ -2274,12 +2603,83 @@ impl DesktopApp {
 
     /// Stages one changed path.
     pub(crate) fn stage_git_path(&mut self, path: String) {
-        self.mutate_git_path(path, GitPathVerb::Stage, None);
+        self.run_git_paths(GitPathVerb::Stage, vec![(path, None)]);
     }
 
     /// Unstages one changed path.
     pub(crate) fn unstage_git_path(&mut self, path: String) {
-        self.mutate_git_path(path, GitPathVerb::Unstage, None);
+        self.run_git_paths(GitPathVerb::Unstage, vec![(path, None)]);
+    }
+
+    /// Applies one hunk patch to the index or the work tree.
+    ///
+    /// @param path — path the patch belongs to.
+    /// @param patch — file header plus one hunk, as `git/apply` expects it.
+    /// @param target — index or work tree.
+    /// @param reverse — apply the patch backwards.
+    /// @param expected_status — status the diff was read at; the Host refuses another.
+    pub(crate) fn apply_git_hunk(
+        &mut self,
+        path: String,
+        patch: String,
+        target: GitApplyTarget,
+        reverse: bool,
+        expected_status: Option<String>,
+    ) {
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.reset_git();
+            return;
+        };
+        if self.git_receiver.is_some() {
+            return;
+        }
+        let request = GitApplyRequest {
+            path,
+            patch,
+            target,
+            reverse,
+            expected_status,
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = GitClient::new(&transport).apply(session_id, &request);
+            let _ = sender.send(GitUpdate::Apply(result));
+        });
+        self.git_receiver = Some(receiver);
+        self.git_loading = true;
+        self.git_error = None;
+    }
+
+    /// Opens a confirmation before discarding one hunk through `git/apply`.
+    ///
+    /// @param path — path the hunk belongs to.
+    /// @param patch — file header plus the hunk the user reviewed.
+    pub(crate) fn discard_git_hunk(&mut self, path: String, patch: String) {
+        let Some(session_id) = self.selected_session.clone() else {
+            return;
+        };
+        let Some(file) = self.git_file(&path) else {
+            self.git_error =
+                Some("Discard cancelled: the file list changed before confirmation.".to_owned());
+            return;
+        };
+        if !file.worktree || git_status_cannot_discard(&file.status) {
+            self.git_error =
+                Some("Discard unavailable for this file's current Git state.".to_owned());
+            return;
+        }
+        let signature = super::git_review::patch_signature(&path, false, &patch);
+        self.git_confirmation = Some(GitConfirmation::DiscardHunk {
+            session_id,
+            path,
+            status: file.status,
+            staged: file.staged,
+            worktree: file.worktree,
+            patch,
+            signature,
+        });
     }
 
     /// Opens a confirmation before discarding one path's unstaged change.
@@ -2340,7 +2740,64 @@ impl DesktopApp {
                     self.refresh_git();
                     return;
                 }
-                self.mutate_git_path(path, GitPathVerb::Discard, Some(status));
+                self.run_git_paths(GitPathVerb::Discard, vec![(path, Some(status))]);
+            }
+            GitConfirmation::DiscardMany { session_id, files } => {
+                let fresh = discard_many_is_fresh(
+                    self.git_status.as_ref(),
+                    &session_id,
+                    self.selected_session.as_deref(),
+                    &files,
+                );
+                if !fresh {
+                    self.git_error = Some(
+                        "Discard cancelled: a ticked file changed after confirmation opened."
+                            .to_owned(),
+                    );
+                    self.refresh_git();
+                    return;
+                }
+                let targets = files
+                    .into_iter()
+                    .map(|file| (file.path, Some(file.status)))
+                    .collect();
+                self.run_git_paths(GitPathVerb::Discard, targets);
+            }
+            GitConfirmation::DiscardHunk {
+                session_id,
+                path,
+                status,
+                staged,
+                worktree,
+                patch,
+                signature,
+            } => {
+                let fresh = hunk_confirmation_is_fresh(
+                    self.git_status.as_ref(),
+                    self.git_diff.as_ref(),
+                    &session_id,
+                    self.selected_session.as_deref(),
+                    &path,
+                    &status,
+                    staged,
+                    worktree,
+                    &signature,
+                );
+                if !fresh {
+                    self.git_error = Some(
+                        "Discard cancelled: the diff changed after confirmation opened."
+                            .to_owned(),
+                    );
+                    self.refresh_git();
+                    return;
+                }
+                self.apply_git_hunk(
+                    path,
+                    patch,
+                    GitApplyTarget::Worktree,
+                    true,
+                    Some(status),
+                );
             }
             GitConfirmation::Checkout {
                 session_id,
@@ -2373,33 +2830,62 @@ impl DesktopApp {
         }
     }
 
-    fn mutate_git_path(&mut self, path: String, verb: GitPathVerb, expected_status: Option<String>) {
+    /// Runs one path verb over the given paths, stopping at the first failure.
+    ///
+    /// The Host applies one verb per call. Keeping the calls in one worker means
+    /// the panel can never report a partially applied batch as confirmed.
+    ///
+    /// @param verb — index or work-tree verb to run.
+    /// @param targets — path and the status the caller displayed, when the verb uses one.
+    fn run_git_paths(&mut self, verb: GitPathVerb, targets: Vec<(String, Option<String>)>) {
         let (Some(session_id), Some(transport)) =
             (self.selected_session.clone(), self.transport.clone())
         else {
             self.reset_git();
             return;
         };
-        if self.git_receiver.is_some() {
+        if self.git_receiver.is_some() || targets.is_empty() {
             return;
         }
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
             let client = GitClient::new(&transport);
-            let result = match verb {
-                GitPathVerb::Stage => client.stage(session_id, path),
-                GitPathVerb::Unstage => client.unstage(session_id, path),
-                GitPathVerb::Discard => client.discard(session_id, path, expected_status),
-            };
-            let _ = sender.send(GitUpdate::Path(result));
+            let mut paths = Vec::new();
+            let mut failure = None;
+            for (path, expected_status) in targets {
+                let result = match verb {
+                    GitPathVerb::Stage => client.stage(session_id.clone(), path.clone()),
+                    GitPathVerb::Unstage => client.unstage(session_id.clone(), path.clone()),
+                    GitPathVerb::Discard => {
+                        client.discard(session_id.clone(), path.clone(), expected_status)
+                    }
+                };
+                match result {
+                    Ok(result) => paths.push(result.path),
+                    Err(error) => {
+                        failure = Some(error);
+                        break;
+                    }
+                }
+            }
+            let _ = sender.send(GitUpdate::Paths {
+                operation: verb.operation(),
+                paths,
+                failure,
+            });
         });
         self.git_receiver = Some(receiver);
         self.git_loading = true;
         self.git_error = None;
     }
 
-    /// Commits the staged index with the composer's message.
-    pub(crate) fn commit_git(&mut self, message: String) {
+    /// Commits the staged index with the commit bar's options.
+    ///
+    /// @param message — commit message; a blank message is refused before a worker starts.
+    /// @param amend — replace HEAD instead of adding a commit.
+    /// @param sign_off — append the committer's `Signed-off-by` trailer.
+    /// @param push — push the new commit once it lands.
+    pub(crate) fn commit_git(&mut self, message: String, amend: bool, sign_off: bool, push: bool) {
         let (Some(session_id), Some(transport)) =
             (self.selected_session.clone(), self.transport.clone())
         else {
@@ -2409,14 +2895,44 @@ impl DesktopApp {
         if message.trim().is_empty() || self.git_receiver.is_some() {
             return;
         }
+        let options = GitCommitOptions { amend, sign_off };
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
-            let result = GitClient::new(&transport).commit(session_id, message);
+            let result =
+                GitClient::new(&transport).commit_with_options(session_id, message, &options);
             let _ = sender.send(GitUpdate::Commit(result));
         });
         self.git_receiver = Some(receiver);
         self.git_loading = true;
+        self.git_push_pending = push;
         self.git_error = None;
+    }
+
+    /// Whether a settled commit must clear the draft on the next frame.
+    /// @returns `true` once per committed message.
+    pub(crate) fn take_git_commit_clear(&mut self) -> bool {
+        std::mem::take(&mut self.git_commit_input_clear)
+    }
+
+    /// Loads the selected Session's recent commit subjects for the commit bar.
+    fn refresh_git_log(&mut self) {
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            return;
+        };
+        if self.git_receiver.is_some() {
+            self.git_log_pending = true;
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = GitClient::new(&transport).log(session_id, Some(5), None);
+            let _ = sender.send(GitUpdate::Log(result));
+        });
+        self.git_receiver = Some(receiver);
+        self.git_log_loading = true;
+        self.git_log_error = None;
     }
 
     /// Opens a confirmation before checking out one local branch.
@@ -2484,8 +3000,20 @@ impl DesktopApp {
                 self.git_loading = false;
                 match update {
                     GitUpdate::Status(Ok(status)) => {
+                        let files = status.files.clone();
+                        self.git_selection
+                            .retain(|path| files.iter().any(|file| &file.path == path));
+                        self.git_reviewed
+                            .retain(|path, _| files.iter().any(|file| &file.path == path));
                         self.git_status = Some(status);
                         self.git_error = None;
+                        self.ensure_git_selection();
+                        if self.git_selected_path.is_some() && self.git_diff.is_none() {
+                            self.git_diff_pending = true;
+                        }
+                        if self.git_recent_messages.is_empty() && self.git_log_error.is_none() {
+                            self.git_log_pending = true;
+                        }
                     }
                     GitUpdate::Status(Err(error)) => {
                         self.git_status = None;
@@ -2518,26 +3046,71 @@ impl DesktopApp {
                         self.git_diff = None;
                         self.git_error = Some(failure_text(&error));
                     }
-                    GitUpdate::Path(Ok(result)) => {
+                    GitUpdate::Paths {
+                        operation,
+                        paths,
+                        failure,
+                    } => {
                         self.git_diff = None;
-                        self.status = format!("{}: {}", result.operation, result.path);
+                        match failure {
+                            Some(error) => {
+                                self.git_error = Some(failure_text(&error));
+                            }
+                            None => {
+                                if operation == "discard" {
+                                    self.git_selection.clear();
+                                }
+                                self.status = match paths.as_slice() {
+                                    [] => format!("{operation}: nothing to change"),
+                                    [path] => format!("{operation}: {path}"),
+                                    paths => format!("{operation}: {} paths", paths.len()),
+                                };
+                            }
+                        }
                         self.refresh_git();
                         if self.changes_tab == ChangesTab::Branches {
                             self.refresh_git_branches();
                         }
                     }
-                    GitUpdate::Path(Err(error)) => {
+                    GitUpdate::Apply(Ok(result)) => {
+                        self.git_diff = None;
+                        self.status = format!("{}: {}", result.operation, result.path);
+                        self.refresh_git();
+                    }
+                    GitUpdate::Apply(Err(error)) => {
+                        // A refused patch leaves both sides untouched; reload what is on disk.
                         self.git_error = Some(failure_text(&error));
+                        self.git_diff = None;
+                        self.refresh_git();
                     }
                     GitUpdate::Commit(Ok(result)) => {
                         self.git_diff = None;
                         self.git_selected_path = None;
+                        self.git_reviewed.clear();
+                        self.git_recent_messages.clear();
+                        self.git_log_error = None;
+                        self.git_amend = false;
+                        self.git_commit_input_clear = true;
                         self.status = format!("Committed {}", short_object_id(&result.commit));
                         self.refresh_git();
                         self.refresh_git_state();
                     }
                     GitUpdate::Commit(Err(error)) => {
+                        self.git_push_pending = false;
                         self.git_error = Some(failure_text(&error));
+                    }
+                    GitUpdate::Log(Ok(log)) => {
+                        self.git_log_loading = false;
+                        self.git_recent_messages = log
+                            .commits
+                            .into_iter()
+                            .map(|commit| commit.subject)
+                            .collect();
+                        self.git_log_error = None;
+                    }
+                    GitUpdate::Log(Err(error)) => {
+                        self.git_log_loading = false;
+                        self.git_log_error = Some(failure_text(&error));
                     }
                     GitUpdate::State(Ok(state)) => {
                         self.git_state = Some(state);
@@ -2590,6 +3163,17 @@ impl DesktopApp {
                     self.git_state_pending = false;
                     self.refresh_git_state();
                 }
+                if self.git_push_pending && self.git_receiver.is_none() {
+                    self.git_push_pending = false;
+                    self.run_git_remote("push");
+                }
+                if self.git_diff_pending && self.git_receiver.is_none() {
+                    self.refresh_git_diff();
+                }
+                if self.git_log_pending && self.git_receiver.is_none() {
+                    self.git_log_pending = false;
+                    self.refresh_git_log();
+                }
                 true
             }
             Err(mpsc::TryRecvError::Empty) => false,
@@ -2597,6 +3181,9 @@ impl DesktopApp {
                 self.git_receiver = None;
                 self.git_loading = false;
                 self.git_state_pending = false;
+                self.git_log_loading = false;
+                self.git_log_pending = false;
+                self.git_push_pending = false;
                 self.git_error = Some("Git worker stopped unexpectedly".to_owned());
                 true
             }
@@ -4421,6 +5008,16 @@ impl DesktopApp {
                     app.palette_query = text.clone();
                     app.palette_selected = 0;
                     app.request_palette_paths();
+                    cx.notify();
+                    return;
+                }
+                super::text_input::TextInputEvent::Changed(text) if key == "git-file-filter" => {
+                    app.git_filter = text.clone();
+                    cx.notify();
+                    return;
+                }
+                super::text_input::TextInputEvent::Changed(text) if key == "git-commit-message" => {
+                    app.git_commit_message = text.clone();
                     cx.notify();
                     return;
                 }

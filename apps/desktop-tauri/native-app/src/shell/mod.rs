@@ -1,6 +1,7 @@
 //! gpui presentation layer for the native Desktop shell.
 
 mod app;
+mod git_review;
 mod render;
 
 #[cfg(test)]
