@@ -23,8 +23,10 @@ use dsh_client_core::{
     follow::{self, FollowFrame, FollowRequest},
     git::{
         GitApplyRequest, GitApplyResult, GitApplyTarget, GitBranches, GitCheckoutResult, GitClient,
-        GitCommitEntry, GitCommitOptions, GitCommitResult, GitDiff, GitFile, GitLog,
-        GitOperationResult, GitOperationState, GitRemoteResult, GitShow, GitStatus,
+        GitCommitEntry, GitCommitOptions, GitCommitResult, GitConflict, GitDiff,
+        GitDiscardUntrackedResult, GitFile, GitLog, GitOperationResult, GitOperationState,
+        GitRemoteResult, GitResolveRequest, GitResolveResult, GitResolveSide, GitShow, GitStash,
+        GitStashAction, GitStashEntry, GitStashRequest, GitStatus,
     },
     goals::{CreateGoalRequest, EditGoalRequest, GoalRef, GoalView, GoalsClient},
     marketplace::{MarketplaceClient, MarketplaceInstallOptions},
@@ -264,6 +266,77 @@ fn git_status_cannot_discard(status: &str) -> bool {
     !matches!(status, "modified" | "deleted" | "typechange")
 }
 
+/// Builds the `git/stash` request one panel action sends.
+///
+/// @param action - Save, apply, pop, or drop.
+/// @param index - Entry number for apply, pop, and drop.
+/// @param message - Optional save message; blank text is sent as absent because
+///   the Host refuses a blank message.
+/// @param include_untracked - Save only: also stash untracked files.
+/// @returns The request the Host receives.
+fn stash_request(
+    action: GitStashAction,
+    index: Option<u32>,
+    message: Option<String>,
+    include_untracked: bool,
+) -> GitStashRequest {
+    let saved = action == GitStashAction::Save;
+    let saved_message = if saved {
+        message.filter(|text| !text.trim().is_empty())
+    } else {
+        None
+    };
+    GitStashRequest {
+        action,
+        message: saved_message,
+        include_untracked: saved && include_untracked,
+        index: match action {
+            GitStashAction::Apply | GitStashAction::Pop | GitStashAction::Drop => index,
+            GitStashAction::List | GitStashAction::Save => None,
+        },
+    }
+}
+
+/// Why the shell refuses to delete this path, or `None` when the Host may.
+///
+/// `git clean -f` never removes ignored content and a path Git collapsed into
+/// `dir/` would take the directory with it, so both are refused before the
+/// confirmation opens.
+///
+/// @param file - Changed path the Files tab row shows.
+/// @returns The refusal text, or `None` for an untracked file.
+fn untracked_delete_refusal(file: &GitFile) -> Option<String> {
+    if file.path.ends_with('/') {
+        return Some(format!(
+            "\"{}\" is an untracked directory; the shell deletes files only.",
+            file.path
+        ));
+    }
+    if !super::git_review::is_untracked(file) {
+        return Some(format!(
+            "\"{}\" is not an untracked file; reload the Git status before retrying.",
+            file.path
+        ));
+    }
+    None
+}
+
+/// Status `git/discardUntracked` uses as its stale-review guard.
+fn untracked_delete_expected_status() -> String {
+    super::git_review::UNTRACKED_STATUS.to_owned()
+}
+
+/// Side name the settled `git/resolve` status line shows.
+///
+/// @param side - Side the Host kept.
+/// @returns `ours` or `theirs`.
+fn resolve_side_label(side: GitResolveSide) -> &'static str {
+    match side {
+        GitResolveSide::Ours => "ours",
+        GitResolveSide::Theirs => "theirs",
+    }
+}
+
 /// Whether a discard confirmation still describes the latest Git status.
 fn discard_confirmation_is_fresh(
     status: Option<&GitStatus>,
@@ -484,6 +557,70 @@ pub(crate) enum GitCommitAction {
     CherryPick,
 }
 
+/// One stash entry mutation the panel confirms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StashEntryAction {
+    Apply,
+    Pop,
+    Drop,
+}
+
+impl StashEntryAction {
+    /// Label the confirmation and the settled status line show.
+    ///
+    /// @returns The action name as the user reads it.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Apply => "Apply",
+            Self::Pop => "Pop",
+            Self::Drop => "Drop",
+        }
+    }
+
+    /// `git/stash` action field this panel action sends.
+    ///
+    /// @returns The wire action.
+    fn request(self) -> GitStashAction {
+        match self {
+            Self::Apply => GitStashAction::Apply,
+            Self::Pop => GitStashAction::Pop,
+            Self::Drop => GitStashAction::Drop,
+        }
+    }
+}
+
+/// Stash list and controls opened from the branch or sync menu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct StashPanel {
+    /// Entries newest first, as the last `git/stash list` reported them.
+    pub(crate) entries: Vec<GitStashEntry>,
+    /// Whether the Host byte cap dropped entries from the list.
+    pub(crate) truncated: bool,
+    /// Whether a `git/stash` request is in flight for this panel.
+    pub(crate) loading: bool,
+    /// Host or client failure text, verbatim.
+    pub(crate) error: Option<String>,
+    /// Git's own output for the last mutation, verbatim.
+    pub(crate) summary: Option<String>,
+    /// Whether the next save also stashes untracked files.
+    pub(crate) include_untracked: bool,
+    /// Status-bar trigger the panel returns focus to when it closes.
+    pub(crate) trigger: ChromeTrigger,
+}
+
+/// One unmerged path's conflict stages, as the operation banner loads them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GitConflictView {
+    /// Unmerged path the stages belong to.
+    pub(crate) path: String,
+    /// Stages the Host returned; `None` while the read runs or after it failed.
+    pub(crate) conflict: Option<GitConflict>,
+    /// Whether a `git/conflict` read is in flight.
+    pub(crate) loading: bool,
+    /// Failure of the last stage read, verbatim.
+    pub(crate) error: Option<String>,
+}
+
 /// Destructive Git action whose confirmation dialog is open.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum GitConfirmation {
@@ -536,6 +673,24 @@ pub(crate) enum GitConfirmation {
         branch: String,
         commit: String,
         action: GitBranchAction,
+    },
+    /// Keep one conflict side through `git/resolve`.
+    ResolveConflict {
+        session_id: String,
+        path: String,
+        side: GitResolveSide,
+    },
+    /// Apply, pop, or drop one stash entry.
+    Stash {
+        session_id: String,
+        action: StashEntryAction,
+        index: u32,
+        message: String,
+    },
+    /// Delete one untracked file through `git/discardUntracked`.
+    DiscardUntracked {
+        session_id: String,
+        path: String,
     },
 }
 
@@ -597,6 +752,17 @@ enum GitUpdate {
     ),
     Remote(&'static str, Result<GitRemoteResult, Error>),
     Operation(Result<GitOperationResult, Error>),
+    /// One `git/conflict` read; `path` is the view the stages belong to.
+    Conflict {
+        path: String,
+        result: Result<GitConflict, Error>,
+    },
+    /// One `git/resolve` call.
+    Resolve(Result<GitResolveResult, Error>),
+    /// One `git/stash` action.
+    Stash(Result<GitStash, Error>),
+    /// One `git/discardUntracked` call.
+    DiscardUntracked(Result<GitDiscardUntrackedResult, Error>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -692,6 +858,8 @@ pub(crate) enum ChromeTrigger {
     StatusTools,
     GitBranch,
     GitSync,
+    /// Conflict paths in the in-progress operation banner.
+    GitConflict,
 }
 
 /// Keyboard focus handles of the chrome controls that open an overlay.
@@ -705,6 +873,7 @@ pub(crate) struct ChromeFocus {
     pub(crate) status_tools: FocusHandle,
     pub(crate) git_branch: FocusHandle,
     pub(crate) git_sync: FocusHandle,
+    pub(crate) git_conflict: FocusHandle,
 }
 
 impl ChromeFocus {
@@ -720,6 +889,7 @@ impl ChromeFocus {
             ChromeTrigger::StatusTools => &self.status_tools,
             ChromeTrigger::GitBranch => &self.git_branch,
             ChromeTrigger::GitSync => &self.git_sync,
+            ChromeTrigger::GitConflict => &self.git_conflict,
         }
     }
 }
@@ -978,6 +1148,18 @@ pub(crate) struct DesktopApp {
     pub(crate) git_diff: Option<GitDiff>,
     /// In-progress rebase, cherry-pick, merge, or revert and its conflicts.
     pub(crate) git_state: Option<GitOperationState>,
+    /// Conflict stages the operation banner opened for one unmerged path.
+    pub(crate) git_conflict_view: Option<GitConflictView>,
+    /// Focus the conflict chips take back when the conflict view closes.
+    pub(crate) git_conflict_focus: FocusHandle,
+    /// Path whose stages must be read once the worker is free.
+    git_conflict_pending: Option<String>,
+    /// Stash list and controls opened from a status-bar menu.
+    pub(crate) git_stash: Option<StashPanel>,
+    /// Set when the stash list must be read once the worker is free.
+    git_stash_pending: bool,
+    /// Set when the stash message must be cleared on the next frame.
+    git_stash_message_clear: bool,
     /// Git's own text for the last remote or multi-step action.
     pub(crate) git_remote_summary: Option<String>,
     /// Status-bar menu the user has open, if any.
@@ -1256,6 +1438,7 @@ impl DesktopApp {
                 }
             }
         });
+        let git_conflict_focus = cx.focus_handle();
         Self {
 
             poll_task: Some(task),
@@ -1342,6 +1525,7 @@ impl DesktopApp {
                 status_tools: cx.focus_handle(),
                 git_branch: cx.focus_handle(),
                 git_sync: cx.focus_handle(),
+                git_conflict: git_conflict_focus.clone(),
             },
             pending_chrome_focus: None,
             cancel_receiver: None,
@@ -1468,6 +1652,12 @@ impl DesktopApp {
             git_diff_staged: false,
             git_diff: None,
             git_state: None,
+            git_conflict_view: None,
+            git_conflict_focus,
+            git_conflict_pending: None,
+            git_stash: None,
+            git_stash_pending: false,
+            git_stash_message_clear: false,
             git_remote_summary: None,
             git_menu: None,
             git_remote_pending: None,
@@ -2413,6 +2603,11 @@ impl DesktopApp {
         self.git_selected_path = None;
         self.git_diff = None;
         self.git_state = None;
+        self.git_conflict_view = None;
+        self.git_conflict_pending = None;
+        self.git_stash = None;
+        self.git_stash_pending = false;
+        self.git_stash_message_clear = false;
         self.git_remote_summary = None;
         self.git_remote_pending = None;
         self.git_confirmation = None;
@@ -2679,6 +2874,314 @@ impl DesktopApp {
         self.git_loading = true;
         self.git_remote_summary = None;
         self.git_error = None;
+    }
+
+    /// Opens one unmerged path's stages in the Changes surface.
+    ///
+    /// Clicking a conflict path only loads the Host's stages; the view states no
+    /// resolution until `git/resolve` reports one.
+    ///
+    /// @param path - Unmerged path the operation banner lists.
+    pub(crate) fn open_git_conflict(&mut self, path: String) {
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.git_error = Some("Reading conflict stages needs an online Host.".to_owned());
+            return;
+        };
+        self.show_changes = true;
+        self.git_menu = None;
+        self.git_conflict_view = Some(GitConflictView {
+            path: path.clone(),
+            conflict: None,
+            loading: true,
+            error: None,
+        });
+        if self.git_receiver.is_some() {
+            self.git_conflict_pending = Some(path);
+            return;
+        }
+        self.request_git_conflict(session_id, transport, path);
+    }
+
+    /// Closes the conflict view and returns focus to the conflict chips.
+    pub(crate) fn close_git_conflict(&mut self) {
+        self.git_conflict_pending = None;
+        if self.git_conflict_view.take().is_some() {
+            self.pending_chrome_focus = Some(ChromeTrigger::GitConflict);
+        }
+    }
+
+    /// Reads one unmerged path's stages from the Host.
+    fn request_git_conflict(
+        &mut self,
+        session_id: String,
+        transport: HttpTransport,
+        path: String,
+    ) {
+        self.git_conflict_pending = None;
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = GitClient::new(&transport).conflict(session_id, path.clone());
+            let _ = sender.send(GitUpdate::Conflict { path, result });
+        });
+        self.git_receiver = Some(receiver);
+        self.git_loading = true;
+        self.git_error = None;
+    }
+
+    /// Opens the confirmation for keeping one conflict side.
+    ///
+    /// @param path - Unmerged path the view shows.
+    /// @param side - `ours` or `theirs`, the side `git/resolve` keeps.
+    pub(crate) fn request_resolve_conflict(&mut self, path: String, side: GitResolveSide) {
+        let Some(session_id) = self.selected_session.clone() else {
+            return;
+        };
+        if let Some(reason) = self.git_action_blocker() {
+            self.git_error = Some(reason);
+            return;
+        }
+        let listed = self
+            .git_state
+            .as_ref()
+            .is_some_and(|state| state.conflicts.iter().any(|item| item == &path));
+        if !listed {
+            self.git_error = Some(format!(
+                "Resolve cancelled: \"{path}\" is no longer an unmerged path."
+            ));
+            self.refresh_git_state();
+            return;
+        }
+        self.git_confirmation = Some(GitConfirmation::ResolveConflict {
+            session_id,
+            path,
+            side,
+        });
+    }
+
+    /// Runs one `git/resolve` call once the user confirmed the side.
+    fn run_git_resolve(&mut self, session_id: String, path: String, side: GitResolveSide) {
+        let Some(transport) = self.transport.clone() else {
+            self.reset_git();
+            return;
+        };
+        if self.git_receiver.is_some() {
+            return;
+        }
+        let request = GitResolveRequest { path, side };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = GitClient::new(&transport).resolve(session_id, &request);
+            let _ = sender.send(GitUpdate::Resolve(result));
+        });
+        self.git_receiver = Some(receiver);
+        self.git_loading = true;
+        self.git_error = None;
+    }
+
+    /// Opens the Stash panel from one status-bar menu trigger.
+    ///
+    /// @param trigger - Branch or sync control that keeps focus when the panel closes.
+    pub(crate) fn open_git_stash(&mut self, trigger: ChromeTrigger) {
+        self.git_menu = None;
+        self.git_stash = Some(StashPanel {
+            entries: Vec::new(),
+            truncated: false,
+            loading: true,
+            error: None,
+            summary: None,
+            include_untracked: false,
+            trigger,
+        });
+        self.refresh_git_stash();
+    }
+
+    /// Closes the Stash panel and returns focus to the menu that opened it.
+    pub(crate) fn close_git_stash(&mut self) {
+        if let Some(panel) = self.git_stash.take() {
+            self.pending_chrome_focus = Some(panel.trigger);
+        }
+    }
+
+    /// Loads the stash list into the open panel.
+    pub(crate) fn refresh_git_stash(&mut self) {
+        if self.git_stash.is_none() {
+            return;
+        }
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            if let Some(panel) = self.git_stash.as_mut() {
+                panel.loading = false;
+                panel.error = Some("Reading the stash list needs an online Host.".to_owned());
+            }
+            return;
+        };
+        if self.git_receiver.is_some() {
+            self.git_stash_pending = true;
+            return;
+        }
+        self.git_stash_pending = false;
+        if let Some(panel) = self.git_stash.as_mut() {
+            panel.loading = true;
+            panel.error = None;
+        }
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = GitClient::new(&transport).stash_list(session_id);
+            let _ = sender.send(GitUpdate::Stash(result));
+        });
+        self.git_receiver = Some(receiver);
+        self.git_loading = true;
+    }
+
+    /// Saves the work tree as one stash entry.
+    ///
+    /// @param message - Optional message; blank is sent as absent.
+    /// @param include_untracked - Also stash untracked files, never ignored ones.
+    pub(crate) fn save_git_stash(&mut self, message: String, include_untracked: bool) {
+        if let Some(panel) = self.git_stash.as_mut() {
+            panel.include_untracked = include_untracked;
+        }
+        self.run_git_stash(
+            GitStashAction::Save,
+            None,
+            Some(message),
+            include_untracked,
+        );
+    }
+
+    /// Opens the confirmation for applying, popping, or dropping one stash entry.
+    ///
+    /// @param action - Apply, pop, or drop.
+    /// @param index - Entry number the panel row shows.
+    /// @param message - Entry message the confirmation names.
+    pub(crate) fn request_stash_action(
+        &mut self,
+        action: StashEntryAction,
+        index: u32,
+        message: String,
+    ) {
+        let Some(session_id) = self.selected_session.clone() else {
+            return;
+        };
+        if let Some(reason) = self.git_action_blocker() {
+            if let Some(panel) = self.git_stash.as_mut() {
+                panel.error = Some(reason);
+            }
+            return;
+        }
+        let listed = self
+            .git_stash
+            .as_ref()
+            .is_some_and(|panel| panel.entries.iter().any(|entry| entry.index == index));
+        if !listed {
+            if let Some(panel) = self.git_stash.as_mut() {
+                panel.error = Some(format!(
+                    "{} cancelled: stash@{{{index}}} is no longer listed.",
+                    action.label()
+                ));
+            }
+            self.refresh_git_stash();
+            return;
+        }
+        self.git_confirmation = Some(GitConfirmation::Stash {
+            session_id,
+            action,
+            index,
+            message,
+        });
+    }
+
+    /// Runs one stash mutation after its confirmation.
+    ///
+    /// @param action - Wire action the Host runs.
+    /// @param index - Entry number for apply, pop, and drop.
+    /// @param message - Optional save message.
+    /// @param include_untracked - Save only: also stash untracked files.
+    fn run_git_stash(
+        &mut self,
+        action: GitStashAction,
+        index: Option<u32>,
+        message: Option<String>,
+        include_untracked: bool,
+    ) {
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.reset_git();
+            return;
+        };
+        if self.git_receiver.is_some() {
+            return;
+        }
+        if let Some(panel) = self.git_stash.as_mut() {
+            panel.loading = true;
+            panel.error = None;
+        }
+        let request = stash_request(action, index, message, include_untracked);
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = GitClient::new(&transport).stash(session_id, &request);
+            let _ = sender.send(GitUpdate::Stash(result));
+        });
+        self.git_receiver = Some(receiver);
+        self.git_loading = true;
+    }
+
+    /// Opens the stricter confirmation for deleting one untracked file.
+    ///
+    /// Directories and paths Git does not report as untracked are refused before
+    /// a dialog opens, so the Host never receives a deletion they could match.
+    ///
+    /// @param path - Untracked row the Files tab names.
+    pub(crate) fn request_discard_untracked(&mut self, path: String) {
+        let Some(session_id) = self.selected_session.clone() else {
+            return;
+        };
+        let Some(file) = self.git_file(&path) else {
+            self.git_error = Some(format!(
+                "Delete cancelled: \"{path}\" is no longer in the changed-file list."
+            ));
+            return;
+        };
+        if let Some(refusal) = untracked_delete_refusal(&file) {
+            self.git_error = Some(refusal);
+            return;
+        }
+        self.git_confirmation = Some(GitConfirmation::DiscardUntracked { session_id, path });
+    }
+
+    /// Runs one `git/discardUntracked` call once the user confirmed the path.
+    fn run_git_discard_untracked(&mut self, session_id: String, path: String) {
+        let Some(transport) = self.transport.clone() else {
+            self.reset_git();
+            return;
+        };
+        if self.git_receiver.is_some() {
+            return;
+        }
+        let expected_status = Some(untracked_delete_expected_status());
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = GitClient::new(&transport).discard_untracked(
+                session_id,
+                path,
+                expected_status,
+            );
+            let _ = sender.send(GitUpdate::DiscardUntracked(result));
+        });
+        self.git_receiver = Some(receiver);
+        self.git_loading = true;
+        self.git_error = None;
+    }
+
+    /// Picks up a stash message clear requested by a settled save.
+    ///
+    /// @returns Whether the Stash panel must clear its message field this frame.
+    pub(crate) fn take_git_stash_clear(&mut self) -> bool {
+        std::mem::take(&mut self.git_stash_message_clear)
     }
 
     /// Picks the path and side the Diff tab shows after a status refresh.
@@ -3202,6 +3705,80 @@ impl DesktopApp {
                         client.revert(session_id, commit)
                     }),
                 }
+            }
+            GitConfirmation::ResolveConflict {
+                session_id,
+                path,
+                side,
+            } => {
+                if self.selected_session.as_deref() != Some(session_id.as_str()) {
+                    self.git_error = Some(
+                        "The confirmed conflict side belongs to another Session; nothing was run."
+                            .to_owned(),
+                    );
+                    return;
+                }
+                if let Some(reason) = self.git_action_blocker() {
+                    self.git_error = Some(reason);
+                    return;
+                }
+                let listed = self
+                    .git_state
+                    .as_ref()
+                    .is_some_and(|state| state.conflicts.iter().any(|item| item == &path));
+                if !listed {
+                    self.git_error = Some(format!(
+                        "Resolve cancelled: \"{path}\" is no longer an unmerged path."
+                    ));
+                    self.refresh_git_state();
+                    return;
+                }
+                self.run_git_resolve(session_id, path, side);
+            }
+            GitConfirmation::Stash {
+                session_id,
+                action,
+                index,
+                message,
+            } => {
+                if self.selected_session.as_deref() != Some(session_id.as_str()) {
+                    if let Some(panel) = self.git_stash.as_mut() {
+                        panel.error = Some(
+                            "The confirmed stash entry belongs to another Session; nothing was run."
+                                .to_owned(),
+                        );
+                    }
+                    return;
+                }
+                if let Some(reason) = self.git_action_blocker() {
+                    if let Some(panel) = self.git_stash.as_mut() {
+                        panel.error = Some(reason);
+                    }
+                    return;
+                }
+                self.run_git_stash(action.request(), Some(index), Some(message), false);
+            }
+            GitConfirmation::DiscardUntracked { session_id, path } => {
+                if self.selected_session.as_deref() != Some(session_id.as_str()) {
+                    self.git_error = Some(
+                        "The confirmed deletion belongs to another Session; nothing was run."
+                            .to_owned(),
+                    );
+                    return;
+                }
+                let fresh = self
+                    .git_status
+                    .as_ref()
+                    .and_then(|status| status.files.iter().find(|file| file.path == path))
+                    .is_some_and(|file| untracked_delete_refusal(file).is_none());
+                if !fresh {
+                    self.git_error = Some(
+                        "Delete cancelled: the file changed after confirmation opened.".to_owned(),
+                    );
+                    self.refresh_git();
+                    return;
+                }
+                self.run_git_discard_untracked(session_id, path);
             }
         }
     }
@@ -3815,6 +4392,116 @@ impl DesktopApp {
                     GitUpdate::Operation(Err(error)) => {
                         self.git_error = Some(failure_text(&error));
                     }
+                    GitUpdate::Conflict { path, result } => {
+                        if let Some(view) = self.git_conflict_view.as_mut() {
+                            if view.path == path {
+                                view.loading = false;
+                                match result {
+                                    Ok(conflict) => {
+                                        view.conflict = Some(conflict);
+                                        view.error = None;
+                                    }
+                                    Err(error) => {
+                                        view.conflict = None;
+                                        view.error = Some(failure_text(&error));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    GitUpdate::Resolve(Ok(result)) => {
+                        if self
+                            .git_conflict_view
+                            .as_ref()
+                            .is_some_and(|view| view.path == result.path)
+                        {
+                            self.git_conflict_view = None;
+                        }
+                        if let Some(state) = self.git_state.as_mut() {
+                            state.conflicts.retain(|path| path != &result.path);
+                        }
+                        self.git_error = None;
+                        self.status = format!(
+                            "Accepted {} for {}",
+                            resolve_side_label(result.side),
+                            result.path
+                        );
+                        self.refresh_git();
+                        self.refresh_git_state();
+                    }
+                    GitUpdate::Resolve(Err(error)) => {
+                        let text = failure_text(&error);
+                        self.git_error = Some(text.clone());
+                        if let Some(view) = self.git_conflict_view.as_mut() {
+                            view.loading = false;
+                            view.error = Some(text);
+                        }
+                        self.refresh_git_state();
+                    }
+                    GitUpdate::Stash(Ok(stash)) => {
+                        let action = stash.action;
+                        if let Some(panel) = self.git_stash.as_mut() {
+                            panel.loading = false;
+                            panel.error = None;
+                            if action == GitStashAction::List {
+                                panel.entries = stash.entries;
+                                panel.truncated = stash.truncated;
+                            } else if !stash.summary.is_empty() {
+                                panel.summary = Some(stash.summary);
+                            }
+                        }
+                        let name = match action {
+                            GitStashAction::List => "list",
+                            GitStashAction::Save => "save",
+                            GitStashAction::Apply => "apply",
+                            GitStashAction::Pop => "pop",
+                            GitStashAction::Drop => "drop",
+                        };
+                        if action != GitStashAction::List {
+                            self.status = format!("stash {name} complete");
+                        }
+                        if action == GitStashAction::Save {
+                            self.git_stash_message_clear = true;
+                        }
+                        if matches!(
+                            action,
+                            GitStashAction::Save | GitStashAction::Apply | GitStashAction::Pop
+                        ) {
+                            self.refresh_git();
+                        }
+                        if self.git_stash.is_some() {
+                            self.refresh_git_stash();
+                        }
+                    }
+                    GitUpdate::Stash(Err(error)) => {
+                        let text = failure_text(&error);
+                        if let Some(panel) = self.git_stash.as_mut() {
+                            panel.loading = false;
+                            panel.error = Some(text);
+                        } else {
+                            self.git_error = Some(text);
+                        }
+                    }
+                    GitUpdate::DiscardUntracked(result) => {
+                        match result {
+                            Ok(result) => {
+                                self.git_selection.retain(|item| item != &result.path);
+                                self.git_reviewed.remove(&result.path);
+                                if self.git_selected_path.as_deref() == Some(result.path.as_str()) {
+                                    self.git_selected_path = None;
+                                    self.git_diff = None;
+                                }
+                                self.status = format!("Deleted {}", result.path);
+                                self.refresh_git();
+                            }
+                            Err(error) => {
+                                let text = failure_text(&error);
+                                // Reloading status clears `git_error`, so the refusal is written after it.
+                                self.refresh_git();
+                                self.git_error = Some(text);
+                            }
+                        }
+                    }
                 }
                 if self.git_state_pending {
                     self.git_state_pending = false;
@@ -3841,6 +4528,25 @@ impl DesktopApp {
                 if self.git_history_show_pending.is_some() && self.git_receiver.is_none() {
                     self.request_git_history_show();
                 }
+                if let Some(path) = self.git_conflict_pending.take() {
+                    if self.git_receiver.is_none() {
+                        if let (Some(session_id), Some(transport)) =
+                            (self.selected_session.clone(), self.transport.clone())
+                        {
+                            self.request_git_conflict(session_id, transport, path);
+                        } else if let Some(view) = self.git_conflict_view.as_mut() {
+                            view.loading = false;
+                            view.error =
+                                Some("Reading conflict stages needs an online Host.".to_owned());
+                        }
+                    } else {
+                        self.git_conflict_pending = Some(path);
+                    }
+                }
+                if self.git_stash_pending && self.git_receiver.is_none() {
+                    self.git_stash_pending = false;
+                    self.refresh_git_stash();
+                }
                 true
             }
             Err(mpsc::TryRecvError::Empty) => false,
@@ -3855,6 +4561,16 @@ impl DesktopApp {
                 self.git_history_pending = None;
                 self.git_history_show_pending = None;
                 self.git_push_pending = false;
+                self.git_conflict_pending = None;
+                self.git_stash_pending = false;
+                if let Some(view) = self.git_conflict_view.as_mut() {
+                    view.loading = false;
+                    view.error = Some("Git worker stopped unexpectedly".to_owned());
+                }
+                if let Some(panel) = self.git_stash.as_mut() {
+                    panel.loading = false;
+                    panel.error = Some("Git worker stopped unexpectedly".to_owned());
+                }
                 self.git_error = Some("Git worker stopped unexpectedly".to_owned());
                 true
             }
@@ -6193,6 +6909,10 @@ impl DesktopApp {
             self.update_prompt = None;
             return true;
         }
+        if self.git_stash.is_some() {
+            self.close_git_stash();
+            return true;
+        }
         if let Some(menu) = self.git_menu.take() {
             self.pending_chrome_focus = Some(match menu {
                 GitMenu::Branch => ChromeTrigger::GitBranch,
@@ -6230,6 +6950,10 @@ impl DesktopApp {
         }
         if self.show_settings {
             self.close_preferences();
+            return true;
+        }
+        if self.git_conflict_view.is_some() {
+            self.close_git_conflict();
             return true;
         }
         false
@@ -9439,5 +10163,218 @@ mod tests {
             &Some("abc1234".to_owned()),
             &expected,
         ));
+    }
+
+    fn untracked_file(path: &str) -> GitFile {
+        GitFile {
+            path: path.to_owned(),
+            status: "untracked".to_owned(),
+            staged: false,
+            worktree: true,
+            orig_path: None,
+            stats: None,
+        }
+    }
+
+    #[test]
+    fn stash_requests_name_the_action_index_and_save_options() {
+        let save = stash_request(
+            GitStashAction::Save,
+            None,
+            Some("work in progress".to_owned()),
+            true,
+        );
+        assert_eq!(save.action, GitStashAction::Save);
+        assert_eq!(save.message.as_deref(), Some("work in progress"));
+        assert!(save.include_untracked);
+        assert_eq!(save.index, None);
+
+        let blank = stash_request(
+            GitStashAction::Save,
+            None,
+            Some("   ".to_owned()),
+            false,
+        );
+        assert_eq!(blank.message, None);
+        assert!(!blank.include_untracked);
+
+        for (action, expected) in [
+            (GitStashAction::Apply, "apply"),
+            (GitStashAction::Pop, "pop"),
+            (GitStashAction::Drop, "drop"),
+        ] {
+            let request = stash_request(action, Some(3), Some("ignored".to_owned()), true);
+            assert_eq!(request.action, action);
+            assert_eq!(request.index, Some(3));
+            assert_eq!(request.message, None);
+            assert!(!request.include_untracked);
+            assert_eq!(
+                serde_json::to_value(&request).unwrap()["action"],
+                serde_json::Value::String(expected.to_owned())
+            );
+        }
+
+        let listed = stash_request(GitStashAction::List, Some(1), None, false);
+        assert_eq!(listed.index, None);
+        assert_eq!(listed.message, None);
+    }
+
+    #[test]
+    fn untracked_delete_refuses_directories_and_non_untracked_paths() {
+        assert!(untracked_delete_refusal(&untracked_file("docs/")).is_some());
+        assert!(untracked_delete_refusal(&untracked_file("docs/new.md")).is_none());
+        let mut modified = untracked_file("docs/new.md");
+        modified.status = "modified".to_owned();
+        assert!(untracked_delete_refusal(&modified).is_some());
+        let mut ignored = untracked_file("docs/new.md");
+        ignored.status = "ignored".to_owned();
+        assert!(untracked_delete_refusal(&ignored).is_some());
+        assert_eq!(untracked_delete_expected_status(), "untracked");
+    }
+
+    /// Shell with one Session's repository and a free Git worker.
+    fn git_outcome_harness(setup: impl FnOnce(&mut DesktopApp)) -> crate::harness::Harness {
+        crate::harness::Harness::open_with(1366., 768., move |app| {
+            app.selected_session = Some("git-session".to_owned());
+            app.transport = HttpTransport::new("http://127.0.0.1:9").ok();
+            app.git_state = Some(GitOperationState {
+                operation: "merge".to_owned(),
+                conflicts: vec!["a.txt".to_owned(), "b.txt".to_owned()],
+            });
+            app.git_conflict_view = Some(GitConflictView {
+                path: "a.txt".to_owned(),
+                conflict: None,
+                loading: true,
+                error: None,
+            });
+            app.git_stash = Some(StashPanel {
+                entries: Vec::new(),
+                truncated: false,
+                loading: true,
+                error: None,
+                summary: None,
+                include_untracked: false,
+                trigger: ChromeTrigger::GitBranch,
+            });
+            setup(app);
+        })
+    }
+
+    #[test]
+    fn accepted_conflict_side_closes_the_view_and_clears_the_conflict() {
+        let mut harness = git_outcome_harness(|_| {});
+        harness.with(|app, _| {
+            let (sender, receiver) = mpsc::channel();
+            sender
+                .send(GitUpdate::Resolve(Ok(GitResolveResult {
+                    path: "a.txt".to_owned(),
+                    side: GitResolveSide::Ours,
+                })))
+                .unwrap();
+            app.git_receiver = Some(receiver);
+            assert!(app.poll_git());
+            assert!(app.git_conflict_view.is_none());
+            assert_eq!(
+                app.git_state.as_ref().map(|state| state.conflicts.clone()),
+                Some(vec!["b.txt".to_owned()])
+            );
+            assert!(app.status.contains("Accepted ours for a.txt"));
+        });
+    }
+
+    #[test]
+    fn refused_conflict_resolution_keeps_the_view_and_the_host_message() {
+        let mut harness = git_outcome_harness(|_| {});
+        harness.with(|app, _| {
+            let (sender, receiver) = mpsc::channel();
+            sender
+                .send(GitUpdate::Resolve(Err(Error::Remote {
+                    code: "git/path-refused".to_owned(),
+                    message: "\"a.txt\" has no theirs side".to_owned(),
+                    details: Default::default(),
+                })))
+                .unwrap();
+            app.git_receiver = Some(receiver);
+            assert!(app.poll_git());
+            assert_eq!(
+                app.git_conflict_view
+                    .as_ref()
+                    .and_then(|view| view.error.clone()),
+                Some("\"a.txt\" has no theirs side".to_owned())
+            );
+            assert_eq!(
+                app.git_state
+                    .as_ref()
+                    .map(|state| state.conflicts.len()),
+                Some(2)
+            );
+        });
+    }
+
+    #[test]
+    fn settled_stash_list_and_save_update_the_panel() {
+        let mut harness = git_outcome_harness(|_| {});
+        harness.with(|app, _| {
+            let (sender, receiver) = mpsc::channel();
+            sender
+                .send(GitUpdate::Stash(Ok(GitStash {
+                    action: GitStashAction::List,
+                    entries: vec![GitStashEntry {
+                        index: 0,
+                        oid: "deadbeef".to_owned(),
+                        message: "wip".to_owned(),
+                        time: "2026-11-08T10:00:00+07:00".to_owned(),
+                    }],
+                    summary: String::new(),
+                    truncated: true,
+                })))
+                .unwrap();
+            app.git_receiver = Some(receiver);
+            assert!(app.poll_git());
+            let panel = app.git_stash.as_ref().unwrap();
+            assert_eq!(panel.entries.len(), 1);
+            assert!(panel.truncated);
+        });
+
+        let mut saved = git_outcome_harness(|_| {});
+        saved.with(|app, _| {
+            let (sender, receiver) = mpsc::channel();
+            sender
+                .send(GitUpdate::Stash(Ok(GitStash {
+                    action: GitStashAction::Save,
+                    entries: Vec::new(),
+                    summary: "Saved working directory".to_owned(),
+                    truncated: false,
+                })))
+                .unwrap();
+            app.git_receiver = Some(receiver);
+            assert!(app.poll_git());
+            let panel = app.git_stash.as_ref().unwrap();
+            assert_eq!(panel.summary.as_deref(), Some("Saved working directory"));
+            assert!(panel.entries.is_empty());
+            assert!(app.take_git_stash_clear());
+        });
+    }
+
+    #[test]
+    fn refused_untracked_delete_keeps_the_host_message_and_reloads_status() {
+        let mut harness = git_outcome_harness(|app| app.git_status = None);
+        harness.with(|app, _| {
+            let (sender, receiver) = mpsc::channel();
+            sender
+                .send(GitUpdate::DiscardUntracked(Err(Error::Remote {
+                    code: "git/path-refused".to_owned(),
+                    message: "\"docs/\" is an untracked directory, not a file".to_owned(),
+                    details: Default::default(),
+                })))
+                .unwrap();
+            app.git_receiver = Some(receiver);
+            assert!(app.poll_git());
+            assert_eq!(
+                app.git_error.as_deref(),
+                Some("\"docs/\" is an untracked directory, not a file")
+            );
+            assert!(app.git_loading);
+        });
     }
 }
