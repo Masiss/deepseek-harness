@@ -539,3 +539,21 @@ Worktree `/home/masis/deepseek-harness-merge`, nhánh **`merge/upstream-0.2.2`**
 - **Gate đã chạy**: `bun run typecheck` 5/5; `bun run build` 10/10; `bun run lint`; `bun run test:docs` 21/21; `test:expected` 144/144; `test:snapshot` 255/255; targeted suites (session/persistence, api/session-controller, workspace-files, fs, lsp, terminal, liveshare) **4226 pass**; `cargo test` client-core 106+8+11, native-app 194/1.
 - **Full suite**: `DSH_COVERAGE_TEST_TIMEOUT_MS=30000 bun run test` → **54.113 pass / 1 expected fail / 254 skip**, 2.626 file. Fork chạy toàn bộ 54k test trên một host nên 5 s mặc định không đủ; env này là cơ chế sẵn có cho shared host. Đã sửa các lỗi thật: fixture `gh` dùng `exec sleep`, timeout riêng cho `forgePanel removed worktrees`, `pack.spec` tắt pnpm `verify-deps-before-run`, `partial-landlock` chấp nhận exit 1 hoặc 127, và nới CPU/wall budget của test wide-completion Python (vẫn chỉ assert O(depth), không phải speed).
 - **Chưa làm**: physical-window review sau merge; chưa quyết định native update channel `stable` (upstream đổi `latest` → `stable`); chưa rebase/merge branch này vào lane chính.
+
+## Local AppImage build from the merge branch — 2026-11-08
+
+Build bản thử nghiệm từ worktree `/home/masis/deepseek-harness-merge` (nhánh `merge/upstream-0.2.2`, Host `0.2.2-rc.1`):
+
+```sh
+cd ~/deepseek-harness-merge
+# Tận dụng primary runtime + Office component đã có ở lane chính để khỏi tải lại
+mkdir -p apps/desktop/.desktop-build/targets/linux-x64
+cp -a ../deepseek-harness/apps/desktop/.desktop-build/targets/linux-x64/{runtime,components} apps/desktop/.desktop-build/targets/linux-x64/
+bash apps/desktop-tauri/scripts/pack-linux.sh linux-x64
+bunx tsx apps/desktop-tauri/scripts/prepare-linux-runtime.ts linux-x64
+DSH_DESKTOP_SHELL=native bash apps/desktop-tauri/scripts/pack-appimage.sh linux-x64
+```
+
+Output dự kiến: `apps/desktop/.desktop-build/targets/linux-x64/appimage/DeepSeek-Harness-native-0.2.2-rc.1-x86_64.AppImage`. Sau khi build xong phải chạy `appimage-probe.sh` + `size-gate.sh linux-x64`, xác minh SHA-256 rồi mới cài nguyên tử vào `~/.local/bin/deepseek-harness` (không publish, không tag).
+
+Lưu ý: build này là **local trial**, không phải release-qualified; update production vẫn chưa ký/phát hành.
