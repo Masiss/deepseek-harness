@@ -10,6 +10,8 @@
  */
 
 import { existsSync } from 'node:fs'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
@@ -20,26 +22,37 @@ import type {} from '@deepseek-ai/dsh-session-persistence'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { Remote, RemoteError, TypertRemoteService, type TypertLookup } from '@deepseek-ai/dsh-typert-protocol'
 import type {
+  GitApplyOperation,
+  GitApplyRequest,
+  GitApplyValue,
   GitBranch,
   GitBranchesValue,
   GitChangedFile,
   GitCheckoutRequest,
   GitCheckoutValue,
   GitCherryPickRequest,
+  GitCommitEntry,
   GitCommitRequest,
   GitCommitValue,
   GitDiffRequest,
   GitDiffValue,
+  GitFileSideStats,
+  GitFileStats,
+  GitLogRequest,
+  GitLogValue,
   GitMergeRequest,
   GitOperationKind,
   GitOperationState,
   GitOperationValue,
   GitPathRequest,
   GitPathValue,
+  GitPushRequest,
   GitRebaseRequest,
   GitRemoteOperation,
   GitRemoteValue,
   GitRevertRequest,
+  GitShowRequest,
+  GitShowValue,
   GitStatusValue,
   GitWorkspaceScope,
 } from './types.ts'
@@ -100,6 +113,13 @@ function requireSuccess(result: GitRunResult, what: string): GitRunResult {
 const AUTH_FAILURE =
   /authentication failed|could not read username|could not read password|permission denied \(publickey\)|terminal prompts disabled/i
 
+/**
+ * Global options that keep patch headers byte-identical to the repository
+ * path a caller names: git C-quotes unusual paths otherwise, so `diff --git
+ * a/<path>` could never match.
+ */
+const UNQUOTED_PATHS = ['-c', 'core.quotePath=false'] as const
+
 /** Environment every Git child sees: no terminal prompts, English diagnostics, and a non-interactive editor. */
 const GIT_ENV = {
   GIT_TERMINAL_PROMPT: '0',
@@ -151,9 +171,18 @@ interface StatusHeader {
   branch: string | null
   commit: string | null
   detached: boolean
+  upstream: string | null
+  ahead: number
+  behind: number
 }
 
 type ChangeKind = GitChangedFile['status']
+
+/** Line totals one `git diff --numstat` side reports for a path; null marks a binary change. */
+interface PathTotals {
+  additions: number | null
+  deletions: number | null
+}
 
 /** Translate porcelain v2's two-column code into the one status a caller displays. */
 function changeKind(xy: string): ChangeKind {
@@ -183,7 +212,8 @@ function fieldAfter(record: string, spaces: number): string | undefined {
   return path.length === 0 ? undefined : path
 }
 
-/** Read the `-b` header records of porcelain v2 output. */function statusHeader(record: string, header: StatusHeader): void {
+/** Read the `-b` header records of porcelain v2 output. */
+function statusHeader(record: string, header: StatusHeader): void {
   if (record.startsWith('# branch.oid ')) {
     const oid = record.slice('# branch.oid '.length)
     header.commit = oid === '(initial)' ? null : oid
@@ -195,6 +225,13 @@ function fieldAfter(record: string, spaces: number): string | undefined {
     } else {
       header.branch = head
     }
+  } else if (record.startsWith('# branch.upstream ')) {
+    header.upstream = record.slice('# branch.upstream '.length)
+  } else if (record.startsWith('# branch.ab ')) {
+    const divergence = /^\+(\d+) -(\d+)$/.exec(record.slice('# branch.ab '.length))
+    if (divergence === null) throw new Error(`malformed git status ahead/behind record: ${record}`)
+    header.ahead = Number(divergence[1])
+    header.behind = Number(divergence[2])
   }
 }
 
@@ -207,7 +244,7 @@ function fieldAfter(record: string, spaces: number): string | undefined {
 export function parseGitStatus(output: string): GitStatusValue {
   const records = output.split('\0')
   if (records.at(-1) === '') records.pop()
-  const header: StatusHeader = { branch: null, commit: null, detached: false }
+  const header: StatusHeader = { branch: null, commit: null, detached: false, upstream: null, ahead: 0, behind: 0 }
   const files: GitChangedFile[] = []
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index] as string
@@ -229,19 +266,31 @@ export function parseGitStatus(output: string): GitStatusValue {
       const path = fieldAfter(record, fieldCount - 1)
       if (path === undefined) throw new Error(`truncated git status record: ${record}`)
       const xy = record.slice(2, 4)
-      files.push({
-        path,
-        status: changeKind(xy),
-        staged: xy.charAt(0) !== '.',
-        worktree: xy.charAt(1) !== '.',
-      })
-      // A rename record is followed by its original path in the next NUL field.
-      if (kind === '2') index += 1
+      const status = changeKind(xy)
+      const staged = xy.charAt(0) !== '.'
+      const worktree = xy.charAt(1) !== '.'
+      if (kind !== '2') {
+        files.push({ path, status, staged, worktree })
+        continue
+      }
+      // A rename or copy record is followed by its original path in the next NUL field.
+      const origPath = records[index + 1]
+      if (origPath === undefined) throw new Error(`truncated git status record: ${record}`)
+      index += 1
+      files.push({ path, status, staged, worktree, origPath })
       continue
     }
     throw new Error(`unrecognized git status record: ${record}`)
   }
-  return { branch: header.branch, commit: header.commit, detached: header.detached, files }
+  return {
+    branch: header.branch,
+    commit: header.commit,
+    detached: header.detached,
+    upstream: header.upstream,
+    ahead: header.ahead,
+    behind: header.behind,
+    files,
+  }
 }
 
 /**
@@ -259,6 +308,175 @@ export function parseGitBranches(output: string, current: string | null): GitBra
       if (name === undefined || commit === undefined) throw new Error(`malformed git branch record: ${line}`)
       return { name, commit, current: head === '*' || name === current }
     })
+}
+
+/**
+ * Parse NUL-delimited `git diff --numstat -z` output.
+ * @param output - complete stdout of the numstat command.
+ * @returns line totals by repository-relative path, keyed by the post-image path of a rename or copy.
+ * @throws Error when a record is truncated, which indicates incomplete output.
+ */
+export function parseGitNumstat(output: string): Map<string, PathTotals> {
+  const records = output.split('\0')
+  if (records.at(-1) === '') records.pop()
+  const totals = new Map<string, PathTotals>()
+  const count = (field: string): number | null => {
+    if (field === '-') return null
+    if (!/^\d+$/.test(field)) throw new Error(`malformed git numstat record: ${field}`)
+    return Number(field)
+  }
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index] as string
+    const firstTab = record.indexOf('\t')
+    const secondTab = firstTab < 0 ? -1 : record.indexOf('\t', firstTab + 1)
+    if (secondTab < 0) throw new Error(`malformed git numstat record: ${record}`)
+    const path = record.slice(secondTab + 1)
+    // A rename or copy reports an empty path here and then its two names.
+    if (path.length === 0) {
+      const origPath = records[index + 1]
+      const newPath = records[index + 2]
+      if (origPath === undefined || newPath === undefined) {
+        throw new Error(`truncated git numstat record: ${record}`)
+      }
+      index += 2
+      totals.set(newPath, {
+        additions: count(record.slice(0, firstTab)),
+        deletions: count(record.slice(firstTab + 1, secondTab)),
+      })
+      continue
+    }
+    totals.set(path, {
+      additions: count(record.slice(0, firstTab)),
+      deletions: count(record.slice(firstTab + 1, secondTab)),
+    })
+  }
+  return totals
+}
+
+/**
+ * Normalize one commit's `git log --format=%D` decorations.
+ * @param decorations - comma-separated decoration text git reports for the commit.
+ * @returns `HEAD`, branch and remote names, and `tag:<name>` entries in git's order.
+ */
+export function normalizeGitRefs(decorations: string): string[] {
+  const refs: string[] = []
+  for (const decoration of decorations.split(',')) {
+    const entry = decoration.trim()
+    if (entry.length === 0) continue
+    if (entry.startsWith('tag: ')) {
+      refs.push(`tag:${entry.slice('tag: '.length)}`)
+      continue
+    }
+    const arrow = entry.indexOf(' -> ')
+    if (arrow < 0) {
+      refs.push(entry)
+      continue
+    }
+    // A symbolic ref reports its target; only HEAD itself is a reference a caller displays.
+    if (entry.slice(0, arrow) === 'HEAD') refs.push('HEAD')
+    refs.push(entry.slice(arrow + 4))
+  }
+  return refs
+}
+
+/** Field separator inside one `git log` record. */
+const LOG_FIELD_SEPARATOR = '\u0000'
+
+/** Record separator between `git log` records. */
+const LOG_RECORD_SEPARATOR = '\u001e'
+
+/** One `git log` record: oid, parents, refs, subject, author name, author email, author time. */
+const LOG_FORMAT = ['%H', '%P', '%D', '%s', '%an', '%ae', '%aI'].join('%x00') + '%x1e'
+
+/**
+ * Parse the records `LOG_FORMAT` produces, newest first.
+ * @param output - complete stdout of the log command.
+ * @returns one entry per record; git never puts a NUL or record separator in these fields.
+ * @throws Error when a record is truncated, which indicates incomplete output.
+ */
+export function parseGitLog(output: string): GitCommitEntry[] {
+  const commits: GitCommitEntry[] = []
+  for (const raw of output.split(LOG_RECORD_SEPARATOR)) {
+    const record = raw.replace(/^\n/, '')
+    if (record.trim().length === 0) continue
+    const [oid, parents, refs, subject, authorName, authorEmail, authorTime] = record.split(LOG_FIELD_SEPARATOR)
+    if (oid === undefined || parents === undefined || refs === undefined || subject === undefined
+      || authorName === undefined || authorEmail === undefined || authorTime === undefined) {
+      throw new Error(`truncated git log record: ${record}`)
+    }
+    if (!/^[0-9a-f]{40,64}$/i.test(oid)) throw new Error(`malformed git log object id: ${oid}`)
+    commits.push({
+      oid,
+      parents: parents.split(' ').filter(parent => parent.length > 0),
+      refs: normalizeGitRefs(refs),
+      subject,
+      authorName,
+      authorEmail,
+      authorTime,
+    })
+  }
+  return commits
+}
+
+/**
+ * Require that a unified patch changes exactly one path.
+ * @param path - repository-relative path the caller named.
+ * @param patch - unified patch the caller supplied.
+ * @throws RemoteError git/apply-refused when a section header names another path or a rename.
+ */
+function requirePatchFor(path: string, patch: string): void {
+  const refuse = (detail: string): RemoteError =>
+    new RemoteError('git/apply-refused', `the patch cannot apply to "${path}": ${detail}`, { path })
+  const sections: string[][] = []
+  for (const line of patch.split('\n')) {
+    // Context and change lines start with a space, `+`, or `-`, so only a section header can match.
+    if (line.startsWith('diff --git ')) sections.push([line])
+    else sections.at(-1)?.push(line)
+  }
+  if (sections.length === 0) throw refuse('it has no diff --git header')
+  for (const lines of sections) {
+    if (lines[0] !== `diff --git a/${path} b/${path}`) throw refuse('a section header names another path or a rename')
+    const from = lines.findIndex(line => line === `--- a/${path}` || line === '--- /dev/null')
+    if (from < 0) throw refuse('its --- header does not name that path')
+    const to = lines[from + 1]
+    if (to !== `+++ b/${path}` && to !== '+++ /dev/null') throw refuse('its +++ header does not name that path')
+  }
+}
+
+/** Map one nonzero `git apply` exit to the refusal its caller can act on. */
+function applyRefusal(path: string, phase: 'check' | 'apply', result: GitRunResult): RemoteError {
+  const detail = result.stderr.trim() || `exit ${result.exitCode}`
+  return new RemoteError('git/apply-refused', `git apply ${phase} refused the patch for "${path}": ${detail}`, { path })
+}
+
+/**
+ * Read one side's counted line totals.
+ * @param totals - parsed totals for the path, when git reported any.
+ * @returns the two counts, or undefined for a side git reports as binary.
+ */
+function countedSide(totals: PathTotals | undefined): GitFileSideStats | undefined {
+  if (totals === undefined || totals.additions === null || totals.deletions === null) return undefined
+  return { additions: totals.additions, deletions: totals.deletions }
+}
+
+/**
+ * Attach the per-side line totals to one changed path.
+ * `git diff --numstat` omits untracked paths and reports binaries without
+ * counts, so those sides and paths stay without stats.
+ */
+function withStats(
+  file: GitChangedFile,
+  staged: Map<string, PathTotals>,
+  worktree: Map<string, PathTotals>,
+): GitChangedFile {
+  const index = countedSide(staged.get(file.path))
+  const unstaged = countedSide(worktree.get(file.path))
+  if (index === undefined && unstaged === undefined) return file
+  const stats: GitFileStats = {
+    ...(index === undefined ? {} : { index }),
+    ...(unstaged === undefined ? {} : { worktree: unstaged }),
+  }
+  return { ...file, stats }
 }
 
 /**
@@ -330,8 +548,10 @@ export class GitCommands {
    * @returns the checked-out branch and changed paths, or a not-repository failure.
    */
   async status(root: string, signal: AbortSignal): Promise<GitStatusValue> {
-    const result = await this.changeSet(root, signal)
-    return result
+    const changes = await this.changeSet(root, signal)
+    const staged = await this.numstat(root, ['--cached'], signal)
+    const worktree = await this.numstat(root, [], signal)
+    return { ...changes, files: changes.files.map(file => withStats(file, staged, worktree)) }
   }
 
   /**
@@ -390,12 +610,17 @@ export class GitCommands {
     if (change.status === 'untracked' && !request.staged) {
       /* v8 ignore next -- the device name follows one host platform. */
       const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null'
-      result = await this.repo(root, ['diff', '--no-color', '--no-ext-diff', '--unified=3', '--no-index', '--', nullDevice, path], signal)
+      result = await this.repo(
+        root,
+        [...UNQUOTED_PATHS, 'diff', '--no-color', '--no-ext-diff', '--unified=3', '--no-index', '--', nullDevice, path],
+        signal,
+      )
       // `--no-index` exits 1 when the files differ, which is the expected outcome here.
       if (result.exitCode !== 0 && result.exitCode !== 1) requireSuccess(result, 'git diff')
     } else {
       result = requireSuccess(
         await this.repo(root, [
+          ...UNQUOTED_PATHS,
           'diff', '--no-color', '--no-ext-diff', '--unified=3',
           ...(request.staged ? ['--cached'] : []),
           '--', path,
@@ -474,18 +699,77 @@ export class GitCommands {
   }
 
   /**
+   * Apply one unified patch to the index or the work tree.
+   *
+   * The patch travels to git through a private 0600 file in a temporary
+   * directory removed in every outcome, because the no-shell runner captures
+   * stdio without writing the child's stdin. `git apply --check` runs first, so
+   * a patch that does not apply leaves both sides untouched.
+   * @param root - Session workspace root inside the repository.
+   * @param request - path, patch, target side, direction, and stale-review guard.
+   * @param signal - caller cancellation.
+   * @returns the settled path and the verb its target and direction name.
+   */
+  async apply(root: string, request: GitApplyRequest, signal: AbortSignal): Promise<GitApplyValue> {
+    const path = repoPath(request.path)
+    const patch = request.patch
+    if (patch.trim().length === 0) {
+      throw new RemoteError('git/apply-refused', 'the patch is empty', { path })
+    }
+    const bytes = Buffer.byteLength(patch, 'utf8')
+    if (bytes > this.maxDiffBytes) {
+      throw new RemoteError('git/apply-refused', `the patch exceeds ${this.maxDiffBytes} bytes`, { path })
+    }
+    requirePatchFor(path, patch)
+    const change = await this.changeOf(root, path, signal)
+    if (request.expectedStatus !== undefined && change.status !== request.expectedStatus) {
+      throw new RemoteError(
+        'git/path-refused',
+        `"${path}" changed from ${request.expectedStatus} to ${change.status} since review`,
+        { path },
+      )
+    }
+    if (change.status === 'untracked' || change.status === 'ignored' || change.status === 'conflict') {
+      throw new RemoteError('git/path-refused', `"${path}" cannot apply a patch to its ${change.status} change`, { path })
+    }
+    const reverse = request.reverse === true
+    const target = request.target === 'index' ? ['--cached'] : []
+    const directory = await mkdtemp(join(tmpdir(), 'dsh-git-apply-'))
+    const file = join(directory, 'patch.diff')
+    try {
+      await writeFile(file, patch, { mode: 0o600 })
+      const args = ['apply', ...target, ...(reverse ? ['-R'] : [])]
+      const checked = await this.repo(root, [...args, '--check', file], signal)
+      if (checked.exitCode !== 0) throw applyRefusal(path, 'check', checked)
+      const applied = await this.repo(root, [...args, file], signal)
+      if (applied.exitCode !== 0) throw applyRefusal(path, 'apply', applied)
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+    const operation: GitApplyOperation = request.target === 'index'
+      ? (reverse ? 'unstage' : 'stage')
+      : (reverse ? 'discard' : 'apply')
+    return { path, operation }
+  }
+
+  /**
    * Commit the staged index with one message.
    * @param root - Session workspace root inside the repository.
-   * @param request - commit message.
+   * @param request - commit message and whether to amend or sign off.
    * @param signal - caller cancellation.
-   * @returns the new commit's full object id.
+   * @returns the new or amended commit's full object id.
    */
   async commit(root: string, request: GitCommitRequest, signal: AbortSignal): Promise<GitCommitValue> {
     const message = request.message.trim()
     if (message.length === 0) {
       throw new RemoteError('git/commit-refused', 'commit message is blank', {})
     }
-    const result = await this.repo(root, ['commit', '-m', message], signal)
+    const result = await this.repo(root, [
+      'commit',
+      ...(request.amend === true ? ['--amend'] : []),
+      ...(request.signOff === true ? ['--signoff'] : []),
+      '-m', message,
+    ], signal)
     if (result.exitCode !== 0) {
       throw new RemoteError(
         'git/commit-refused',
@@ -495,6 +779,66 @@ export class GitCommands {
     }
     const head = requireSuccess(await this.repo(root, ['rev-parse', 'HEAD'], signal), 'git rev-parse')
     return { commit: head.stdout.trim() }
+  }
+
+  /**
+   * List commit history newest first.
+   * @param root - Session workspace root inside the repository.
+   * @param request - page size capped at 200 and commits to skip.
+   * @param signal - caller cancellation.
+   * @returns commits with parents and normalized refs, capped by the configured output limit.
+   */
+  async log(root: string, request: GitLogRequest, signal: AbortSignal): Promise<GitLogValue> {
+    const limit = request.limit ?? 50
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      throw new RemoteError('gateway/bad-request', 'limit must be a positive safe integer', {})
+    }
+    const skip = request.skip ?? 0
+    if (!Number.isSafeInteger(skip) || skip < 0) {
+      throw new RemoteError('gateway/bad-request', 'skip must be a non-negative safe integer', {})
+    }
+    const result = requireSuccess(
+      await this.repo(root, [
+        'log', '--no-color', `--max-count=${Math.min(limit, 200)}`, `--skip=${skip}`, `--format=${LOG_FORMAT}`,
+      ], signal),
+      'git log',
+    )
+    const commits: GitCommitEntry[] = []
+    let bytes = 0
+    for (const commit of parseGitLog(result.stdout)) {
+      const size = Buffer.byteLength(JSON.stringify(commit), 'utf8')
+      if (bytes + size > this.maxOutputBytes) return { commits, truncated: true }
+      bytes += size
+      commits.push(commit)
+    }
+    return { commits, truncated: false }
+  }
+
+  /**
+   * Read one commit's patch.
+   * @param root - Session workspace root inside the repository.
+   * @param request - commit id and optional path the patch is restricted to.
+   * @param signal - caller cancellation.
+   * @returns the resolved object id and the patch, capped by the configured diff limit.
+   */
+  async show(root: string, request: GitShowRequest, signal: AbortSignal): Promise<GitShowValue> {
+    if (!/^[0-9a-f]{4,64}$/i.test(request.commit)) {
+      throw new RemoteError('gateway/bad-request', `"${request.commit}" is not a commit id`, {})
+    }
+    const path = request.path === undefined ? undefined : repoPath(request.path)
+    const resolved = requireSuccess(
+      await this.repo(root, ['rev-parse', '--verify', `${request.commit}^{commit}`], signal),
+      'git rev-parse',
+    ).stdout.trim()
+    const result = requireSuccess(
+      await this.repo(root, [
+        ...UNQUOTED_PATHS,
+        'show', '--format=', '--no-color', '--no-ext-diff', resolved, ...(path === undefined ? [] : ['--', path]),
+      ], signal),
+      'git show',
+    )
+    const patch = truncateUtf8(result.stdout, this.maxDiffBytes)
+    return { commit: resolved, patch: patch.text, truncated: patch.truncated }
   }
 
   /**
@@ -518,13 +862,32 @@ export class GitCommands {
   }
 
   /**
-   * Push the current branch to its upstream without force.
+   * Push the current branch without force, optionally publishing it.
+   *
+   * Publishing uses the repository's `origin` remote; the request carries no
+   * remote name, so a repository whose remote has another name answers
+   * `git/remote-failed` instead of guessing.
    * @param root - Session workspace root inside the repository.
+   * @param request - whether to publish the current branch and record its upstream; omitted keeps a plain push.
    * @param signal - caller cancellation.
    * @returns git's own progress summary.
    */
-  async push(root: string, signal: AbortSignal): Promise<GitRemoteValue> {
-    return await this.remote(root, ['push'], 'push', signal)
+  async push(root: string, request: GitPushRequest | undefined, signal: AbortSignal): Promise<GitRemoteValue> {
+    if (request?.setUpstream !== true) return await this.remote(root, ['push'], 'push', signal)
+    const status = await this.changeSet(root, signal)
+    if (status.detached || status.branch === null) {
+      throw new RemoteError('git/remote-failed', 'publishing needs a checked-out branch', { operation: 'push' })
+    }
+    const remotes = requireSuccess(await this.repo(root, ['remote'], signal), 'git remote')
+      .stdout.split('\n').map(name => name.trim()).filter(name => name.length > 0)
+    if (!remotes.includes('origin')) {
+      throw new RemoteError(
+        'git/remote-failed',
+        'publishing needs an existing remote named "origin"',
+        { operation: 'push' },
+      )
+    }
+    return await this.remote(root, ['push', '--set-upstream', 'origin', status.branch], 'push', signal)
   }
 
   /**
@@ -696,6 +1059,19 @@ export class GitCommands {
     return parseGitStatus(result.stdout)
   }
 
+  /** Read one side's line totals: the index with `--cached`, the work tree without it. */
+  private async numstat(
+    root: string,
+    side: readonly string[],
+    signal: AbortSignal,
+  ): Promise<Map<string, PathTotals>> {
+    const result = requireSuccess(
+      await this.repo(root, ['diff', '--numstat', '-z', '--no-ext-diff', ...side], signal),
+      'git diff --numstat',
+    )
+    return parseGitNumstat(result.stdout)
+  }
+
   private async repo(root: string, args: readonly string[], signal: AbortSignal): Promise<GitRunResult> {
     const result = await this.run(args, root, signal)
     if (result.exitCode !== 0 && /not a git repository/i.test(result.stderr)) {
@@ -856,11 +1232,27 @@ export class GitController extends TypertRemoteService {
   }
 
   /**
+   * Apply one unified patch to the index or the work tree.
+   * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+   * @param request - path, patch, target side, direction, and stale-review guard.
+   * @param signal - caller cancellation.
+   * @returns the settled path and verb.
+   */
+  @Remote('apply')
+  apply(
+    gitWorkspaceScope: GitWorkspaceScope,
+    request: GitApplyRequest,
+    signal: AbortSignal,
+  ): Promise<GitApplyValue> {
+    return this.commands.apply(gitWorkspaceScope.workspaceRoot, request, signal)
+  }
+
+  /**
    * Commit the staged index.
    * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
-   * @param request - non-blank commit message.
+   * @param request - non-blank commit message and amend or sign-off options.
    * @param signal - caller cancellation.
-   * @returns the new commit's full object id.
+   * @returns the new or amended commit's full object id.
    */
   @Remote('commit')
   commit(
@@ -894,14 +1286,51 @@ export class GitController extends TypertRemoteService {
   }
 
   /**
+   * List commit history newest first.
+   * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+   * @param request - page size and commits to skip.
+   * @param signal - caller cancellation.
+   * @returns commits with their parents and normalized refs.
+   */
+  @Remote('log')
+  log(
+    gitWorkspaceScope: GitWorkspaceScope,
+    request: GitLogRequest,
+    signal: AbortSignal,
+  ): Promise<GitLogValue> {
+    return this.commands.log(gitWorkspaceScope.workspaceRoot, request, signal)
+  }
+
+  /**
+   * Read one commit's patch.
+   * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+   * @param request - commit id and optional path.
+   * @param signal - caller cancellation.
+   * @returns the resolved object id and its capped patch.
+   */
+  @Remote('show')
+  show(
+    gitWorkspaceScope: GitWorkspaceScope,
+    request: GitShowRequest,
+    signal: AbortSignal,
+  ): Promise<GitShowValue> {
+    return this.commands.show(gitWorkspaceScope.workspaceRoot, request, signal)
+  }
+
+  /**
    * Push the current branch to its upstream.
    * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+   * @param request - whether to publish the branch and record its upstream; omitted keeps a plain push.
    * @param signal - caller cancellation.
    * @returns git's own summary.
    */
   @Remote('push')
-  push(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitRemoteValue> {
-    return this.commands.push(gitWorkspaceScope.workspaceRoot, signal)
+  push(
+    gitWorkspaceScope: GitWorkspaceScope,
+    request: GitPushRequest | undefined,
+    signal: AbortSignal,
+  ): Promise<GitRemoteValue> {
+    return this.commands.push(gitWorkspaceScope.workspaceRoot, request, signal)
   }
 
   /**
