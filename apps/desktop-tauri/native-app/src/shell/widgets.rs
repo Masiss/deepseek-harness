@@ -1,8 +1,27 @@
 //! Shared element helpers for the gpui shell.
 
-use gpui::{div, prelude::*, px, AnyElement, AnyView, App, Div, IntoElement, SharedString, Window};
+use gpui::{
+    div, prelude::*, px, AnyElement, AnyView, App, Div, Hsla, IntoElement, Pixels, SharedString,
+    Svg, Window,
+};
 
 use super::theme::Theme;
+use crate::assets::Icon;
+
+/// Draws one icon of the embedded outline set.
+///
+/// @param name — icon to draw.
+/// @param size — edge length, already scaled by the caller.
+/// @param color — stroke colour; every icon SVG strokes `currentColor`.
+/// @returns the SVG element, exposed as the `icon-<name>` test selector.
+pub(crate) fn icon(name: Icon, size: Pixels, color: Hsla) -> Svg {
+    gpui::svg()
+        .path(name.path())
+        .size(size)
+        .text_color(color)
+        .flex_none()
+        .debug_selector(move || format!("icon-{}", name.name()))
+}
 
 /// Wraps an element in a padded, bordered card.
 pub(crate) fn card(theme: &Theme, child: impl IntoElement) -> Div {
@@ -16,9 +35,17 @@ pub(crate) fn card(theme: &Theme, child: impl IntoElement) -> Div {
         .child(child)
 }
 
+/// What a [`Button`] shows.
+enum ButtonContent {
+    /// A text label.
+    Text(SharedString),
+    /// One icon of the embedded outline set.
+    Icon(Icon),
+}
+
 /// A compact button with primary, danger, and enabled variants.
 pub(crate) struct Button {
-    label: SharedString,
+    content: ButtonContent,
     theme: Theme,
     primary: bool,
     danger: bool,
@@ -32,7 +59,25 @@ impl Button {
     /// Builds a neutral button.
     pub(crate) fn new(theme: &Theme, label: impl Into<SharedString>) -> Self {
         Self {
-            label: label.into(),
+            content: ButtonContent::Text(label.into()),
+            theme: theme.clone(),
+            primary: false,
+            danger: false,
+            enabled: true,
+            padding_x: theme.sp(9.0),
+            padding_y: theme.sp(3.0),
+            min_height: theme.control_height(),
+        }
+    }
+
+    /// Builds a neutral button that shows only an icon.
+    ///
+    /// @param theme — frame palette and metrics.
+    /// @param name — icon drawn at the button's foreground colour.
+    /// @returns a neutral button, for the rest of its builder chain.
+    pub(crate) fn icon_only(theme: &Theme, name: Icon) -> Self {
+        Self {
+            content: ButtonContent::Icon(name),
             theme: theme.clone(),
             primary: false,
             danger: false,
@@ -85,7 +130,12 @@ impl Button {
             .bg(background)
             .text_color(foreground)
             .text_size(theme.fs(11.5))
-            .child(self.label);
+            .child(match self.content {
+                ButtonContent::Text(label) => label.into_any_element(),
+                ButtonContent::Icon(name) => {
+                    icon(name, theme.sp(15.), foreground).into_any_element()
+                }
+            });
         if self.enabled {
             button = button
                 .cursor_pointer()

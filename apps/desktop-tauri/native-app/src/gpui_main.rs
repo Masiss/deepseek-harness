@@ -3,6 +3,8 @@
 //! The shared protocol, session projection, and preference modules stay
 //! renderer-neutral; this binary owns the gpui presentation layer.
 
+#[path = "assets.rs"]
+mod assets;
 #[path = "command_registry.rs"]
 mod command_registry;
 #[path = "composer_input.rs"]

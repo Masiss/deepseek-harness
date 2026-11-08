@@ -24,6 +24,11 @@ pub const CHANGES_MAX: f32 = 720.0;
 /// Width the conversation keeps when both docks are shown (px).
 pub const AGENT_MIN_WIDTH: f32 = 420.0;
 
+/// Height of the Changes review header (px).
+pub const CHANGES_HEADER_HEIGHT: f32 = 43.0;
+/// Height of the Changes view-tab row (px).
+pub const CHANGES_TAB_HEIGHT: f32 = 33.0;
+
 /// Grab width of the draggable divider between two docked panels (px).
 pub const PANEL_DIVIDER_WIDTH: f32 = 4.0;
 

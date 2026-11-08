@@ -18,6 +18,7 @@ use gpui::{
 use super::git_review;
 use super::git_review::short_commit;
 use super::widgets;
+use crate::assets::Icon;
 use crate::command_registry::CommandId;
 use crate::layout;
 use crate::shell::app::{
@@ -310,10 +311,8 @@ fn agent_column(
                         .items_center()
                         .h_full()
                         .pr(theme.sp(9.))
-                        .text_size(theme.fs(9.5))
-                        .text_color(theme.muted)
                         .cursor_pointer()
-                        .child("✕")
+                        .child(widgets::icon(Icon::X, theme.sp(15.), theme.muted))
                         .on_click(cx.listener(move |app, _, _, cx| {
                             app.close_agent_tab(&close_id);
                             app.hovered_buffer = None;
@@ -391,7 +390,7 @@ fn top_bar(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>) ->
         .border_color(theme.border)
         .bg(theme.surface)
         .child(
-            chrome_icon_button(theme, "top-menu", "☰", None, menu_open)
+            chrome_icon_button(theme, "top-menu", Icon::Menu, None, menu_open)
                 .track_focus(&menu_focus)
                 .tooltip(widgets::HintView::tooltip(theme, "Menu"))
                 .on_click(cx.listener(move |app, _, _, cx| {
@@ -436,16 +435,11 @@ fn top_bar(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>) ->
                         .truncate()
                         .child(workspace),
                 )
-                .child(
-                    div()
-                        .text_size(theme.fs(9.))
-                        .text_color(theme.muted)
-                        .child("▾"),
-                ),
+                .child(widgets::icon(Icon::ChevronDown, theme.sp(15.), theme.muted)),
         )
         .child(div().flex_1().min_w(px(0.)))
         .child(
-            chrome_icon_button(theme, "top-search", "⌕", None, false)
+            chrome_icon_button(theme, "top-search", Icon::Search, None, false)
                 .track_focus(&search_focus)
                 .tooltip(widgets::HintView::tooltip(
                     theme,
@@ -457,7 +451,7 @@ fn top_bar(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>) ->
                 })),
         )
         .child(
-            chrome_icon_button(theme, "top-changes", "▤", None, changes_open)
+            chrome_icon_button(theme, "top-changes", Icon::PanelRight, None, changes_open)
                 .debug_selector(|| "toggle-changes".to_owned())
                 .tooltip(widgets::HintView::tooltip(theme, "Toggle Changes"))
                 .on_click(cx.listener(|app, _, _, cx| {
@@ -470,19 +464,19 @@ fn top_bar(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>) ->
 
 /// One icon button of the top or bottom bar.
 ///
-/// The bars are glyph-only, so the caller attaches the click handler, tooltip,
+/// The bars are icon-only, so the caller attaches the click handler, tooltip,
 /// and focus handle the control needs.
 ///
 /// @param theme - Frame palette and metrics.
 /// @param id - Element id, also the harness selector when one is exposed.
-/// @param glyph - Single-character icon.
+/// @param icon - Icon drawn inside the hit area.
 /// @param count - Items the control reports, or `None` for a plain icon.
 /// @param active - Whether the control's surface or panel is currently on.
 /// @returns The button element, ready for its handlers.
 fn chrome_icon_button(
     theme: &Theme,
     id: &'static str,
-    glyph: &'static str,
+    icon: Icon,
     count: Option<usize>,
     active: bool,
 ) -> gpui::Stateful<gpui::Div> {
@@ -499,7 +493,11 @@ fn chrome_icon_button(
         .when(active, |element| element.bg(theme.selection))
         .hover(|style| style.bg(theme.surface_raised))
         .cursor_pointer()
-        .child(glyph)
+        .child(widgets::icon(
+            icon,
+            theme.sp(15.),
+            if active { theme.accent } else { theme.text },
+        ))
         .children(count.filter(|count| *count > 0).map(|count| {
             div()
                 .text_size(theme.fs(9.5))
@@ -659,18 +657,18 @@ const STATUS_TOOLS: [BottomTool; 4] = [
     BottomTool::Diagnostics,
 ];
 
-/// Title, glyph, and current item count of one bottom utility panel.
+/// Title, icon, and current item count of one bottom utility panel.
 ///
 /// @param app - Shell state holding each panel's items.
 /// @param tool - Panel to describe.
 /// @returns The panel's header label, icon, and item count.
-fn bottom_tool_row(app: &DesktopApp, tool: BottomTool) -> (&'static str, &'static str, usize) {
+fn bottom_tool_row(app: &DesktopApp, tool: BottomTool) -> (&'static str, Icon, usize) {
     match tool {
-        BottomTool::Terminal => ("Terminal", "▭", app.terminal.items.len()),
-        BottomTool::Jobs => ("Jobs", "◷", app.jobs.len()),
-        BottomTool::Schedules => ("Schedules", "◔", app.schedules.len()),
-        BottomTool::Deliverables => ("Deliverables", "▣", app.deliverables.len()),
-        BottomTool::Diagnostics => ("Diagnostics", "⚠", app.diagnostics.len()),
+        BottomTool::Terminal => ("Terminal", Icon::Terminal, app.terminal.items.len()),
+        BottomTool::Jobs => ("Jobs", Icon::Clock, app.jobs.len()),
+        BottomTool::Schedules => ("Schedules", Icon::Calendar, app.schedules.len()),
+        BottomTool::Deliverables => ("Deliverables", Icon::File, app.deliverables.len()),
+        BottomTool::Diagnostics => ("Diagnostics", Icon::Warning, app.diagnostics.len()),
     }
 }
 
@@ -717,7 +715,7 @@ fn utility_panel(
                         .px(theme.sp(4.))
                         .rounded(theme.corner())
                         .hover(|style| style.bg(theme.surface_raised))
-                        .child("×")
+                        .child(widgets::icon(Icon::X, theme.sp(15.), theme.text))
                         .on_click(cx.listener(|app, _, _, cx| {
                             app.bottom_tool = None;
                             cx.notify();
@@ -750,7 +748,7 @@ fn utility_panel(
 fn utility_action(
     theme: &Theme,
     id: &'static str,
-    label: &str,
+    content: impl IntoElement,
     cx: &mut Context<DesktopApp>,
     action: impl Fn(&mut DesktopApp) + 'static,
 ) -> AnyElement {
@@ -762,7 +760,7 @@ fn utility_action(
         .rounded(theme.corner())
         .text_color(theme.text)
         .hover(|style| style.bg(theme.surface_raised))
-        .child(label.to_owned())
+        .child(content)
         .on_click(cx.listener(move |app, _, _, cx| {
             action(app);
             cx.notify();
@@ -774,7 +772,7 @@ fn utility_action(
 fn utility_action_with_cx(
     theme: &Theme,
     id: &'static str,
-    label: &str,
+    content: impl IntoElement,
     cx: &mut Context<DesktopApp>,
     action: impl Fn(&mut DesktopApp, &mut Context<DesktopApp>) + 'static,
 ) -> AnyElement {
@@ -786,7 +784,7 @@ fn utility_action_with_cx(
         .rounded(theme.corner())
         .text_color(theme.text)
         .hover(|style| style.bg(theme.surface_raised))
-        .child(label.to_owned())
+        .child(content)
         .on_click(cx.listener(move |app, _, _, cx| {
             action(app, cx);
             cx.notify();
@@ -870,10 +868,16 @@ fn jobs_panel(
                 .gap(theme.sp(6.))
                 .px(theme.sp(8.))
                 .child(div().flex_1().text_size(theme.fs(10.)).text_color(theme.muted).child("Background work for this Session"))
-                .child(utility_action(theme, "jobs-refresh", "↻", cx, |app| {
-                    app.jobs_session = None;
-                    app.start_job_list();
-                }))
+                .child(utility_action(
+                    theme,
+                    "jobs-refresh",
+                    widgets::icon(Icon::Sync, theme.sp(15.), theme.text),
+                    cx,
+                    |app| {
+                        app.jobs_session = None;
+                        app.start_job_list();
+                    },
+                ))
                 .when_some(app.jobs_error.clone(), |element, error| {
                     element.child(div().text_size(theme.fs(10.)).text_color(theme.error).child(error))
                 }),
@@ -1005,10 +1009,16 @@ fn schedules_panel(
                 .gap(theme.sp(6.))
                 .px(theme.sp(8.))
                 .child(div().flex_1().text_size(theme.fs(10.)).text_color(theme.muted).child("Scheduled actions for this Session"))
-                .child(utility_action(theme, "schedules-refresh", "↻", cx, |app| {
-                    app.schedules_session = None;
-                    app.start_schedules();
-                }))
+                .child(utility_action(
+                    theme,
+                    "schedules-refresh",
+                    widgets::icon(Icon::Sync, theme.sp(15.), theme.text),
+                    cx,
+                    |app| {
+                        app.schedules_session = None;
+                        app.start_schedules();
+                    },
+                ))
                 .when_some(app.schedules_error.clone(), |element, error| {
                     element.child(div().text_size(theme.fs(10.)).text_color(theme.error).child(error))
                 }),
@@ -1798,8 +1808,8 @@ fn bottom_bar(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>)
             git_review::sync_tooltip(status.ahead, status.behind, status.upstream.as_deref())
         })
         .unwrap_or_else(|| "Fetch, pull, push, and publish".to_owned());
-    let (_, terminal_glyph, terminal_count) = bottom_tool_row(app, BottomTool::Terminal);
-    let (_, problems_glyph, problem_count) = bottom_tool_row(app, BottomTool::Diagnostics);
+    let (_, terminal_icon, terminal_count) = bottom_tool_row(app, BottomTool::Terminal);
+    let (_, problems_icon, problem_count) = bottom_tool_row(app, BottomTool::Diagnostics);
     let git_label = match (&app.git_status, app.git_error.as_deref(), app.git_loading) {
         (Some(status), _, _) => match (&status.branch, status.detached) {
             (Some(branch), _) => branch.clone(),
@@ -1867,7 +1877,7 @@ fn bottom_bar(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>)
                                 cx.notify();
                             }
                         }))
-                        .child(div().child("⎇"))
+                        .child(widgets::icon(Icon::Branch, theme.sp(15.), theme.muted))
                         .child(div().truncate().child(git_label))
                         .children(ahead_behind.map(|(ahead, behind)| {
                             div()
@@ -1889,19 +1899,25 @@ fn bottom_bar(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>)
                                         .child(format!("↓{behind}"))
                                 }))
                         }))
-                        .child(div().text_size(theme.fs(8.5)).child("▾")),
+                        .child(widgets::icon(Icon::ChevronDown, theme.sp(15.), theme.muted)),
                 )
                 .child(
-                    chrome_icon_button(theme, "bottom-git", "▤", None, app.show_changes)
-                        .tooltip(widgets::HintView::tooltip(theme, "Git changes"))
-                        .on_click(cx.listener(|app, _, _, cx| {
-                            app.show_changes = true;
-                            app.changes_tab = ChangesTab::Files;
-                            cx.notify();
-                        })),
+                    chrome_icon_button(
+                        theme,
+                        "bottom-git",
+                        Icon::PanelRight,
+                        None,
+                        app.show_changes,
+                    )
+                    .tooltip(widgets::HintView::tooltip(theme, "Git changes"))
+                    .on_click(cx.listener(|app, _, _, cx| {
+                        app.show_changes = true;
+                        app.changes_tab = ChangesTab::Files;
+                        cx.notify();
+                    })),
                 )
                 .child(
-                    chrome_icon_button(theme, "bottom-sync", "⟳", None, sync_menu_open)
+                    chrome_icon_button(theme, "bottom-sync", Icon::Sync, None, sync_menu_open)
                         .track_focus(&sync_focus)
                         .tooltip(widgets::HintView::tooltip(theme, sync_hint))
                         .on_click(cx.listener(|app, _, _, cx| {
@@ -1934,7 +1950,7 @@ fn bottom_bar(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>)
                     chrome_icon_button(
                         theme,
                         "bottom-terminal",
-                        terminal_glyph,
+                        terminal_icon,
                         Some(terminal_count),
                         active_tool == Some(BottomTool::Terminal),
                     )
@@ -1956,7 +1972,7 @@ fn bottom_bar(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>)
                     chrome_icon_button(
                         theme,
                         "bottom-problems",
-                        problems_glyph,
+                        problems_icon,
                         Some(problem_count),
                         active_tool == Some(BottomTool::Diagnostics),
                     )
@@ -1978,7 +1994,7 @@ fn bottom_bar(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>)
                     })),
                 )
                 .child(
-                    chrome_icon_button(theme, "bottom-tools", "⋯", None, tools_open)
+                    chrome_icon_button(theme, "bottom-tools", Icon::Ellipsis, None, tools_open)
                         .track_focus(&tools_focus)
                         .tooltip(widgets::HintView::tooltip(
                             theme,
@@ -2375,7 +2391,11 @@ fn explorer_footer(
                 .hover(|style| style.bg(theme.surface_raised))
                 .id("explorer-new-session")
                 .text_color(if connected { theme.accent } else { theme.muted })
-                .child("＋")
+                .child(widgets::icon(
+                    Icon::Plus,
+                    theme.sp(15.),
+                    if connected { theme.accent } else { theme.muted },
+                ))
                 .on_click(cx.listener(|app, _, _, cx| {
                     if app.transport.is_some() && !app.sessions_busy() {
                         app.run_command(CommandId::NewSession);
@@ -2412,12 +2432,7 @@ fn explorer_footer(
                         .text_color(theme.text)
                         .child(title),
                 )
-                .child(
-                    div()
-                        .text_size(theme.fs(9.))
-                        .text_color(theme.muted)
-                        .child("▾"),
-                ),
+                .child(widgets::icon(Icon::ChevronDown, theme.sp(15.), theme.muted)),
         )
         .into_any_element()
 }
@@ -2552,7 +2567,7 @@ fn status_tools_popover(
         .p(theme.sp(4.))
         .child(widgets::section_label(theme, "PANELS"));
     for tool in STATUS_TOOLS {
-        let (title, glyph, count) = bottom_tool_row(app, tool);
+        let (title, icon, count) = bottom_tool_row(app, tool);
         let active = active_tool == Some(tool);
         rows = rows.child(
             div()
@@ -2571,7 +2586,7 @@ fn status_tools_popover(
                 .when(!selected_session, |element| element.opacity(0.45))
                 .hover(|style| style.bg(theme.surface_raised))
                 .text_size(theme.fs(11.5))
-                .child(div().text_size(theme.fs(11.)).child(glyph))
+                .child(widgets::icon(icon, theme.sp(15.), theme.text))
                 .child(div().flex_1().min_w(px(0.)).truncate().child(title))
                 .child(
                     div()
