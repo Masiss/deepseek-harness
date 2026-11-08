@@ -37,11 +37,13 @@ pub(crate) fn render(
         let handle = app.chrome_focus.for_trigger(trigger).clone();
         window.focus(&handle);
     }
+    apply_preferences_focus(app, window, cx);
     let theme = app.theme.clone();
-    let viewport_width: f32 = window.viewport_size().width.into();
+    let viewport = window.viewport_size();
+    let viewport_width: f32 = viewport.width.into();
+    let viewport_height: f32 = viewport.height.into();
 
-    let on_page = app.show_settings
-        || app.show_goals
+    let on_page = app.show_goals
         || app.show_plugins
         || app.show_market
         || app.show_skills
@@ -131,6 +133,15 @@ pub(crate) fn render(
     if app.panel_drag.is_some() {
         root = root.child(panel_drag_overlay(cx));
     }
+    if app.show_settings {
+        root = root.child(pages::preferences_overlay(
+            app,
+            &theme,
+            viewport_width,
+            viewport_height,
+            cx,
+        ));
+    }
     if app.show_about {
         root = root.child(about_dialog(app, &theme, cx));
     }
@@ -160,6 +171,39 @@ pub(crate) fn render(
         root = root.child(git_review::confirmation_dialog(app, &theme, confirmation, cx));
     }
     root.into_any_element()
+}
+
+/// Moves focus into the Preferences window when it opens and back out when it
+/// closes.
+///
+/// The owner to restore is recorded as the focused input key rather than a
+/// `FocusHandle`, because a handle kept across frames keeps a removed input
+/// alive and would restore focus to an element the shell no longer draws.
+///
+/// @param app - Shell state carrying the pending focus transition.
+/// @param window - Window that owns the focus.
+/// @param cx - Context used to read the shell-owned inputs.
+fn apply_preferences_focus(
+    app: &mut DesktopApp,
+    window: &mut Window,
+    cx: &mut Context<DesktopApp>,
+) {
+    if std::mem::take(&mut app.focus_preferences) {
+        app.preferences_focus_return = app
+            .inputs
+            .iter()
+            .find(|(_, input)| input.read(cx).is_focused(window))
+            .map(|(key, _)| (*key).to_owned());
+        window.focus(&app.preferences_focus);
+    }
+    if std::mem::take(&mut app.restore_preferences_focus) {
+        match app.preferences_focus_return.take() {
+            Some(key) if app.inputs.keys().any(|existing| *existing == key) => {
+                app.focus_input(&key, window, cx)
+            }
+            _ => app.focus_composer = true,
+        }
+    }
 }
 
 /// Wraps the conversation in the V2 Agent buffer strip.
