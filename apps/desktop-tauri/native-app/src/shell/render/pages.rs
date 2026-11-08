@@ -1,24 +1,24 @@
-//! Full-pane surfaces that replace the conversation: Preferences, Plugins,
-//! Skills, Marketplace, Goals, and the Document preview.
+//! Full-pane surfaces that replace the conversation (Plugins, Skills,
+//! Marketplace, Goals, and the Document preview) and the Preferences overlay.
 
 use gpui::{div, prelude::*, StatefulInteractiveElement, px, AnyElement, Context};
 
 use crate::layout;
 use crate::transcript::RowKind;
 use crate::ui_preferences::{AccentScheme, KeymapPreset, ThemeMode, UiDensity};
-use crate::shell::app::{ActiveView, DesktopApp, GoalAction};
+use crate::shell::app::{ActiveView, DesktopApp, GoalAction, PreferencesSection};
 use crate::shell::theme::Theme;
 use super::widgets;
 
 /// Returns the active page surface, or `None` while the conversation is shown.
+///
+/// Preferences is an overlay, so it never replaces the conversation here.
 pub(crate) fn active_page(
     app: &mut DesktopApp,
     theme: &Theme,
     cx: &mut Context<DesktopApp>,
 ) -> Option<AnyElement> {
-    let page = if app.show_settings {
-        settings(app, theme, cx)
-    } else if app.show_goals {
+    let page = if app.show_goals {
         goals(app, theme, cx)
     } else if app.show_plugins {
         plugins(app, theme, cx)
@@ -176,23 +176,354 @@ fn accent_button(
         })
 }
 
-fn settings(
+/// Draws the Preferences overlay over the unchanged shell.
+///
+/// The window is capped by the viewport insets from the V2 reference, and its
+/// section content scrolls inside the window so the shell keeps its geometry.
+///
+/// @param app - Shell state, including the selected section and settings data.
+/// @param theme - Frame theme resolved from the active preferences.
+/// @param viewport_width - Window width the overlay must fit inside.
+/// @param viewport_height - Window height the overlay must fit inside.
+/// @param cx - Context used for the overlay's click handlers.
+/// @returns The overlay layer painted above the shell.
+pub(crate) fn preferences_overlay(
+    app: &mut DesktopApp,
+    theme: &Theme,
+    viewport_width: f32,
+    viewport_height: f32,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
+    let scale = theme.scale;
+    let width = (910. * scale).min((viewport_width - 60. * scale).max(240. * scale));
+    let height = (680. * scale).min((viewport_height - 70. * scale).max(400. * scale));
+    let focus = app.preferences_focus.clone();
+    let section = app.preferences_section;
+
+    div()
+        .absolute()
+        .inset_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .p(theme.sp(15.))
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .id("preferences-backdrop")
+                .debug_selector(|| "preferences-backdrop".to_owned())
+                .bg(gpui::black().opacity(0.52))
+                .on_click(cx.listener(|app, _, _, cx| {
+                    app.close_preferences();
+                    cx.notify();
+                })),
+        )
+        .child(
+            div()
+                .id("preferences-window")
+                .debug_selector(|| "preferences-window".to_owned())
+                .key_context("Preferences")
+                .track_focus(&focus)
+                .on_click(cx.listener(|_, _, _, cx| cx.stop_propagation()))
+                .flex()
+                .flex_col()
+                .w(px(width))
+                .h(px(height))
+                .overflow_hidden()
+                .rounded(theme.corner())
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.surface)
+                .shadow_lg()
+                .child(preferences_header(theme, cx))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_1()
+                        .min_h(px(0.))
+                        .child(preferences_nav(theme, section, cx))
+                        .child(preferences_main(app, theme, cx)),
+                )
+                .child(preferences_footer(theme)),
+        )
+        .into_any_element()
+}
+
+/// Title row with the overlay's close control.
+fn preferences_header(theme: &Theme, cx: &mut Context<DesktopApp>) -> AnyElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(theme.sp(10.))
+        .h(theme.sp(47.))
+        .px(theme.sp(16.))
+        .border_b_1()
+        .border_color(theme.border)
+        .child(
+            div()
+                .text_size(theme.fs(13.))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child("Preferences"),
+        )
+        .child(div().flex_1())
+        .child(
+            widgets::Button::new(theme, "Close")
+                .build()
+                .id("preferences-close")
+                .debug_selector(|| "preferences-close".to_owned())
+                .on_click(cx.listener(|app, _, _, cx| {
+                    app.close_preferences();
+                    cx.notify();
+                })),
+        )
+        .into_any_element()
+}
+
+/// Left navigation column, grouped like the reference window.
+fn preferences_nav(
+    theme: &Theme,
+    current: PreferencesSection,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
+    div()
+        .debug_selector(|| "preferences-nav".to_owned())
+        .flex()
+        .flex_col()
+        .flex_none()
+        .gap(theme.sp(2.))
+        .w(theme.sp(198.))
+        .p(theme.sp(9.))
+        .bg(theme.code_background)
+        .border_r_1()
+        .border_color(theme.border)
+        .child(preferences_nav_item(
+            theme,
+            PreferencesSection::General,
+            "General",
+            current,
+            cx,
+        ))
+        .child(preferences_nav_item(
+            theme,
+            PreferencesSection::Appearance,
+            "Appearance",
+            current,
+            cx,
+        ))
+        .child(preferences_nav_item(
+            theme,
+            PreferencesSection::Keymap,
+            "Keymap",
+            current,
+            cx,
+        ))
+        .child(preferences_nav_caption(theme, "EXTEND"))
+        .child(preferences_nav_item(
+            theme,
+            PreferencesSection::Extensions,
+            "Extensions",
+            current,
+            cx,
+        ))
+        .child(preferences_nav_item(
+            theme,
+            PreferencesSection::Skills,
+            "Skills",
+            current,
+            cx,
+        ))
+        .child(preferences_nav_item(
+            theme,
+            PreferencesSection::Marketplace,
+            "Marketplace",
+            current,
+            cx,
+        ))
+        .child(preferences_nav_caption(theme, "MORE"))
+        .child(preferences_nav_item(
+            theme,
+            PreferencesSection::About,
+            "About",
+            current,
+            cx,
+        ))
+        .into_any_element()
+}
+
+/// One selectable row in the Preferences navigation column.
+fn preferences_nav_item(
+    theme: &Theme,
+    section: PreferencesSection,
+    label: &'static str,
+    current: PreferencesSection,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
+    let active = section == current;
+    div()
+        .flex()
+        .items_center()
+        .h(theme.sp(35.))
+        .w_full()
+        .px(theme.sp(11.))
+        .rounded(theme.corner())
+        .text_size(theme.fs(12.))
+        .text_color(if active { theme.text } else { theme.muted })
+        .when(active, |row| row.bg(theme.selection))
+        .when(!active, |row| {
+            row.cursor_pointer()
+                .hover(|style| style.bg(theme.surface_raised))
+        })
+        .id(gpui::SharedString::from(format!("preferences-nav-{label}")))
+        .debug_selector(move || format!("preferences-nav-{label}"))
+        .child(label)
+        .on_click(cx.listener(move |app, _, _, cx| {
+            app.preferences_section = section;
+            cx.notify();
+        }))
+        .into_any_element()
+}
+
+/// Group caption between navigation clusters.
+fn preferences_nav_caption(theme: &Theme, text: &'static str) -> AnyElement {
+    div()
+        .px(theme.sp(11.))
+        .pt(theme.sp(20.))
+        .pb(theme.sp(5.))
+        .text_size(theme.fs(9.))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_color(theme.muted)
+        .child(text)
+        .into_any_element()
+}
+
+/// Footer with the storage note and the keyboard hint.
+fn preferences_footer(theme: &Theme) -> AnyElement {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .px(theme.sp(15.))
+        .py(theme.sp(8.))
+        .border_t_1()
+        .border_color(theme.border)
+        .child(
+            div()
+                .text_size(theme.fs(10.))
+                .text_color(theme.muted)
+                .child("Preferences are stored locally with this client."),
+        )
+        .child(
+            div()
+                .text_size(theme.fs(10.))
+                .text_color(theme.muted)
+                .child("Esc to close"),
+        )
+        .into_any_element()
+}
+
+/// Scrollable section body; only this pane scrolls, never the shell.
+fn preferences_main(
     app: &mut DesktopApp,
     theme: &Theme,
     cx: &mut Context<DesktopApp>,
 ) -> AnyElement {
-    // The preview follows the resolved scheme, so System mode and workspace
-    // overrides show the colours the shell is actually rendering.
-    let dark = theme.dark;
-    let compact = app.ui_preferences.density == UiDensity::Compact;
-    let scale = app.ui_preferences.ui_scale;
+    let mut main = div()
+        .id("preferences-main")
+        .debug_selector(|| "preferences-main".to_owned())
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_w(px(0.))
+        .min_h(px(0.))
+        .px(theme.sp(32.))
+        .py(theme.sp(26.))
+        .overflow_y_scroll();
+    match app.preferences_section {
+        PreferencesSection::General => main = main.child(preferences_general(app, theme, cx)),
+        PreferencesSection::Appearance => {
+            main = main.child(preferences_appearance(app, theme, cx));
+        }
+        PreferencesSection::Keymap => main = main.child(preferences_keymap(app, theme, cx)),
+        PreferencesSection::Extensions => {
+            main = main.child(preferences_page_link(
+                theme,
+                "Extensions",
+                "Extensions are installed and enabled by the active profile on the Extensions page.",
+                "preferences-open-extensions",
+                "Open Extensions",
+                ActiveView::Plugins,
+                cx,
+            ));
+        }
+        PreferencesSection::Skills => {
+            main = main.child(preferences_page_link(
+                theme,
+                "Skills",
+                "Skills available to this Session are listed on the Skills page.",
+                "preferences-open-skills",
+                "Open Skills",
+                ActiveView::Skills,
+                cx,
+            ));
+        }
+        PreferencesSection::Marketplace => {
+            main = main.child(preferences_page_link(
+                theme,
+                "Marketplace",
+                "Search configured indexes and install profile extensions from the Marketplace page.",
+                "preferences-open-marketplace",
+                "Open Marketplace",
+                ActiveView::Marketplace,
+                cx,
+            ));
+        }
+        PreferencesSection::About => main = main.child(preferences_about(app, theme, cx)),
+    }
+    main.into_any_element()
+}
+
+/// Section heading with the short description under it.
+fn preferences_page_head(theme: &Theme, title: &str, description: &str) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(theme.sp(5.))
+        .mb(theme.sp(24.))
+        .child(
+            div()
+                .text_size(theme.fs(18.))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .child(title.to_owned()),
+        )
+        .child(
+            div()
+                .text_size(theme.fs(11.5))
+                .text_color(theme.muted)
+                .child(description.to_owned()),
+        )
+        .into_any_element()
+}
+
+/// Startup, layout, updates, and the Host settings namespaces.
+fn preferences_general(
+    app: &mut DesktopApp,
+    theme: &Theme,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
     let explorer = app.show_explorer;
-    let accent = app.ui_preferences.accent_scheme;
     let restore_last_session = app.ui_preferences.restore_last_session;
+    let compact = app.ui_preferences.density == UiDensity::Compact;
+    let workspace_selected = app.selected_workspace.is_some();
     let message = app.preferences_message.clone();
     let update_status = app.update_status.clone();
     let checking = app.update_open_receiver.is_some();
     let connected = app.transport.is_some();
+    let settings_error = app.settings_error.clone();
+    let settings_loading = app.settings_loading;
     let namespaces = app
         .settings_description
         .as_ref()
@@ -204,12 +535,288 @@ fn settings(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let settings_error = app.settings_error.clone();
-    let settings_loading = app.settings_loading;
+
+    let mut content = div().flex().flex_col().gap(theme.sp(8.)).child(preferences_page_head(
+        theme,
+        "General",
+        "Startup, layout, updates, and the settings namespaces the Host reports.",
+    ));
+
+    content = content
+        .child(section(theme, "LAYOUT"))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(6.))
+                .child(line(theme, "Workspace Explorer"))
+                .child(
+                    widgets::Button::new(theme, if explorer { "Shown" } else { "Hidden" })
+                        .primary()
+                        .build()
+                        .id("pref-explorer")
+                        .on_click(cx.listener(move |app, _, window, cx| {
+                            app.update_preferences(window, |preferences| {
+                                preferences.show_workspace_explorer = !explorer;
+                            });
+                            app.show_explorer = !explorer;
+                            app.ui_preferences.show_workspace_explorer = !explorer;
+                            cx.notify();
+                        })),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(6.))
+                .child(line(theme, "Restore last Session"))
+                .child(
+                    widgets::Button::new(theme, if restore_last_session { "On" } else { "Off" })
+                        .build()
+                        .id("pref-restore-session")
+                        .debug_selector(|| "pref-restore-session".to_owned())
+                        .on_click(cx.listener(move |app, _, window, cx| {
+                            app.update_preferences(window, |preferences| {
+                                preferences.restore_last_session = !restore_last_session;
+                            });
+                            cx.notify();
+                        })),
+                ),
+        )
+        .child(line(
+            theme,
+            "Unsent composer text is kept per Session and saved with this client.",
+        ))
+        .when_some(message, |element, message| {
+            element.child(
+                div()
+                    .text_size(theme.fs(10.5))
+                    .text_color(theme.muted)
+                    .child(message),
+            )
+        })
+        .child(widgets::separator(theme))
+        .child(section(theme, "WORKSPACE APPEARANCE"))
+        .child(line(
+            theme,
+            match app.selected_workspace.as_deref() {
+                Some(id) => format!("Overrides for {id} (empty inherits global)"),
+                None => "Select a workspace in the Sessions panel to set its overrides.".to_owned(),
+            },
+        ))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(6.))
+                .child(line(theme, "Explorer"))
+                .child(
+                    widgets::Button::new(theme, if app.show_explorer { "Show" } else { "Hide" })
+                        .enabled(workspace_selected)
+                        .build()
+                        .id("pref-workspace-explorer")
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            let workspace = app.selected_workspace.clone();
+                            app.update_preferences(window, |preferences| {
+                                if let Some(id) = workspace {
+                                    let next = !preferences
+                                        .workspace_prefs(Some(&id))
+                                        .show_workspace_explorer
+                                        .unwrap_or(preferences.show_workspace_explorer);
+                                    preferences
+                                        .workspace_overrides
+                                        .entry(id)
+                                        .or_default()
+                                        .show_workspace_explorer = Some(next);
+                                }
+                            });
+                            let id = app.selected_workspace.clone();
+                            app.show_explorer = app
+                                .ui_preferences
+                                .workspace_prefs(id.as_deref())
+                                .show_workspace_explorer
+                                .unwrap_or(app.ui_preferences.show_workspace_explorer);
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    widgets::Button::new(theme, "Clear override")
+                        .enabled(workspace_selected)
+                        .build()
+                        .id("pref-workspace-clear")
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            let workspace = app.selected_workspace.clone();
+                            app.update_preferences(window, |preferences| {
+                                if let Some(id) = workspace {
+                                    preferences.workspace_overrides.remove(&id);
+                                }
+                            });
+                            cx.notify();
+                        })),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(6.))
+                .child(line(theme, "Density"))
+                .child(
+                    widgets::Button::new(theme, "Compact")
+                        .enabled(workspace_selected && !compact)
+                        .build()
+                        .id("pref-workspace-compact")
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            let workspace = app.selected_workspace.clone();
+                            app.update_preferences(window, |preferences| {
+                                if let Some(id) = workspace {
+                                    preferences
+                                        .workspace_overrides
+                                        .entry(id)
+                                        .or_default()
+                                        .density = Some(UiDensity::Compact);
+                                }
+                            });
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    widgets::Button::new(theme, "Clear density")
+                        .enabled(workspace_selected)
+                        .build()
+                        .id("pref-workspace-density-clear")
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            let workspace = app.selected_workspace.clone();
+                            app.update_preferences(window, |preferences| {
+                                if let Some(id) = workspace {
+                                    let remove = match preferences.workspace_overrides.get_mut(&id) {
+                                        Some(entry) => {
+                                            entry.density = None;
+                                            entry.theme.is_none()
+                                                && entry.session_panel_width.is_none()
+                                                && entry.show_workspace_explorer.is_none()
+                                                && entry.workspace_panel_width.is_none()
+                                                && entry.changes_panel_width.is_none()
+                                        }
+                                        None => false,
+                                    };
+                                    if remove {
+                                        preferences.workspace_overrides.remove(&id);
+                                    }
+                                }
+                            });
+                            cx.notify();
+                        })),
+                ),
+        )
+        .child(widgets::separator(theme))
+        .child(section(theme, "DESKTOP UPDATES"))
+        .child(line(
+            theme,
+            "Check the signed feed and confirm any download or installation here.",
+        ))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(6.))
+                .child(
+                    widgets::Button::new(theme, "Check for updates")
+                        .enabled(connected && !checking)
+                        .build()
+                        .id("pref-updates")
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.open_updates();
+                            cx.notify();
+                        })),
+                )
+                .when(checking, |element| element.child(line(theme, "Checking…")))
+                .when_some(update_status, |element, status| {
+                    element.child(line(theme, status))
+                }),
+        )
+        .child(widgets::separator(theme))
+        .child(section(theme, "HOST SETTINGS"))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(6.))
+                .child(
+                    widgets::Button::new(theme, "Refresh")
+                        .enabled(connected && !settings_loading)
+                        .build()
+                        .id("pref-refresh-settings")
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.refresh_settings();
+                            cx.notify();
+                        })),
+                )
+                .when(settings_loading, |element| element.child(line(theme, "Loading…")))
+                .when_some(settings_error, |element, error| {
+                    element.child(
+                        div()
+                            .text_size(theme.fs(10.5))
+                            .text_color(theme.error)
+                            .child(error),
+                    )
+                }),
+        );
+    if namespaces.is_empty() {
+        content = content.child(line(
+            theme,
+            if connected {
+                "No settings namespaces are reported yet."
+            } else {
+                "Connect to the Host to view or change agent and plugin settings."
+            },
+        ));
+    }
+    for (name, applies) in namespaces {
+        content = content.child(
+            div()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .text_size(theme.fs(11.))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(name),
+                )
+                .child(line(theme, applies)),
+        );
+    }
+    content.into_any_element()
+}
+
+/// Theme pack, accent family, density, and interface scale.
+fn preferences_appearance(
+    app: &mut DesktopApp,
+    theme: &Theme,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
+    // The preview follows the resolved scheme, so System mode and workspace
+    // overrides show the colours the shell is actually rendering.
+    let dark = theme.dark;
+    let compact = app.ui_preferences.density == UiDensity::Compact;
+    let scale = app.ui_preferences.ui_scale;
+    let accent = app.ui_preferences.accent_scheme;
     let theme_notice = theme.status.errors.join("; ");
 
-    let mut content = body(theme)
-        .child(section(theme, "Appearance"))
+    let mut content = div().flex().flex_col().gap(theme.sp(8.)).child(preferences_page_head(
+        theme,
+        "Appearance",
+        "Theme pack, accent, density, and text scale for the shell.",
+    ));
+    content = content
+        .child(section(theme, "COLOR"))
         .child(
             div()
                 .flex()
@@ -270,16 +877,17 @@ fn settings(
                         .collect::<Vec<_>>(),
                 ),
         )
-        .when(!theme_notice.is_empty(), |content| {
-            content.child(line(theme, theme_notice))
+        .when(!theme_notice.is_empty(), |element| {
+            element.child(line(theme, theme_notice))
         })
+        .child(section(theme, "ACCENT"))
         .child(
             div()
                 .flex()
                 .flex_row()
                 .items_center()
+                .flex_wrap()
                 .gap(theme.sp(6.))
-                .child(line(theme, "Accent"))
                 .child(accent_button(
                     theme,
                     "Harness",
@@ -317,53 +925,7 @@ fn settings(
                     cx,
                 )),
         )
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(theme.sp(6.))
-                .child(line(theme, "Keymap preset"))
-                .child(
-                    widgets::Button::new(theme, "DSH")
-                        .enabled(app.ui_preferences.keymap_preset != KeymapPreset::Dsh)
-                        .build()
-                        .id("pref-keymap-dsh")
-                        .on_click(cx.listener(|app, _, window, cx| {
-                            app.update_preferences(window, |preferences| {
-                                preferences.keymap_preset = KeymapPreset::Dsh;
-                                preferences.keybindings.apply_preset(KeymapPreset::Dsh);
-                            });
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    widgets::Button::new(theme, "Zed")
-                        .enabled(app.ui_preferences.keymap_preset != KeymapPreset::Zed)
-                        .build()
-                        .id("pref-keymap-zed")
-                        .on_click(cx.listener(|app, _, window, cx| {
-                            app.update_preferences(window, |preferences| {
-                                preferences.keymap_preset = KeymapPreset::Zed;
-                                preferences.keybindings.apply_preset(KeymapPreset::Zed);
-                            });
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    widgets::Button::new(theme, "VS Code")
-                        .enabled(app.ui_preferences.keymap_preset != KeymapPreset::Vscode)
-                        .build()
-                        .id("pref-keymap-vscode")
-                        .on_click(cx.listener(|app, _, window, cx| {
-                            app.update_preferences(window, |preferences| {
-                                preferences.keymap_preset = KeymapPreset::Vscode;
-                                preferences.keybindings.apply_preset(KeymapPreset::Vscode);
-                            });
-                            cx.notify();
-                        })),
-                ),
-        )
+        .child(section(theme, "DENSITY"))
         .child(
             div()
                 .flex()
@@ -396,6 +958,7 @@ fn settings(
                         })),
                 ),
         )
+        .child(section(theme, "SCALE"))
         .child(
             div()
                 .flex()
@@ -427,262 +990,144 @@ fn settings(
                             cx.notify();
                         })),
                 ),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(theme.sp(6.))
-                .child(line(theme, "Workspace Explorer"))
-                .child(
-                    widgets::Button::new(theme, if explorer { "Shown" } else { "Hidden" })
-                        .primary()
-                        .build()
-                        .id("pref-explorer")
-                        .on_click(cx.listener(move |app, _, window, cx| {
-                            app.update_preferences(window, |preferences| {
-                                preferences.show_workspace_explorer = !explorer;
-                            });
-                            app.show_explorer = !explorer;
-                            app.ui_preferences.show_workspace_explorer = !explorer;
-                            cx.notify();
-                        })),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(theme.sp(6.))
-                .child(line(theme, "Restore last Session"))
-                .child(
-                    widgets::Button::new(
-                        theme,
-                        if restore_last_session { "On" } else { "Off" },
-                    )
-                    .build()
-                    .id("pref-restore-session")
-                    .on_click(cx.listener(move |app, _, window, cx| {
-                        app.update_preferences(window, |preferences| {
-                            preferences.restore_last_session = !restore_last_session;
-                        });
-                        cx.notify();
-                    })),
-                ),
-        )
-        .child(line(
-            theme,
-            "Unsent composer text is kept per Session and saved with this client.",
-        ))
-        .when_some(message, |element, message| {
-            element.child(
-                div()
-                    .text_size(theme.fs(10.5))
-                    .text_color(theme.muted)
-                    .child(message),
-            )
-        })
-        .child(widgets::separator(theme))
-        .child(section(theme, "Workspace appearance"))
-        .child(line(
-            theme,
-            match app.selected_workspace.as_deref() {
-                Some(id) => format!("Overrides for {id} (empty inherits global)"),
-                None => "Select a workspace in the Sessions panel to set its overrides.".to_owned(),
-            },
-        ))
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(theme.sp(6.))
-                .child(line(theme, "Explorer"))
-                .child(
-                    widgets::Button::new(
-                        theme,
-                        if app.show_explorer { "Show" } else { "Hide" },
-                    )
-                    .enabled(app.selected_workspace.is_some())
-                    .build()
-                    .id("pref-workspace-explorer")
-                    .on_click(cx.listener(|app, _, window, cx| {
-                        let workspace = app.selected_workspace.clone();
-                        app.update_preferences(window, |preferences| {
-                            if let Some(id) = workspace {
-                                let next = !preferences
-                                    .workspace_prefs(Some(&id))
-                                    .show_workspace_explorer
-                                    .unwrap_or(preferences.show_workspace_explorer);
-                                preferences
-                                    .workspace_overrides
-                                    .entry(id)
-                                    .or_default()
-                                    .show_workspace_explorer = Some(next);
-                            }
-                        });
-                        let id = app.selected_workspace.clone();
-                        app.show_explorer = app
-                            .ui_preferences
-                            .workspace_prefs(id.as_deref())
-                            .show_workspace_explorer
-                            .unwrap_or(app.ui_preferences.show_workspace_explorer);
-                        cx.notify();
-                    })),
-                )
-                .child(
-                    widgets::Button::new(theme, "Clear override")
-                        .enabled(app.selected_workspace.is_some())
-                        .build()
-                        .id("pref-workspace-clear")
-                        .on_click(cx.listener(|app, _, window, cx| {
-                            let workspace = app.selected_workspace.clone();
-                            app.update_preferences(window, |preferences| {
-                                if let Some(id) = workspace {
-                                    preferences.workspace_overrides.remove(&id);
-                                }
-                            });
-                            cx.notify();
-                        })),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(theme.sp(6.))
-                .child(line(theme, "Density"))
-                .child(
-                    widgets::Button::new(theme, "Compact")
-                        .enabled(app.selected_workspace.is_some() && !compact)
-                        .build()
-                        .id("pref-workspace-compact")
-                        .on_click(cx.listener(|app, _, window, cx| {
-                            let workspace = app.selected_workspace.clone();
-                            app.update_preferences(window, |preferences| {
-                                if let Some(id) = workspace {
-                                    preferences
-                                        .workspace_overrides
-                                        .entry(id)
-                                        .or_default()
-                                        .density = Some(UiDensity::Compact);
-                                }
-                            });
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    widgets::Button::new(theme, "Clear density")
-                        .enabled(app.selected_workspace.is_some())
-                        .build()
-                        .id("pref-workspace-density-clear")
-                        .on_click(cx.listener(|app, _, window, cx| {
-                            let workspace = app.selected_workspace.clone();
-                            app.update_preferences(window, |preferences| {
-                                if let Some(id) = workspace {
-                                    let remove = match preferences.workspace_overrides.get_mut(&id) {
-                                        Some(entry) => {
-                                            entry.density = None;
-                                            entry.theme.is_none()
-                                                && entry.session_panel_width.is_none()
-                                                && entry.show_workspace_explorer.is_none()
-                                                && entry.workspace_panel_width.is_none()
-                                                && entry.changes_panel_width.is_none()
-                                        }
-                                        None => false,
-                                    };
-                                    if remove {
-                                        preferences.workspace_overrides.remove(&id);
-                                    }
-                                }
-                            });
-                            cx.notify();
-                        })),
-                ),
-        )
-        .child(widgets::separator(theme))
-        .child(section(theme, "Desktop updates"))
-        .child(line(
-            theme,
-            "Check the signed feed and confirm any download or installation here.",
-        ))
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(theme.sp(6.))
-                .child(
-                    widgets::Button::new(theme, "Check for updates")
-                        .enabled(connected && !checking)
-                        .build()
-                        .id("pref-updates")
-                        .on_click(cx.listener(|app, _, _, cx| {
-                            app.open_updates();
-                            cx.notify();
-                        })),
-                )
-                .when(checking, |element| element.child(line(theme, "Checking…")))
-                .when_some(update_status, |element, status| {
-                    element.child(line(theme, status))
-                }),
-        )
-        .child(widgets::separator(theme))
-        .child(section(theme, "Host settings"))
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(theme.sp(6.))
-                .child(
-                    widgets::Button::new(theme, "Refresh")
-                        .enabled(connected && !settings_loading)
-                        .build()
-                        .id("pref-refresh-settings")
-                        .on_click(cx.listener(|app, _, _, cx| {
-                            app.refresh_settings();
-                            cx.notify();
-                        })),
-                )
-                .when(settings_loading, |element| element.child(line(theme, "Loading…")))
-                .when_some(settings_error, |element, error| {
-                    element.child(
-                        div()
-                            .text_size(theme.fs(10.5))
-                            .text_color(theme.error)
-                            .child(error),
-                    )
-                }),
         );
-    if namespaces.is_empty() {
-        content = content.child(line(
-            theme,
-            if connected {
-                "No settings namespaces are reported yet."
-            } else {
-                "Connect to the Host to view or change agent and plugin settings."
-            },
-        ));
-    }
-    for (name, applies) in namespaces {
-        content = content.child(
-            div()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .text_size(theme.fs(11.))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child(name),
-                )
-                .child(line(theme, applies)),
-        );
-    }
     content.into_any_element()
+}
+
+/// Keyboard profile selection shared by the menu, palette, and dispatcher.
+fn preferences_keymap(
+    app: &mut DesktopApp,
+    theme: &Theme,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
+    let preset = app.ui_preferences.keymap_preset;
+    div()
+        .flex()
+        .flex_col()
+        .gap(theme.sp(8.))
+        .child(preferences_page_head(
+            theme,
+            "Keymap",
+            "Keyboard profiles applied to the commands in the menu and palette.",
+        ))
+        .child(section(theme, "PRESET"))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(6.))
+                .child(line(theme, "Keymap preset"))
+                .child(
+                    widgets::Button::new(theme, "DSH")
+                        .enabled(preset != KeymapPreset::Dsh)
+                        .build()
+                        .id("pref-keymap-dsh")
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            app.update_preferences(window, |preferences| {
+                                preferences.keymap_preset = KeymapPreset::Dsh;
+                                preferences.keybindings.apply_preset(KeymapPreset::Dsh);
+                            });
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    widgets::Button::new(theme, "Zed")
+                        .enabled(preset != KeymapPreset::Zed)
+                        .build()
+                        .id("pref-keymap-zed")
+                        .debug_selector(|| "pref-keymap-zed".to_owned())
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            app.update_preferences(window, |preferences| {
+                                preferences.keymap_preset = KeymapPreset::Zed;
+                                preferences.keybindings.apply_preset(KeymapPreset::Zed);
+                            });
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    widgets::Button::new(theme, "VS Code")
+                        .enabled(preset != KeymapPreset::Vscode)
+                        .build()
+                        .id("pref-keymap-vscode")
+                        .on_click(cx.listener(|app, _, window, cx| {
+                            app.update_preferences(window, |preferences| {
+                                preferences.keymap_preset = KeymapPreset::Vscode;
+                                preferences.keybindings.apply_preset(KeymapPreset::Vscode);
+                            });
+                            cx.notify();
+                        })),
+                ),
+        )
+        .into_any_element()
+}
+
+/// Section body that deep-links to one of the shell's full pages.
+///
+/// Extensions, Skills, and Marketplace keep their own page layout, so the
+/// overlay carries the navigation entry without duplicating their content.
+fn preferences_page_link(
+    theme: &Theme,
+    title: &str,
+    description: &str,
+    button_id: &'static str,
+    button_label: &'static str,
+    view: ActiveView,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
+    div()
+        .flex()
+        .flex_col()
+        .gap(theme.sp(10.))
+        .child(preferences_page_head(theme, title, description))
+        .child(
+            widgets::Button::new(theme, button_label)
+                .primary()
+                .build()
+                .id(button_id)
+                .debug_selector(move || format!("{button_id}-button"))
+                .on_click(cx.listener(move |app, _, _, cx| {
+                    app.switch_view(view);
+                    cx.notify();
+                })),
+        )
+        .into_any_element()
+}
+
+/// Client version, Host connection, and the About dialog entry point.
+fn preferences_about(
+    app: &mut DesktopApp,
+    theme: &Theme,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
+    let version = env!("CARGO_PKG_VERSION");
+    let host = app
+        .host_url
+        .clone()
+        .unwrap_or_else(|| "not connected".to_owned());
+    div()
+        .flex()
+        .flex_col()
+        .gap(theme.sp(8.))
+        .child(preferences_page_head(
+            theme,
+            "About",
+            "The native desktop client built over the Desktop Host API.",
+        ))
+        .child(section(theme, "APPLICATION"))
+        .child(line(theme, format!("Version · {version}")))
+        .child(line(theme, "Runtime · Rust + gpui shell over the Desktop Host API."))
+        .child(line(theme, format!("Host · {host}")))
+        .child(
+            widgets::Button::new(theme, "About DSH")
+                .build()
+                .id("pref-about-dialog")
+                .on_click(cx.listener(|app, _, _, cx| {
+                    app.show_about = true;
+                    cx.notify();
+                })),
+        )
+        .into_any_element()
 }
 
 fn plugins(
@@ -1937,4 +2382,151 @@ fn document(
 #[allow(dead_code)]
 fn explorer_min() -> f32 {
     layout::EXPLORER_MIN
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::command_registry::CommandId;
+    use crate::harness::Harness;
+
+    /// Selectors whose geometry must not move while the overlay is open.
+    const SHELL_SELECTORS: [&str; 6] = [
+        "shell-root",
+        "top-bar",
+        "explorer-panel",
+        "agent-column",
+        "changes-panel",
+        "bottom-bar",
+    ];
+
+    #[test]
+    fn preferences_overlay_centers_over_an_unchanged_shell() {
+        let mut harness = Harness::open(1366., 768.);
+        let before = harness.rect_report(&SHELL_SELECTORS);
+
+        harness.run_command(CommandId::ToggleSettings);
+        assert!(harness.with(|app, _| app.show_settings));
+
+        let root = harness.bounds("shell-root").expect("shell root renders");
+        let window = harness
+            .bounds("preferences-window")
+            .expect("Preferences window renders");
+        assert_eq!(f32::from(window.size.width), 910.);
+        assert_eq!(f32::from(window.size.height), 680.);
+        let centered_x = f32::from(root.origin.x)
+            + (f32::from(root.size.width) - f32::from(window.size.width)) / 2.;
+        let centered_y = f32::from(root.origin.y)
+            + (f32::from(root.size.height) - f32::from(window.size.height)) / 2.;
+        assert!((f32::from(window.origin.x) - centered_x).abs() <= 1.);
+        assert!((f32::from(window.origin.y) - centered_y).abs() <= 1.);
+
+        // The shell keeps its geometry and stays visible behind the backdrop.
+        let after = harness.rect_report(&SHELL_SELECTORS);
+        assert_eq!(before, after);
+        assert!(harness.bounds("explorer-panel").is_some());
+        assert!(harness.bounds("agent-column").is_some());
+        assert!(harness.bounds("changes-panel").is_some());
+
+        // Only the section body scrolls; the window itself stays fixed.
+        let main = harness
+            .bounds("preferences-main")
+            .expect("section body renders");
+        assert!(f32::from(main.size.height) < f32::from(window.size.height));
+    }
+
+    #[test]
+    fn preferences_navigation_lists_every_reference_section() {
+        let mut harness = Harness::open(1366., 768.);
+        harness.run_command(CommandId::ToggleSettings);
+        for selector in [
+            "preferences-nav-General",
+            "preferences-nav-Appearance",
+            "preferences-nav-Keymap",
+            "preferences-nav-Extensions",
+            "preferences-nav-Skills",
+            "preferences-nav-Marketplace",
+            "preferences-nav-About",
+        ] {
+            assert!(
+                harness.bounds(selector).is_some(),
+                "{selector} did not render"
+            );
+        }
+    }
+
+    #[test]
+    fn escape_and_the_backdrop_close_preferences() {
+        let mut harness = Harness::open(1366., 768.);
+        harness.run_command(CommandId::ToggleSettings);
+        harness.keys("escape");
+        assert!(!harness.with(|app, _| app.show_settings));
+
+        harness.run_command(CommandId::ToggleSettings);
+        harness.click_at(5., 5.);
+        assert!(!harness.with(|app, _| app.show_settings));
+    }
+
+    #[test]
+    fn preferences_restores_focus_to_the_input_that_opened_it() {
+        let mut harness = Harness::open(1366., 768.);
+        // The Document page renders its path input without a Host connection.
+        harness.with(|app, cx| {
+            app.switch_view(ActiveView::Document);
+            cx.notify();
+        });
+        harness.settle();
+        harness.focus_input("document-path");
+        assert!(harness.input_focused("document-path"));
+
+        harness.run_command(CommandId::ToggleSettings);
+        assert!(harness.preferences_focused());
+        assert!(!harness.input_focused("document-path"));
+
+        harness.keys("escape");
+        assert!(!harness.with(|app, _| app.show_settings));
+        assert!(harness.input_focused("document-path"));
+    }
+
+    #[test]
+    fn preferences_sections_keep_the_existing_actions() {
+        let mut harness = Harness::open(1366., 768.);
+        harness.run_command(CommandId::ToggleSettings);
+
+        harness.click("preferences-nav-Keymap");
+        assert_eq!(
+            harness.with(|app, _| app.preferences_section),
+            PreferencesSection::Keymap
+        );
+        assert!(harness.click("pref-keymap-zed"));
+        assert_eq!(
+            harness.with(|app, _| app.ui_preferences.keymap_preset),
+            KeymapPreset::Zed
+        );
+
+        harness.click("preferences-nav-General");
+        let restore = harness.with(|app, _| app.ui_preferences.restore_last_session);
+        harness.click("pref-restore-session");
+        assert_eq!(
+            harness.with(|app, _| app.ui_preferences.restore_last_session),
+            !restore
+        );
+        assert!(harness.with(|app, _| app.show_settings));
+    }
+
+    #[test]
+    fn preferences_window_fits_the_reference_insets_on_a_small_viewport() {
+        let mut harness = Harness::open(960., 620.);
+        harness.run_command(CommandId::ToggleSettings);
+        let root = harness.bounds("shell-root").expect("shell root renders");
+        let window = harness
+            .bounds("preferences-window")
+            .expect("Preferences window renders");
+        assert_eq!(f32::from(window.size.width), 900.);
+        assert_eq!(f32::from(window.size.height), 550.);
+        assert!(window.origin.x >= root.origin.x);
+        assert!(window.origin.y >= root.origin.y);
+        assert!(window.origin.x + window.size.width <= root.origin.x + root.size.width);
+        assert!(window.origin.y + window.size.height <= root.origin.y + root.size.height);
+    }
 }

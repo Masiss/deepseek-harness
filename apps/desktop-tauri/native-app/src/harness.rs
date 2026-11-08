@@ -20,6 +20,7 @@ pub struct Harness {
     app: Entity<DesktopApp>,
     visual: VisualTestContext,
     preferences: PathBuf,
+    keys_bound: bool,
 }
 
 impl Harness {
@@ -79,6 +80,7 @@ impl Harness {
             app,
             visual: visual.clone(),
             preferences,
+            keys_bound: false,
         }
     }
 
@@ -209,6 +211,86 @@ impl Harness {
             path.display()
         );
         expected
+    }
+
+    /// Draws pending state changes without changing the viewport.
+    pub fn settle(&mut self) {
+        self.visual.update(|window, _| window.refresh());
+        self.with(|_, cx| cx.notify());
+    }
+
+    /// Runs one shell command the way the menu, shortcut, or palette does.
+    ///
+    /// @param command - Command to run against the shell state.
+    pub fn run_command(&mut self, command: CommandId) {
+        self.with(|app, cx| {
+            app.run_command(command);
+            cx.notify();
+        });
+        self.visual.run_until_parked();
+    }
+
+    /// Sends a space-separated keystroke sequence to the focused element.
+    ///
+    /// @param keystrokes - gpui keystroke syntax, for example `"escape"`.
+    pub fn keys(&mut self, keystrokes: &str) {
+        if !self.keys_bound {
+            // The shipped app binds Escape in `shell::bind_shortcuts`; the
+            // harness installs the same binding before the first keystroke so
+            // Esc routing reaches the shell's `Dismiss` handler.
+            self.visual.update(|_, cx| {
+                cx.bind_keys(vec![gpui::KeyBinding::new(
+                    "escape",
+                    crate::shell::Dismiss,
+                    None,
+                )]);
+            });
+            self.keys_bound = true;
+        }
+        self.visual.simulate_keystrokes(keystrokes);
+        self.visual.run_until_parked();
+    }
+
+    /// Gives focus to a shell-owned input.
+    ///
+    /// @param key - Stable input key such as `"explorer-query"`.
+    pub fn focus_input(&mut self, key: &'static str) {
+        let Some(entity) = self.with(|app, _| app.inputs.get(key).cloned()) else {
+            return;
+        };
+        self.visual.update(|window, cx| {
+            entity.update(cx, |input, cx| input.focus(window, cx));
+        });
+    }
+
+    /// Whether one shell-owned input currently holds window focus.
+    ///
+    /// @param key - Stable input key such as `"explorer-query"`.
+    /// @returns `true` when the input is the window's focus owner.
+    pub fn input_focused(&mut self, key: &'static str) -> bool {
+        let Some(entity) = self.with(|app, _| app.inputs.get(key).cloned()) else {
+            return false;
+        };
+        self.visual
+            .update(|window, cx| entity.read(cx).is_focused(window))
+    }
+
+    /// Whether the Preferences window currently holds window focus.
+    ///
+    /// @returns `true` when the overlay is the window's focus owner.
+    pub fn preferences_focused(&mut self) -> bool {
+        let app = self.app.clone();
+        self.visual
+            .update(move |window, cx| app.read(cx).preferences_focus.is_focused(window))
+    }
+
+    /// Clicks one viewport position.
+    ///
+    /// @param x - Horizontal position in logical pixels.
+    /// @param y - Vertical position in logical pixels.
+    pub fn click_at(&mut self, x: f32, y: f32) {
+        self.visual.simulate_click(point(px(x), px(y)), Modifiers::none());
+        self.visual.run_until_parked();
     }
 
     /// Clicks the centre of one element.
@@ -461,17 +543,21 @@ mod surface_tests {
     use crate::command_registry::CommandId;
 
     #[test]
-    fn settings_page_replaces_the_conversation_and_both_docks() {
+    fn settings_overlay_keeps_the_shell_and_both_docks_visible_behind_it() {
         let mut harness = Harness::open_with(1440., 900., |app| {
             app.run_command(CommandId::ToggleSettings)
         });
         assert!(harness.bounds("shell-root").is_some());
         assert!(harness.bounds("top-bar").is_some());
-        // A page owns the body: both docks come from the agent layout only.
-        assert!(harness.bounds("explorer-panel").is_none());
-        assert!(harness.bounds("changes-panel").is_none());
-        let body = harness.bounds("agent-column").expect("body renders");
-        assert_eq!(f32::from(body.size.width), 1440.);
+        // Preferences is an overlay: the agent layout and its docks stay painted.
+        assert!(harness.bounds("explorer-panel").is_some());
+        assert!(harness.bounds("changes-panel").is_some());
+        assert!(harness.bounds("agent-column").is_some());
+        let overlay = harness
+            .bounds("preferences-window")
+            .expect("Preferences window renders");
+        assert!(f32::from(overlay.origin.x) > 0.);
+        assert!(f32::from(overlay.origin.y) > 0.);
     }
 
     #[test]

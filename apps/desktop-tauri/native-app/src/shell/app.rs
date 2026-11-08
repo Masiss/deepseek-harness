@@ -80,7 +80,7 @@ fn host_start_status(elapsed: std::time::Duration) -> String {
 use super::terminal_state::{append_bounded_output, PreviewScratchDirectory, TerminalPanel};
 use super::theme::Theme;
 use super::ShellServices;
-use gpui::{App, AppContext, Context, Window, WindowAppearance};
+use gpui::{App, AppContext, Context, FocusHandle, Window, WindowAppearance};
 
 enum PluginAction {
     SetPlugin { id: String, enabled: bool },
@@ -318,6 +318,18 @@ pub(crate) enum ActiveView {    Sessions,
     Skills,
     Marketplace,
     Goals,
+}
+
+/// Sections of the Preferences overlay, in navigation order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PreferencesSection {
+    General,
+    Appearance,
+    Keymap,
+    Extensions,
+    Skills,
+    Marketplace,
+    About,
 }
 
 /// Panel edge the user is dragging.
@@ -608,6 +620,16 @@ pub(crate) struct DesktopApp {
     pub(crate) settings_receiver: Option<mpsc::Receiver<Result<SettingsDescribeValue, Error>>>,
     pub(crate) settings_update_receiver: Option<mpsc::Receiver<Result<SettingsNamespaceView, Error>>>,
     pub(crate) show_settings: bool,
+    /// Section selected in the Preferences overlay's navigation column.
+    pub(crate) preferences_section: PreferencesSection,
+    /// Handle the Preferences window focuses while it is open.
+    pub(crate) preferences_focus: FocusHandle,
+    /// Input key focused when the overlay opened, restored when it closes.
+    pub(crate) preferences_focus_return: Option<String>,
+    /// Whether the next frame moves focus into the Preferences window.
+    pub(crate) focus_preferences: bool,
+    /// Whether the next frame returns focus to the owner captured at open.
+    pub(crate) restore_preferences_focus: bool,
     pub(crate) preview_document: Option<TextDocument>,
     pub(crate) preview_image: Option<ImageDocument>,
     pub(crate) preview_path: String,
@@ -1026,6 +1048,11 @@ impl DesktopApp {
             settings_receiver: None,
             settings_update_receiver: None,
             show_settings: false,
+            preferences_section: PreferencesSection::General,
+            preferences_focus: cx.focus_handle(),
+            preferences_focus_return: None,
+            focus_preferences: false,
+            restore_preferences_focus: false,
             preview_document: None,
             preview_image: None,
             preview_path: String::new(),
@@ -1313,12 +1340,29 @@ impl DesktopApp {
         self.sessions_receiver = Some(receiver);
     }
 
+    /// Opens the Preferences overlay without replacing the shell behind it.
     pub(crate) fn open_settings(&mut self) {
+        if !self.show_settings {
+            self.preferences_section = PreferencesSection::General;
+            self.focus_preferences = true;
+        }
         self.show_settings = true;
         if self.settings_description.is_some() || self.settings_loading {
             return;
         }
         self.refresh_settings();
+    }
+
+    /// Closes the Preferences overlay and schedules the focus return.
+    pub(crate) fn close_preferences(&mut self) {
+        if !self.show_settings {
+            return;
+        }
+        self.show_settings = false;
+        self.restore_preferences_focus = true;
+        if self.active_view == ActiveView::Settings {
+            self.active_view = ActiveView::Sessions;
+        }
     }
 
     /// Starts the Host-owned signed update flow from the native Settings page.
@@ -3606,9 +3650,14 @@ impl DesktopApp {
     pub(crate) fn switch_view(&mut self, view: ActiveView) {
         self.show_session_menu = false;
         self.show_about = false;
+        if view == ActiveView::Settings {
+            self.open_settings();
+            return;
+        }
+        self.close_preferences();
         self.active_view = view;
         self.explorer_fullscreen = view == ActiveView::Explorer;
-        self.show_settings = view == ActiveView::Settings;
+        self.show_settings = false;
         self.show_document = view == ActiveView::Document;
         self.show_plugins = view == ActiveView::Plugins;
         self.show_skills = view == ActiveView::Skills;
@@ -4674,8 +4723,11 @@ impl DesktopApp {
         self.show_about = false;
         match command {
             CommandId::ToggleSettings => {
-                self.show_settings = !self.show_settings;
-                self.active_view = ActiveView::Settings;
+                if self.show_settings {
+                    self.close_preferences();
+                } else {
+                    self.open_settings();
+                }
             }
             CommandId::ToggleMarketplace => {
                 self.show_market = !self.show_market;
@@ -4779,6 +4831,10 @@ impl DesktopApp {
         }
         if self.show_about {
             self.show_about = false;
+            return true;
+        }
+        if self.show_settings {
+            self.close_preferences();
             return true;
         }
         false
