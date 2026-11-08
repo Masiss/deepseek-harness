@@ -23,11 +23,8 @@ use super::app::{
 use super::render::dialog_shell;
 use super::theme::Theme;
 use super::widgets;
+use crate::layout;
 
-/// Height of the Changes review header, from the Git prototype (px).
-const CHANGES_HEADER_HEIGHT: f32 = 43.0;
-/// Height of the Changes view-tab row, from the Git prototype (px).
-const CHANGES_TAB_HEIGHT: f32 = 33.0;
 /// Height of one changed-file row (px).
 const REVIEW_ROW_HEIGHT: f32 = 22.0;
 /// Line-number gutter width (px).
@@ -1385,7 +1382,7 @@ fn review_header(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopAp
         .flex_row()
         .items_center()
         .justify_between()
-        .h(theme.sp(CHANGES_HEADER_HEIGHT))
+        .h(theme.sp(layout::CHANGES_HEADER_HEIGHT))
         .px(theme.sp(10.))
         .border_b_1()
         .border_color(theme.border)
@@ -1418,7 +1415,7 @@ fn view_tab_row(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp
         .flex_row()
         .items_center()
         .gap(theme.sp(2.))
-        .h(theme.sp(CHANGES_TAB_HEIGHT))
+        .h(theme.sp(layout::CHANGES_TAB_HEIGHT))
         .px(theme.sp(8.))
         .border_b_1()
         .border_color(theme.border)
@@ -1473,21 +1470,24 @@ struct GraphTheme {
     /// First lane colour.
     accent: Hsla,
     /// Second lane colour.
-    warn: Hsla,
+    success: Hsla,
     /// Third lane colour.
+    warn: Hsla,
+    /// Fourth lane colour.
     error: Hsla,
     /// Interface scale the stroke widths and radii follow.
     scale: f32,
 }
 
 impl GraphTheme {
-    /// Colour of one lane; the three state tokens cycle.
+    /// Colour of one lane; the four state tokens cycle.
     /// @param lane — lane index.
     /// @returns the lane's colour.
     fn lane(&self, lane: usize) -> Hsla {
-        match lane % 3 {
+        match lane % 4 {
             0 => self.accent,
-            1 => self.warn,
+            1 => self.success,
+            2 => self.warn,
             _ => self.error,
         }
     }
@@ -1534,6 +1534,7 @@ fn history_body(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp
         .unwrap_or_default();
     let graph_theme = GraphTheme {
         accent: theme.accent,
+        success: theme.success,
         warn: theme.warn,
         error: theme.error,
         scale: theme.scale,
@@ -4882,6 +4883,22 @@ mod tests {
         assert_eq!(layout.rows[2].lane, 1);
         assert_eq!(layout.rows[3].lane, 2);
         assert_eq!(layout.rows[4].joins, vec![1, 2]);
+    }
+
+    #[test]
+    fn history_lane_colours_cycle_the_four_state_tokens() {
+        let graph = GraphTheme {
+            accent: gpui::hsla(0.5, 1.0, 0.5, 1.0),
+            success: gpui::hsla(0.3, 1.0, 0.5, 1.0),
+            warn: gpui::hsla(0.1, 1.0, 0.5, 1.0),
+            error: gpui::hsla(0.0, 1.0, 0.5, 1.0),
+            scale: 1.0,
+        };
+        assert_eq!(graph.lane(0), graph.accent);
+        assert_eq!(graph.lane(1), graph.success);
+        assert_eq!(graph.lane(2), graph.warn);
+        assert_eq!(graph.lane(3), graph.error);
+        assert_eq!(graph.lane(4), graph.accent);
     }
 
     #[test]

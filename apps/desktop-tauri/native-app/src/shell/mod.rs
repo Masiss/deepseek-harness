@@ -63,7 +63,7 @@ pub(crate) struct ShellServices {
 pub(crate) fn run(services: ShellServices) {
     let preferences = UiPreferences::load(&services.ui_preferences_path).unwrap_or_default();
     let commands = services.commands.clone();
-    let app = Application::new();
+    let app = Application::new().with_assets(crate::assets::IconAssets);
     app.run(move |cx| {
         text_input::bind_keys(cx);
         bind_shortcuts(cx, &preferences, &commands);

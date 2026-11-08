@@ -839,6 +839,27 @@ mod surface_tests {
     }
 
     #[test]
+    fn chrome_buttons_draw_the_embedded_icon_family() {
+        let mut harness = Harness::open_with(1440., 900., |app| {
+            app.selected_session = Some("chrome-session".to_owned());
+        });
+        let menu = harness.bounds("icon-menu").expect("menu icon renders");
+        assert_eq!(f32::from(menu.size.width), 15.);
+        assert_eq!(f32::from(menu.size.height), 15.);
+        for selector in [
+            "icon-search",
+            "icon-panel-right",
+            "icon-branch",
+            "icon-sync",
+            "icon-ellipsis",
+            "icon-terminal",
+            "icon-warning",
+        ] {
+            assert!(harness.bounds(selector).is_some(), "{selector} renders");
+        }
+    }
+
+    #[test]
     fn explorer_dock_starts_with_the_tree_toolbar() {
         let mut harness = Harness::open_with(1440., 900., |app| {
             app.sessions = vec![session_summary("alpha", 10, "/work/alpha")];

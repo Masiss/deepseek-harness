@@ -3,6 +3,7 @@
 use gpui::{div, prelude::*, px, AnyElement, Context, StatefulInteractiveElement};
 
 use super::widgets;
+use crate::assets::Icon;
 use crate::explorer::{ExplorerRow, ExplorerRowKind};
 use crate::layout;
 use crate::shell::app::{ActiveView, DesktopApp};
@@ -73,7 +74,7 @@ pub(crate) fn tree_and_preview(
                     )),
             )
             .child(
-                widgets::Button::new(theme, "↻")
+                widgets::Button::icon_only(theme, Icon::Sync)
                     .enabled(transport.is_some())
                     .build()
                     .id("explorer-refresh")
@@ -242,12 +243,15 @@ fn tree_row(
                     }
                     cx.notify();
                 }))
-                .child(
-                    div()
-                        .text_size(theme.fs(9.))
-                        .text_color(theme.muted)
-                        .child(if expanded { "▾" } else { "▸" }),
-                )
+                .child(widgets::icon(
+                    if expanded {
+                        Icon::ChevronDown
+                    } else {
+                        Icon::ChevronRight
+                    },
+                    theme.sp(15.),
+                    theme.muted,
+                ))
                 .child(
                     div()
                         .text_size(theme.fs(11.5))
@@ -265,7 +269,7 @@ fn tree_row(
                 .items_center()
                 .w_full()
                 .min_h(theme.sp(22.))
-                .pl(indent + theme.sp(12.))
+                .pl(indent + theme.sp(19.))
                 .pr(theme.sp(6.))
                 .rounded(theme.corner())
                 .cursor_pointer()
@@ -322,21 +326,21 @@ fn tree_row(
             })
             .into_any_element(),
         ExplorerRowKind::Loading => div()
-            .pl(indent + theme.sp(12.))
+            .pl(indent + theme.sp(19.))
             .py(theme.sp(2.))
             .text_size(theme.fs(10.))
             .text_color(theme.muted)
             .child(row.label.clone())
             .into_any_element(),
         ExplorerRowKind::Symlink | ExplorerRowKind::Unsupported => div()
-            .pl(indent + theme.sp(12.))
+            .pl(indent + theme.sp(19.))
             .py(theme.sp(2.))
             .text_size(theme.fs(10.))
             .text_color(theme.muted)
             .child(row.label.clone())
             .into_any_element(),
         ExplorerRowKind::Notice => div()
-            .pl(indent + theme.sp(12.))
+            .pl(indent + theme.sp(19.))
             .py(theme.sp(2.))
             .text_size(theme.fs(10.))
             .text_color(theme.muted)
@@ -381,7 +385,7 @@ fn preview(
         );
     if let (Some(path), true) = (path.clone(), connected) {
         header = header.child(
-            widgets::Button::new(theme, "↻")
+            widgets::Button::icon_only(theme, Icon::Sync)
                 .build()
                 .id("explorer-reload-preview")
                 .on_click(cx.listener(move |app, _, _, cx| {

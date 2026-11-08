@@ -20,6 +20,7 @@ pub(crate) struct Theme {
     pub border: Hsla,
     pub warn: Hsla,
     pub error: Hsla,
+    pub success: Hsla,
     pub radius: f32,
     pub scale: f32,
     pub compact: bool,
@@ -75,6 +76,7 @@ impl Theme {
             border: convert(colors.border),
             warn: convert(colors.warning),
             error: convert(colors.danger),
+            success: convert(colors.success),
             radius: preferences.radius,
             scale: preferences.ui_scale,
             compact: preferences.density == UiDensity::Compact,
@@ -243,6 +245,31 @@ mod tests {
         assert_eq!(light.surface_raised, convert(Rgba8::rgb(0xf6, 0xf6, 0xf6)));
         assert_eq!(light.accent, convert(Rgba8::rgb(0xe9, 0x56, 0x18)));
         assert_eq!(light.accent_text, convert(Rgba8::rgb(0xa8, 0x3b, 0x10)));
+    }
+
+    #[test]
+    fn success_tracks_the_pack_role() {
+        let harness_dark = Theme::new(
+            &UiPreferences {
+                theme_id: "harness".to_owned(),
+                theme: ThemeMode::Dark,
+                ..UiPreferences::default()
+            },
+            false,
+        );
+        assert_eq!(
+            harness_dark.success,
+            convert(Rgba8::rgb(0x6f, 0xcf, 0x97))
+        );
+
+        let dsh_light = Theme::new(
+            &UiPreferences {
+                theme: ThemeMode::Light,
+                ..UiPreferences::default()
+            },
+            true,
+        );
+        assert_eq!(dsh_light.success, convert(Rgba8::rgb(0x1f, 0x7a, 0x4d)));
     }
 
     #[test]
