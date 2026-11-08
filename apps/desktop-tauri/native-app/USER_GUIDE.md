@@ -51,7 +51,7 @@ Bố cục gồm ba cột: **Explorer** bên trái, cột **Agent** ở giữa v
 
 Explorer tự ẩn khi cửa sổ hẹp hơn 1240 px và Changes cần tối thiểu 1180 px, để cột Agent giữ được chiều rộng đọc. Trong Explorer, ở chiều rộng không quá 900 px, panel hiển thị lần lượt cây thư mục hoặc phần xem tệp.
 
-Kéo vách phân cách giữa Explorer hoặc Changes với cột Agent để đổi chiều rộng; chiều rộng được lưu vào preferences khi thả tay. Panel Changes hiện chỉ hiển thị trạng thái trống vì Host chưa cung cấp diff.
+Kéo vách phân cách giữa Explorer hoặc Changes với cột Agent để đổi chiều rộng; chiều rộng được lưu vào preferences khi thả tay. Panel Changes đọc `git/status` và `git/diff` từ Host: header hiển thị số file và chip ahead/behind, tab **Files** nhóm **Staged / Changes / Untracked** với thống kê từng phía, chọn nhiều để stage/unstage/discard, còn tab **Diff** có công tắc Unstaged/Staged và từng hunk stage/unstage/discard qua `git/apply`. Thanh commit ở cuối panel dùng `git/commit` (kèm Amend và Sign-off khi Host cho phép). Nút **Review all** và trạng thái **Reviewed** chỉ lưu trong UI và tự đặt lại khi trạng thái Git của file đổi; mọi thao tác xoá đều hỏi xác nhận và không hiển thị kết quả trước khi Host trả lời.
 
 -----
 
