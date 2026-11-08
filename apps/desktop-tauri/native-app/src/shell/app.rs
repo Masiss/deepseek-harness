@@ -7867,11 +7867,17 @@ mod tests {
             branch: Some("main".to_owned()),
             commit: Some("abc1234".to_owned()),
             detached: false,
+            upstream: None,
+            ahead: 0,
+            behind: 0,
             files: vec![GitFile {
                 path: "a.txt".to_owned(),
                 status: "modified".to_owned(),
                 staged: false,
                 worktree: true,
+                orig_path: None,
+                additions: None,
+                deletions: None,
             }],
         };
         assert!(discard_confirmation_is_fresh(

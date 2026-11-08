@@ -16,6 +16,7 @@ pub struct GitBranch {
 
 /// One changed path from `git/status`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GitFile {
     pub path: String,
     pub status: String,
@@ -23,6 +24,15 @@ pub struct GitFile {
     pub staged: bool,
     #[serde(default)]
     pub worktree: bool,
+    /// Source path of a renamed or copied change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub orig_path: Option<String>,
+    /// Lines added against HEAD; absent for untracked and binary changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additions: Option<u64>,
+    /// Lines deleted against HEAD; absent for untracked and binary changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deletions: Option<u64>,
 }
 
 /// Result of `git/status`.
@@ -34,6 +44,15 @@ pub struct GitStatus {
     pub commit: Option<String>,
     #[serde(default)]
     pub detached: bool,
+    /// Upstream ref such as `origin/main`.
+    #[serde(default)]
+    pub upstream: Option<String>,
+    /// Commits the branch has that its upstream lacks.
+    #[serde(default)]
+    pub ahead: u64,
+    /// Commits the upstream has that the branch lacks.
+    #[serde(default)]
+    pub behind: u64,
     #[serde(default)]
     pub files: Vec<GitFile>,
 }
@@ -70,6 +89,84 @@ pub struct GitDiff {
 pub struct GitPathResult {
     pub path: String,
     pub operation: String,
+}
+
+/// Side of the repository a patch is applied to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GitApplyTarget {
+    /// The index.
+    Index,
+    /// The work tree.
+    Worktree,
+}
+
+/// Request for `git/apply`: one patch that changes exactly one path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitApplyRequest {
+    pub path: String,
+    pub patch: String,
+    pub target: GitApplyTarget,
+    /// Apply the patch backwards.
+    #[serde(default)]
+    pub reverse: bool,
+    /// Status the caller displayed; a different current status is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_status: Option<String>,
+}
+
+/// Result of `git/apply`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitApplyResult {
+    pub path: String,
+    /// Verb the applied patch settled: `stage`, `unstage`, `discard`, or `apply`.
+    pub operation: String,
+}
+
+/// Options for one `git/commit`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GitCommitOptions {
+    /// Replace the current commit instead of adding one.
+    pub amend: bool,
+    /// Append the committer's `Signed-off-by` trailer.
+    pub sign_off: bool,
+}
+
+/// One commit from `git/log`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitEntry {
+    pub oid: String,
+    #[serde(default)]
+    pub parents: Vec<String>,
+    #[serde(default)]
+    pub refs: Vec<String>,
+    pub subject: String,
+    pub author_name: String,
+    pub author_email: String,
+    /// Author instant as ISO 8601 with the author's UTC offset.
+    pub author_time: String,
+}
+
+/// One newest-first page of `git/log`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitLog {
+    #[serde(default)]
+    pub commits: Vec<GitCommitEntry>,
+    /// Whether the Host byte cap dropped older commits from the page.
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+/// Result of `git/show`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitShow {
+    /// Full object id the patch belongs to.
+    pub commit: String,
+    pub patch: String,
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 /// Result of one commit.
@@ -192,11 +289,86 @@ impl<'a> GitClient<'a> {
 
     /// Commits the staged index.
     pub fn commit(&self, session_id: impl Into<String>, message: impl Into<String>) -> Result<GitCommitResult, Error> {
+        self.commit_with_options(session_id, message, &GitCommitOptions::default())
+    }
+
+    /// Commits the staged index, optionally amending the current commit or signing it off.
+    pub fn commit_with_options(
+        &self,
+        session_id: impl Into<String>,
+        message: impl Into<String>,
+        options: &GitCommitOptions,
+    ) -> Result<GitCommitResult, Error> {
+        let mut request = serde_json::json!({ "message": message.into() });
+        if options.amend {
+            request["amend"] = serde_json::Value::Bool(true);
+        }
+        if options.sign_off {
+            request["signOff"] = serde_json::Value::Bool(true);
+        }
         self.call(
             "git/commit",
             serde_json::json!({
                 "gitWorkspaceScopeId": session_id.into(),
-                "request": { "message": message.into() },
+                "request": request,
+            }),
+        )
+    }
+
+    /// Applies one unified patch to the index or the work tree.
+    pub fn apply(
+        &self,
+        session_id: impl Into<String>,
+        request: &GitApplyRequest,
+    ) -> Result<GitApplyResult, Error> {
+        self.call(
+            "git/apply",
+            serde_json::json!({
+                "gitWorkspaceScopeId": session_id.into(),
+                "request": serde_json::to_value(request)?,
+            }),
+        )
+    }
+
+    /// Lists commit history newest first.
+    pub fn log(
+        &self,
+        session_id: impl Into<String>,
+        limit: Option<u32>,
+        skip: Option<u32>,
+    ) -> Result<GitLog, Error> {
+        let mut request = serde_json::Map::new();
+        if let Some(limit) = limit {
+            request.insert("limit".to_owned(), serde_json::Value::from(limit));
+        }
+        if let Some(skip) = skip {
+            request.insert("skip".to_owned(), serde_json::Value::from(skip));
+        }
+        self.call(
+            "git/log",
+            serde_json::json!({
+                "gitWorkspaceScopeId": session_id.into(),
+                "request": serde_json::Value::Object(request),
+            }),
+        )
+    }
+
+    /// Reads one commit's patch, optionally restricted to one path.
+    pub fn show(
+        &self,
+        session_id: impl Into<String>,
+        commit: impl Into<String>,
+        path: Option<String>,
+    ) -> Result<GitShow, Error> {
+        let mut request = serde_json::json!({ "commit": commit.into() });
+        if let Some(path) = path {
+            request["path"] = serde_json::Value::String(path);
+        }
+        self.call(
+            "git/show",
+            serde_json::json!({
+                "gitWorkspaceScopeId": session_id.into(),
+                "request": request,
             }),
         )
     }
@@ -218,7 +390,29 @@ impl<'a> GitClient<'a> {
 
     /// Pushes the current branch to its upstream.
     pub fn push(&self, session_id: impl Into<String>) -> Result<GitRemoteResult, Error> {
-        self.call("git/push", serde_json::json!({ "gitWorkspaceScopeId": session_id.into() }))
+        self.push_with_options(session_id, false)
+    }
+
+    /// Pushes the current branch, optionally publishing it upstream.
+    ///
+    /// Publishing requires a checked-out branch and an `origin` remote; the
+    /// Host refuses otherwise.
+    pub fn push_with_options(
+        &self,
+        session_id: impl Into<String>,
+        set_upstream: bool,
+    ) -> Result<GitRemoteResult, Error> {
+        let mut request = serde_json::Map::new();
+        if set_upstream {
+            request.insert("setUpstream".to_owned(), serde_json::Value::Bool(true));
+        }
+        self.call(
+            "git/push",
+            serde_json::json!({
+                "gitWorkspaceScopeId": session_id.into(),
+                "request": request,
+            }),
+        )
     }
 
     /// Rebases the current branch onto one local branch.
@@ -343,16 +537,111 @@ mod tests {
     }
 
     #[test]
-    fn serializes_checkout_request() {
-        assert_eq!(
-            serde_json::json!({
-                "gitWorkspaceScopeId": "s",
-                "request": { "branch": "feature" },
-            }),
-            serde_json::json!({
-                "gitWorkspaceScopeId": "s",
-                "request": { "branch": "feature" },
-            })
-        );
+    fn deserializes_status_details_and_totals() {
+        let status: GitStatus = serde_json::from_value(serde_json::json!({
+            "branch": "main",
+            "commit": "abc",
+            "detached": false,
+            "upstream": "origin/main",
+            "ahead": 2,
+            "behind": 3,
+            "files": [
+                {
+                    "path": "src/new.ts",
+                    "status": "renamed",
+                    "staged": true,
+                    "worktree": false,
+                    "origPath": "src/old.ts",
+                    "additions": 4,
+                    "deletions": 1,
+                },
+                {"path": "src/loose.ts", "status": "untracked", "staged": false, "worktree": true},
+            ],
+        }))
+        .unwrap();
+        assert_eq!(status.upstream.as_deref(), Some("origin/main"));
+        assert_eq!((status.ahead, status.behind), (2, 3));
+        assert_eq!(status.files[0].orig_path.as_deref(), Some("src/old.ts"));
+        assert_eq!(status.files[0].additions, Some(4));
+        assert_eq!(status.files[0].deletions, Some(1));
+        assert!(status.files[1].orig_path.is_none());
+        assert!(status.files[1].additions.is_none());
+    }
+
+    #[test]
+    fn defaults_status_details_absent_from_an_older_host() {
+        let status: GitStatus = serde_json::from_value(serde_json::json!({
+            "branch": "main",
+            "files": [{"path": "a.ts", "status": "modified"}],
+        }))
+        .unwrap();
+        assert!(status.upstream.is_none());
+        assert_eq!((status.ahead, status.behind), (0, 0));
+        assert!(status.files[0].orig_path.is_none());
+    }
+
+    #[test]
+    fn serializes_the_apply_request_onto_the_wire_fields() {
+        let request = GitApplyRequest {
+            path: "src/a.ts".to_owned(),
+            patch: "diff --git a/src/a.ts b/src/a.ts\n".to_owned(),
+            target: GitApplyTarget::Index,
+            reverse: true,
+            expected_status: Some("modified".to_owned()),
+        };
+        let wire = serde_json::to_value(&request).unwrap();
+        assert_eq!(wire["target"], serde_json::json!("index"));
+        assert_eq!(wire["reverse"], serde_json::json!(true));
+        assert_eq!(wire["expectedStatus"], serde_json::json!("modified"));
+        let round_trip: GitApplyRequest = serde_json::from_value(wire).unwrap();
+        assert_eq!(round_trip, request);
+    }
+
+    #[test]
+    fn serializes_an_apply_request_without_optional_fields() {
+        let request = GitApplyRequest {
+            path: "src/a.ts".to_owned(),
+            patch: "patch".to_owned(),
+            target: GitApplyTarget::Worktree,
+            reverse: false,
+            expected_status: None,
+        };
+        let wire = serde_json::to_value(&request).unwrap();
+        assert_eq!(wire["target"], serde_json::json!("worktree"));
+        assert!(wire.get("expectedStatus").is_none());
+    }
+
+    #[test]
+    fn deserializes_history_and_show_results() {
+        let log: GitLog = serde_json::from_value(serde_json::json!({
+            "commits": [{
+                "oid": "a".repeat(40),
+                "parents": ["b".repeat(40)],
+                "refs": ["HEAD", "main", "tag:v1.0.0"],
+                "subject": "second",
+                "authorName": "Ada",
+                "authorEmail": "ada@example.com",
+                "authorTime": "2026-11-08T10:00:00+07:00",
+            }],
+            "truncated": true,
+        }))
+        .unwrap();
+        assert!(log.truncated);
+        assert_eq!(log.commits[0].refs, ["HEAD", "main", "tag:v1.0.0"]);
+        assert_eq!(log.commits[0].author_time, "2026-11-08T10:00:00+07:00");
+
+        let show: GitShow = serde_json::from_value(serde_json::json!({
+            "commit": "a".repeat(40),
+            "patch": "diff --git a/a b/a\n",
+            "truncated": false,
+        }))
+        .unwrap();
+        assert!(!show.truncated);
+        let apply: GitApplyResult = serde_json::from_value(serde_json::json!({
+            "path": "a.ts",
+            "operation": "unstage",
+        }))
+        .unwrap();
+        assert_eq!(apply.operation, "unstage");
     }
 }
