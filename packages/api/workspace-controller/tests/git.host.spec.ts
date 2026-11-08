@@ -1,4 +1,5 @@
 /** Git Remote contract: porcelain parsing, repository status, and checkout. */
+import { existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -8,7 +9,18 @@ import SessionStore, { SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/ds
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { GitCommands, GitController, nativeGitRunner, parseGitBranches, parseGitStatus, type GitRunner } from '../src/git.ts'
+import {
+  GitCommands,
+  GitController,
+  nativeGitRunner,
+  normalizeGitRefs,
+  parseGitBranches,
+  parseGitLog,
+  parseGitNumstat,
+  parseGitStatus,
+  type GitRunner,
+  type GitRunResult,
+} from '../src/git.ts'
 
 const RUNNER = nativeGitRunner(10_000)
 const signal = (): AbortSignal => new AbortController().signal
@@ -59,6 +71,9 @@ describe('parseGitStatus', () => {
       branch: 'main',
       commit: 'abc123',
       detached: false,
+      upstream: 'origin/main',
+      ahead: 1,
+      behind: 0,
       files: [
         { path: 'src/app.ts', status: 'modified', staged: false, worktree: true },
         { path: 'notes.md', status: 'untracked', staged: false, worktree: true },
@@ -68,7 +83,12 @@ describe('parseGitStatus', () => {
 
   it('reports detached HEAD without inventing a branch', () => {
     const status = parseGitStatus('# branch.oid abc\0# branch.head (detached)\0')
-    expect(status).toMatchObject({ branch: null, commit: 'abc', detached: true })
+    expect(status).toMatchObject({ branch: null, commit: 'abc', detached: true, upstream: null, ahead: 0, behind: 0 })
+  })
+
+  it('reports behind-only divergence', () => {
+    const status = parseGitStatus('# branch.head main\0# branch.upstream origin/main\0# branch.ab +0 -3\0')
+    expect(status).toMatchObject({ upstream: 'origin/main', ahead: 0, behind: 3 })
   })
 
   it('reports an unborn branch with no commit', () => {
@@ -76,14 +96,16 @@ describe('parseGitStatus', () => {
     expect(status).toMatchObject({ branch: 'main', commit: null, detached: false })
   })
 
-  it('keeps a rename path and skips its original-path record', () => {
+  it('keeps a rename path, its original path, and skips that record', () => {
     const output = [
       '# branch.head main',
       '2 R. N... 100644 100644 100644 aaa bbb R100 new name.ts',
       'old name.ts',
       '',
     ].join('\0')
-    expect(parseGitStatus(output).files).toEqual([{ path: 'new name.ts', status: 'renamed', staged: true, worktree: false }])
+    expect(parseGitStatus(output).files).toEqual([
+      { path: 'new name.ts', status: 'renamed', staged: true, worktree: false, origPath: 'old name.ts' },
+    ])
   })
 
   it('classifies an unmerged path as a conflict', () => {
@@ -132,7 +154,7 @@ describe('GitCommands', () => {
     git(root, 'add', 'staged.ts')
     const status = await new GitCommands(RUNNER).status(root, signal())
     expect(status.files).toEqual(expect.arrayContaining([
-      { path: 'staged.ts', status: 'added', staged: true, worktree: false },
+      { path: 'staged.ts', status: 'added', staged: true, worktree: false, additions: 1, deletions: 0 },
       { path: 'loose.ts', status: 'untracked', staged: false, worktree: true },
     ]))
   })
@@ -222,6 +244,104 @@ describe('parseGitStatus edge cases', () => {
 
   it('rejects a truncated record', () => {
     expect(() => parseGitStatus('1 M. N...\0')).toThrow('truncated git status record')
+  })
+
+  it('rejects a malformed ahead/behind record', () => {
+    expect(() => parseGitStatus('# branch.ab +x -0\0')).toThrow('malformed git status ahead/behind record')
+  })
+
+  it('ignores a branch header it does not read', () => {
+    expect(parseGitStatus('# branch.unused x\0')).toMatchObject({ branch: null, upstream: null, ahead: 0, behind: 0 })
+  })
+
+  it('rejects a rename record without its original path', () => {
+    expect(() => parseGitStatus('# branch.head main\u00002 R. N... 100644 100644 100644 a b R100 file\0'))
+      .toThrow('truncated git status record')
+  })
+})
+
+describe('parseGitNumstat', () => {
+  it('reads counted paths and renames keyed by the new path', () => {
+    const output = ['12\t3\tsrc/app.ts', '0\t0\t', 'old.ts', 'new.ts', '1\t2\ta b.ts', ''].join('\0')
+    expect([...parseGitNumstat(output)]).toEqual([
+      ['src/app.ts', { additions: 12, deletions: 3 }],
+      ['new.ts', { additions: 0, deletions: 0 }],
+      ['a b.ts', { additions: 1, deletions: 2 }],
+    ])
+  })
+
+  it('reports a binary change without counts', () => {
+    expect(parseGitNumstat('-\t-\timage.png\0').get('image.png')).toEqual({ additions: null, deletions: null })
+  })
+
+  it('accepts output without a trailing NUL', () => {
+    expect(parseGitNumstat('12\t3\tsrc/app.ts').get('src/app.ts')).toEqual({ additions: 12, deletions: 3 })
+  })
+
+  it('rejects a record without its two count fields', () => {
+    expect(() => parseGitNumstat('12\tsrc/app.ts\0')).toThrow('malformed git numstat record')
+    expect(() => parseGitNumstat('notenumstat\0')).toThrow('malformed git numstat record: notenumstat')
+  })
+
+  it('rejects a count that is neither a number nor a binary marker', () => {
+    expect(() => parseGitNumstat('x\t3\tfile\0')).toThrow('malformed git numstat record: x')
+  })
+
+  it('rejects a rename record without both names', () => {
+    expect(() => parseGitNumstat('0\t0\t\0old.ts\0')).toThrow('truncated git numstat record')
+  })
+})
+
+describe('parseGitLog', () => {
+  /** One log record in the format the verb asks git for. */
+  const record = (oid: string, parents: string, refs: string, subject: string): string =>
+    `${oid}\0${parents}\0${refs}\0${subject}\0Ada\0ada@example.com\u00002026-11-08T10:00:00+07:00\u001e`
+
+  it('reads newest-first records with parents, refs, and the author instant', () => {
+    const output = `\n${record('a'.repeat(40), 'b'.repeat(40), 'HEAD -> main, origin/main', 'second')}\n`
+      + `${record('b'.repeat(40), '', 'tag: v1.0.0', 'first')}\n`
+    expect(parseGitLog(output)).toEqual([
+      {
+        oid: 'a'.repeat(40),
+        parents: ['b'.repeat(40)],
+        refs: ['HEAD', 'main', 'origin/main'],
+        subject: 'second',
+        authorName: 'Ada',
+        authorEmail: 'ada@example.com',
+        authorTime: '2026-11-08T10:00:00+07:00',
+      },
+      {
+        oid: 'b'.repeat(40),
+        parents: [],
+        refs: ['tag:v1.0.0'],
+        subject: 'first',
+        authorName: 'Ada',
+        authorEmail: 'ada@example.com',
+        authorTime: '2026-11-08T10:00:00+07:00',
+      },
+    ])
+  })
+
+  it('reads no commits from empty output', () => {
+    expect(parseGitLog('')).toEqual([])
+  })
+
+  it('rejects a truncated record', () => {
+    expect(() => parseGitLog(`${'a'.repeat(40)}\0\0HEAD\0subject\n`)).toThrow('truncated git log record')
+  })
+
+  it('rejects a record whose object id is not hexadecimal', () => {
+    expect(() => parseGitLog('nope\0\0HEAD\0subject\0Ada\0a@b\u00002026-11-08T10:00:00Z\u001e'))
+      .toThrow('malformed git log object id: nope')
+  })
+})
+
+describe('normalizeGitRefs', () => {
+  it('normalizes HEAD arrows, remote symbolic refs, tags, and empty decorations', () => {
+    expect(normalizeGitRefs('')).toEqual([])
+    expect(normalizeGitRefs('HEAD -> main')).toEqual(['HEAD', 'main'])
+    expect(normalizeGitRefs('origin/HEAD -> origin/main')).toEqual(['origin/main'])
+    expect(normalizeGitRefs('feature, tag: v1.2.3')).toEqual(['feature', 'tag:v1.2.3'])
   })
 })
 
@@ -361,6 +481,19 @@ describe('GitController Session scope', () => {
       const committed = await controller.commit(scope, { message: 'via controller' }, signal())
       expect(committed.commit).toMatch(/^[0-9a-f]{40}$/)
 
+      await writeFile(join(root, 'a.txt'), 'hunk\n')
+      const patch = (await controller.diff(scope, { path: 'a.txt', staged: false }, signal())).patch
+      await expect(controller.apply(scope, { path: 'a.txt', patch, target: 'index' }, signal()))
+        .resolves.toEqual({ path: 'a.txt', operation: 'stage' })
+      await expect(controller.apply(scope, { path: 'a.txt', patch, target: 'index', reverse: true }, signal()))
+        .resolves.toEqual({ path: 'a.txt', operation: 'unstage' })
+      await expect(controller.discard(scope, { path: 'a.txt' }, signal()))
+        .resolves.toEqual({ path: 'a.txt', operation: 'discard' })
+      const history = await controller.log(scope, { limit: 2 }, signal())
+      expect(history.commits[0]?.oid).toBe(committed.commit)
+      await expect(controller.show(scope, { commit: committed.commit }, signal()))
+        .resolves.toMatchObject({ commit: committed.commit, truncated: false })
+
       await expect(controller.state(scope, signal())).resolves.toEqual({ operation: 'none', conflicts: [] })
       await expect(controller.rebase(scope, { branch: 'main' }, signal()))
         .resolves.toMatchObject({ state: { operation: 'none' } })
@@ -376,7 +509,7 @@ describe('GitController Session scope', () => {
         .resolves.toMatchObject({ state: { operation: 'none' } })
       await expect(controller.fetch(scope, signal())).resolves.toMatchObject({ operation: 'fetch' })
       await expect(controller.pull(scope, signal())).resolves.toMatchObject({ operation: 'pull' })
-      await expect(controller.push(scope, signal())).resolves.toMatchObject({ operation: 'push' })
+      await expect(controller.push(scope, {}, signal())).resolves.toMatchObject({ operation: 'push' })
       await expect(rejected(controller.continueOperation(scope, signal())))
         .resolves.toMatchObject({ code: 'git/operation-refused' })
       await expect(rejected(controller.abortOperation(scope, signal())))
@@ -440,6 +573,33 @@ describe('GitCommands diff and index verbs', () => {
     await expect(new GitCommands(RUNNER).discard(root, { path: 'a.txt' }, signal()))
       .resolves.toEqual({ path: 'a.txt', operation: 'discard' })
     await expect(readFile(join(root, 'a.txt'), 'utf8')).resolves.toBe('one\n')
+  })
+
+  it('applies a work-tree patch to the index and unstages or discards it backwards', async () => {
+    await writeFile(join(root, 'a.txt'), 'two\n')
+    const commands = new GitCommands(RUNNER)
+    const patch = (await commands.diff(root, { path: 'a.txt', staged: false }, signal())).patch
+
+    await expect(commands.apply(root, { path: 'a.txt', patch, target: 'index' }, signal()))
+      .resolves.toEqual({ path: 'a.txt', operation: 'stage' })
+    expect((await commands.status(root, signal())).files[0]).toMatchObject({ staged: true, worktree: false })
+
+    await expect(commands.apply(root, { path: 'a.txt', patch, target: 'index', reverse: true }, signal()))
+      .resolves.toEqual({ path: 'a.txt', operation: 'unstage' })
+    expect((await commands.status(root, signal())).files[0]).toMatchObject({ staged: false, worktree: true })
+
+    await expect(commands.apply(root, { path: 'a.txt', patch, target: 'worktree', reverse: true }, signal()))
+      .resolves.toEqual({ path: 'a.txt', operation: 'discard' })
+    await expect(readFile(join(root, 'a.txt'), 'utf8')).resolves.toBe('one\n')
+  })
+
+  it('refuses a patch that no longer applies and leaves the index untouched', async () => {
+    await writeFile(join(root, 'a.txt'), 'two\n')
+    const commands = new GitCommands(RUNNER)
+    const patch = (await commands.diff(root, { path: 'a.txt', staged: false }, signal())).patch
+    await commands.apply(root, { path: 'a.txt', patch, target: 'index' }, signal())
+    await expect(commands.apply(root, { path: 'a.txt', patch, target: 'index' }, signal()))
+      .rejects.toMatchObject({ code: 'git/apply-refused' })
   })
 
   it('refuses a discard whose reviewed status no longer matches', async () => {
@@ -519,6 +679,366 @@ describe('GitCommands diff and index verbs', () => {
   })
 })
 
+describe('GitCommands status details', () => {
+  it('reports upstream divergence, rename sources, and summed line totals', async () => {
+    const calls: string[][] = []
+    const run: GitRunner = async (args) => {
+      calls.push([...args])
+      if (args[0] === 'status') {
+        return {
+          stdout: [
+            '# branch.oid abc123',
+            '# branch.head main',
+            '# branch.upstream origin/main',
+            '# branch.ab +2 -3',
+            '2 R. N... 100644 100644 100644 aaa bbb R100 new.ts',
+            'old.ts',
+            '1 .M N... 100644 100644 100644 aaa bbb plain.ts',
+            '',
+          ].join('\0'),
+          stderr: '',
+          exitCode: 0,
+        }
+      }
+      if (args.includes('--cached')) return { stdout: '0\t0\t\0old.ts\0new.ts\0', stderr: '', exitCode: 0 }
+      return { stdout: '4\t1\tplain.ts\0', stderr: '', exitCode: 0 }
+    }
+
+    const status = await new GitCommands(run).status('/repo', signal())
+    expect(status).toMatchObject({ branch: 'main', upstream: 'origin/main', ahead: 2, behind: 3 })
+    expect(status.files).toEqual([
+      { path: 'new.ts', status: 'renamed', staged: true, worktree: false, origPath: 'old.ts', additions: 0, deletions: 0 },
+      { path: 'plain.ts', status: 'modified', staged: false, worktree: true, additions: 4, deletions: 1 },
+    ])
+    expect(calls[1]).toContain('--cached')
+    expect(calls[2]).not.toContain('--cached')
+  })
+
+  it('omits totals for a binary change and maps a failed numstat to git/command-failed', async () => {
+    const binary: GitRunner = async args => args[0] === 'status'
+      ? { stdout: '1 .M N... 100644 100644 100644 aaa bbb image.png\0', stderr: '', exitCode: 0 }
+      : { stdout: '-\t-\timage.png\0', stderr: '', exitCode: 0 }
+    await expect(new GitCommands(binary).status('/repo', signal())).resolves.toMatchObject({
+      files: [{ path: 'image.png', status: 'modified', staged: false, worktree: true }],
+    })
+
+    const broken: GitRunner = async args => args[0] === 'status'
+      ? { stdout: '1 .M N... 100644 100644 100644 aaa bbb a.ts\0', stderr: '', exitCode: 0 }
+      : { stdout: '', stderr: 'boom', exitCode: 2 }
+    await expect(new GitCommands(broken).status('/repo', signal()))
+      .rejects.toMatchObject({ code: 'git/command-failed' })
+  })
+})
+
+describe('GitCommands patch application', () => {
+  /** One section that changes `src/app.ts` in a single hunk. */
+  const PATCH = [
+    'diff --git a/src/app.ts b/src/app.ts',
+    'index 1111111..2222222 100644',
+    '--- a/src/app.ts',
+    '+++ b/src/app.ts',
+    '@@ -1 +1 @@',
+    '-one',
+    '+two',
+    '',
+  ].join('\n')
+
+  /** Porcelain status naming one modified path. */
+  const CHANGED = ['# branch.head main', '1 .M N... 100644 100644 100644 aaa bbb src/app.ts', ''].join('\0')
+
+  /** A runner recording argv and answering `git status` plus every other command. */
+  function recordingRunner(
+    options: { status?: string; answer?: (call: number) => GitRunResult } = {},
+  ): { run: GitRunner; calls: string[][] } {
+    const calls: string[][] = []
+    const run: GitRunner = async (args) => {
+      calls.push([...args])
+      if (args[0] === 'status') return { stdout: options.status ?? CHANGED, stderr: '', exitCode: 0 }
+      return options.answer?.(calls.length) ?? { stdout: '', stderr: '', exitCode: 0 }
+    }
+    return { run, calls }
+  }
+
+  it('checks the patch, applies it to the index, and removes the temporary file', async () => {
+    const { run, calls } = recordingRunner()
+    await expect(new GitCommands(run).apply('/repo', { path: 'src/app.ts', patch: PATCH, target: 'index' }, signal()))
+      .resolves.toEqual({ path: 'src/app.ts', operation: 'stage' })
+    const applied = calls.filter(args => args[0] === 'apply')
+    expect(applied).toHaveLength(2)
+    expect(applied[0]?.slice(0, 3)).toEqual(['apply', '--cached', '--check'])
+    expect(applied[1]?.slice(0, 2)).toEqual(['apply', '--cached'])
+    const file = applied[0]?.at(-1) ?? ''
+    expect(file.endsWith('patch.diff')).toBe(true)
+    expect(existsSync(file)).toBe(false)
+  })
+
+  it.each([
+    ['stage', { target: 'index' }],
+    ['unstage', { target: 'index', reverse: true }],
+    ['discard', { target: 'worktree', reverse: true }],
+    ['apply', { target: 'worktree' }],
+  ] as const)('settles a %s request', async (operation, selection) => {
+    const { run } = recordingRunner()
+    await expect(new GitCommands(run).apply('/repo', { path: 'src/app.ts', patch: PATCH, ...selection }, signal()))
+      .resolves.toEqual({ path: 'src/app.ts', operation })
+  })
+
+  it('refuses a patch whose check fails with git stderr', async () => {
+    const { run, calls } = recordingRunner({ answer: () => ({ stdout: '', stderr: 'patch does not apply', exitCode: 1 }) })
+    const commands = new GitCommands(run)
+    const refused = commands.apply('/repo', { path: 'src/app.ts', patch: PATCH, target: 'index' }, signal())
+    await expect(refused).rejects.toMatchObject({ code: 'git/apply-refused' })
+    await expect(refused).rejects.toThrow('git apply check refused the patch for "src/app.ts": patch does not apply')
+    expect(calls.filter(args => args[0] === 'apply')).toHaveLength(1)
+  })
+
+  it('names the exit code when a refused patch carries no stderr', async () => {
+    const { run } = recordingRunner({ answer: () => ({ stdout: '', stderr: '', exitCode: 3 }) })
+    await expect(new GitCommands(run).apply('/repo', { path: 'src/app.ts', patch: PATCH, target: 'index' }, signal()))
+      .rejects.toThrow('refused the patch for "src/app.ts": exit 3')
+  })
+
+  it('reports a failed apply after the check passed', async () => {
+    const { run } = recordingRunner({
+      answer: call => call <= 2
+        ? { stdout: '', stderr: '', exitCode: 0 }
+        : { stdout: '', stderr: 'write failed', exitCode: 1 },
+    })
+    await expect(new GitCommands(run).apply('/repo', { path: 'src/app.ts', patch: PATCH, target: 'worktree' }, signal()))
+      .rejects.toThrow('git apply apply refused the patch for "src/app.ts": write failed')
+  })
+
+  it.each([
+    ['another path', PATCH.replaceAll('src/app.ts', 'src/other.ts'), 'another path or a rename'],
+    ['no section', 'not a patch\n', 'no diff --git header'],
+    ['a foreign --- header', PATCH.replace('--- a/src/app.ts', '--- a/src/other.ts'), 'its --- header'],
+    ['a foreign +++ header', PATCH.replace('+++ b/src/app.ts', '+++ b/src/other.ts'), 'its +++ header'],
+  ])('refuses a patch that names %s', async (_case, patch, detail) => {
+    const run = vi.fn<GitRunner>()
+    await expect(new GitCommands(run).apply('/repo', { path: 'src/app.ts', patch, target: 'index' }, signal()))
+      .rejects.toThrow(detail)
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it('refuses an empty patch and a patch past the byte cap', async () => {
+    const { run } = recordingRunner()
+    await expect(new GitCommands(run).apply('/repo', { path: 'src/app.ts', patch: ' \n', target: 'index' }, signal()))
+      .rejects.toThrow('the patch is empty')
+    await expect(new GitCommands(run, 16).apply('/repo', { path: 'src/app.ts', patch: PATCH, target: 'index' }, signal()))
+      .rejects.toThrow('the patch exceeds 16 bytes')
+  })
+
+  it('refuses a stale reviewed status and an ineligible path', async () => {
+    const { run } = recordingRunner()
+    const commands = new GitCommands(run)
+    await expect(commands.apply('/repo', {
+      path: 'src/app.ts', patch: PATCH, target: 'index', expectedStatus: 'deleted',
+    }, signal())).rejects.toThrow('changed from deleted to modified since review')
+    const loose = recordingRunner({ status: '? src/app.ts\0' })
+    await expect(new GitCommands(loose.run).apply('/repo', { path: 'src/app.ts', patch: PATCH, target: 'index' }, signal()))
+      .rejects.toMatchObject({ code: 'git/path-refused' })
+  })
+
+  it('refuses a path outside the repository before invoking git', async () => {
+    const run = vi.fn<GitRunner>()
+    await expect(new GitCommands(run).apply('/repo', { path: '../x', patch: PATCH, target: 'index' }, signal()))
+      .rejects.toMatchObject({ code: 'git/path-refused' })
+    expect(run).not.toHaveBeenCalled()
+  })
+})
+
+describe('GitCommands commit options', () => {
+  /** A runner recording argv and answering the commit and head lookup. */
+  function recordingRunner(): { run: GitRunner; calls: string[][] } {
+    const calls: string[][] = []
+    const run: GitRunner = async (args) => {
+      calls.push([...args])
+      return args[0] === 'rev-parse'
+        ? { stdout: 'abc123\n', stderr: '', exitCode: 0 }
+        : { stdout: '', stderr: '', exitCode: 0 }
+    }
+    return { run, calls }
+  }
+
+  it('passes amend and sign-off to git and returns the new head', async () => {
+    const { run, calls } = recordingRunner()
+    await expect(new GitCommands(run).commit('/repo', { message: ' fix\n', amend: true, signOff: true }, signal()))
+      .resolves.toEqual({ commit: 'abc123' })
+    expect(calls[0]).toEqual(['commit', '--amend', '--signoff', '-m', 'fix'])
+  })
+
+  it('commits without options by default', async () => {
+    const { run, calls } = recordingRunner()
+    await new GitCommands(run).commit('/repo', { message: 'plain' }, signal())
+    expect(calls[0]).toEqual(['commit', '-m', 'plain'])
+  })
+
+  it('signs the commit off when git records the trailer', async () => {
+    const directory = await scratch('dsh-git-signoff-')
+    try {
+      git(directory, 'init', '-b', 'main')
+      git(directory, 'config', 'user.email', 't@example.com')
+      git(directory, 'config', 'user.name', 't')
+      await writeFile(join(directory, 'a.txt'), 'a\n')
+      const commands = new GitCommands(RUNNER)
+      await commands.stage(directory, { path: 'a.txt' }, signal())
+      const signed = await commands.commit(directory, { message: 'signed', signOff: true }, signal())
+      expect(signed.commit).toMatch(/^[0-9a-f]{40}$/)
+      expect(git(directory, 'log', '-1', '--format=%B')).toContain('Signed-off-by: t <t@example.com>')
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('amends the last commit and refuses to amend an unborn HEAD', async () => {
+    const directory = await scratch('dsh-git-amend-')
+    try {
+      git(directory, 'init', '-b', 'main')
+      const commands = new GitCommands(RUNNER)
+      await expect(commands.commit(directory, { message: 'nothing yet', amend: true }, signal()))
+        .rejects.toMatchObject({ code: 'git/commit-refused' })
+      await writeFile(join(directory, 'a.txt'), 'a\n')
+      await commands.stage(directory, { path: 'a.txt' }, signal())
+      await commands.commit(directory, { message: 'first' }, signal())
+      const amended = await commands.commit(directory, { message: 'amended', amend: true }, signal())
+      expect(amended.commit).toMatch(/^[0-9a-f]{40}$/)
+      expect(git(directory, 'log', '-1', '--format=%s')).toBe('amended\n')
+      expect(git(directory, 'rev-list', '--count', 'HEAD')).toBe('1\n')
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('GitCommands publish', () => {
+  /** A runner answering status and the remote listing. */
+  function localRunner(status: string, remotes: string): GitRunner {
+    return async args => args[0] === 'status'
+      ? { stdout: status, stderr: '', exitCode: 0 }
+      : { stdout: remotes, stderr: '', exitCode: 0 }
+  }
+
+  it('pushes the current branch and records origin as its upstream', async () => {
+    const pushed: string[][] = []
+    const networkRun: GitRunner = async (args) => {
+      pushed.push([...args])
+      return { stdout: '', stderr: 'branch set up', exitCode: 0 }
+    }
+    const commands = new GitCommands(localRunner('# branch.head main\0', 'origin\nupstream\n'), 1024, networkRun, 1024)
+    await expect(commands.push('/repo', { setUpstream: true }, signal()))
+      .resolves.toEqual({ operation: 'push', summary: 'branch set up', truncated: false })
+    expect(pushed[0]).toEqual(['push', '--set-upstream', 'origin', 'main'])
+  })
+
+  it('refuses to publish a detached HEAD', async () => {
+    const run = vi.fn<GitRunner>()
+    const commands = new GitCommands(localRunner('# branch.head (detached)\0', 'origin\n'), 1024, run, 1024)
+    await expect(commands.push('/repo', { setUpstream: true }, signal()))
+      .rejects.toThrow('publishing needs a checked-out branch')
+    expect(run).not.toHaveBeenCalled()
+  })
+
+  it('refuses to publish without an origin remote', async () => {
+    const run = vi.fn<GitRunner>()
+    const commands = new GitCommands(localRunner('# branch.head main\0', 'upstream\n'), 1024, run, 1024)
+    await expect(commands.push('/repo', { setUpstream: true }, signal()))
+      .rejects.toMatchObject({ code: 'git/remote-failed' })
+    expect(run).not.toHaveBeenCalled()
+  })
+})
+
+describe('GitCommands log', () => {
+  /** One log record in the format the verb asks git for. */
+  function record(oid: string, subject: string): string {
+    return `${oid}\0\0HEAD -> main\0${subject}\0Ada\0ada@example.com\u00002026-11-08T10:00:00+07:00\u001e`
+  }
+
+  const FIRST = record('a'.repeat(40), 'first')
+  const SECOND = record('b'.repeat(40), 'second')
+
+  /** A runner recording argv and answering `git log` with one fixed page. */
+  function logRunner(output: string): { run: GitRunner; calls: string[][] } {
+    const calls: string[][] = []
+    const run: GitRunner = async (args) => {
+      calls.push([...args])
+      return { stdout: output, stderr: '', exitCode: 0 }
+    }
+    return { run, calls }
+  }
+
+  it('reads a capped page and defaults the page size', async () => {
+    const { run, calls } = logRunner(`\n${FIRST}\n${SECOND}\n`)
+    const commands = new GitCommands(run)
+    const page = await commands.log('/repo', {}, signal())
+    expect(page.truncated).toBe(false)
+    expect(page.commits.map(commit => commit.subject)).toEqual(['first', 'second'])
+    expect(calls[0]?.slice(0, 4)).toEqual(['log', '--no-color', '--max-count=50', '--skip=0'])
+    await commands.log('/repo', { limit: 500, skip: 5 }, signal())
+    expect(calls[1]?.slice(0, 4)).toEqual(['log', '--no-color', '--max-count=200', '--skip=5'])
+  })
+
+  it('drops commits past the configured byte cap', async () => {
+    const { run } = logRunner(`\n${FIRST}\n${SECOND}\n`)
+    await expect(new GitCommands(run, 1024, run, 1).log('/repo', {}, signal()))
+      .resolves.toEqual({ commits: [], truncated: true })
+  })
+
+  it.each([
+    [{ limit: 0 }, 'limit must be a positive safe integer'],
+    [{ limit: 1.5 }, 'limit must be a positive safe integer'],
+    [{ skip: -1 }, 'skip must be a non-negative safe integer'],
+  ])('refuses paging %o', async (request, message) => {
+    const run = vi.fn<GitRunner>()
+    await expect(new GitCommands(run).log('/repo', request, signal())).rejects.toThrow(message)
+    expect(run).not.toHaveBeenCalled()
+  })
+})
+
+describe('GitCommands show', () => {
+  const OID = 'a'.repeat(40)
+
+  /** A runner recording argv, resolving the commit, and answering the patch. */
+  function showRunner(patch: string): { run: GitRunner; calls: string[][] } {
+    const calls: string[][] = []
+    const run: GitRunner = async (args) => {
+      calls.push([...args])
+      return args[0] === 'rev-parse'
+        ? { stdout: `${OID}\n`, stderr: '', exitCode: 0 }
+        : { stdout: patch, stderr: '', exitCode: 0 }
+    }
+    return { run, calls }
+  }
+
+  it('resolves the commit and reads its patch, optionally for one path', async () => {
+    const { run, calls } = showRunner('diff --git a/a.ts b/a.ts\n')
+    const commands = new GitCommands(run)
+    await expect(commands.show('/repo', { commit: 'abc1234', path: 'a.ts' }, signal()))
+      .resolves.toEqual({ commit: OID, patch: 'diff --git a/a.ts b/a.ts\n', truncated: false })
+    expect(calls[0]).toEqual(['rev-parse', '--verify', 'abc1234^{commit}'])
+    expect(calls[1]).toEqual(['show', '--format=', '--no-color', '--no-ext-diff', OID, '--', 'a.ts'])
+    await commands.show('/repo', { commit: OID }, signal())
+    expect(calls[3]).toEqual(['show', '--format=', '--no-color', '--no-ext-diff', OID])
+  })
+
+  it('flags a patch past the configured byte cap', async () => {
+    const { run } = showRunner('x'.repeat(64))
+    const shown = await new GitCommands(run, 8).show('/repo', { commit: OID }, signal())
+    expect(shown.truncated).toBe(true)
+    expect(Buffer.byteLength(shown.patch, 'utf8')).toBeLessThanOrEqual(8)
+  })
+
+  it('refuses a commit that is not an object id and a path outside the repository', async () => {
+    const run = vi.fn<GitRunner>()
+    const commands = new GitCommands(run)
+    for (const commit of ['', 'zzzz', 'a'.repeat(65)]) {
+      await expect(commands.show('/repo', { commit }, signal())).rejects.toMatchObject({ code: 'gateway/bad-request' })
+    }
+    await expect(commands.show('/repo', { commit: OID, path: '../x' }, signal()))
+      .rejects.toMatchObject({ code: 'git/path-refused' })
+    expect(run).not.toHaveBeenCalled()
+  })
+})
+
 describe('GitCommands remote verbs', () => {
   let sandbox: string
   let remote: string
@@ -560,7 +1080,7 @@ describe('GitCommands remote verbs', () => {
     await writeFile(join(root, 'c.txt'), 'local\n')
     git(root, 'add', 'c.txt')
     git(root, 'commit', '-m', 'local change')
-    await expect(commands.push(root, signal())).resolves.toMatchObject({ operation: 'push' })
+    await expect(commands.push(root, {}, signal())).resolves.toMatchObject({ operation: 'push' })
     expect(git(remote, 'rev-parse', 'main').trim()).toBe(git(root, 'rev-parse', 'HEAD').trim())
   })
 
@@ -577,12 +1097,12 @@ describe('GitCommands remote verbs', () => {
 
     const commands = new GitCommands(RUNNER)
     await expect(commands.pull(root, signal())).rejects.toMatchObject({ code: 'git/remote-diverged' })
-    await expect(commands.push(root, signal())).rejects.toMatchObject({ code: 'git/remote-diverged' })
+    await expect(commands.push(root, {}, signal())).rejects.toMatchObject({ code: 'git/remote-diverged' })
   })
 
   it('reports a branch without upstream', async () => {
     git(root, 'checkout', '-b', 'feature')
-    await expect(new GitCommands(RUNNER).push(root, signal()))
+    await expect(new GitCommands(RUNNER).push(root, {}, signal()))
       .rejects.toMatchObject({ code: 'git/remote-no-upstream' })
   })
 

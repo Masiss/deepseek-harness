@@ -297,11 +297,20 @@ Host service backing the generated `ctx.remote.git` namespace.
 @Remote('discard') discard( gitWorkspaceScope: GitWorkspaceScope, request: GitPathRequest, signal: AbortSignal, ): Promise<GitPathValue>
 
 /**
+ * Apply one unified patch to the index or the work tree.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param request - path, patch, target side, direction, and stale-review guard.
+ * @param signal - caller cancellation.
+ * @returns the settled path and verb.
+ */
+@Remote('apply') apply( gitWorkspaceScope: GitWorkspaceScope, request: GitApplyRequest, signal: AbortSignal, ): Promise<GitApplyValue>
+
+/**
  * Commit the staged index.
  * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
- * @param request - non-blank commit message.
+ * @param request - non-blank commit message and amend or sign-off options.
  * @param signal - caller cancellation.
- * @returns the new commit's full object id.
+ * @returns the new or amended commit's full object id.
  */
 @Remote('commit') commit( gitWorkspaceScope: GitWorkspaceScope, request: GitCommitRequest, signal: AbortSignal, ): Promise<GitCommitValue>
 
@@ -322,12 +331,31 @@ Host service backing the generated `ctx.remote.git` namespace.
 @Remote('pull') pull(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitRemoteValue>
 
 /**
+ * List commit history newest first.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param request - page size and commits to skip.
+ * @param signal - caller cancellation.
+ * @returns commits with their parents and normalized refs.
+ */
+@Remote('log') log( gitWorkspaceScope: GitWorkspaceScope, request: GitLogRequest, signal: AbortSignal, ): Promise<GitLogValue>
+
+/**
+ * Read one commit's patch.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param request - commit id and optional path.
+ * @param signal - caller cancellation.
+ * @returns the resolved object id and its capped patch.
+ */
+@Remote('show') show( gitWorkspaceScope: GitWorkspaceScope, request: GitShowRequest, signal: AbortSignal, ): Promise<GitShowValue>
+
+/**
  * Push the current branch to its upstream.
  * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param request - whether to publish the branch and record its upstream.
  * @param signal - caller cancellation.
  * @returns git's own summary.
  */
-@Remote('push') push(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitRemoteValue>
+@Remote('push') push( gitWorkspaceScope: GitWorkspaceScope, request: GitPushRequest, signal: AbortSignal, ): Promise<GitRemoteValue>
 
 /**
  * Read the repository's multi-step operation and conflicts.

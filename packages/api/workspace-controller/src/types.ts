@@ -70,6 +70,8 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'git/checkout-refused': { readonly branch: string }
     /** The path is outside the repository, not currently changed, or not eligible for the verb. */
     'git/path-refused': { readonly path: string }
+    /** The patch is empty, too large, names another path, or git refused to apply it. */
+    'git/apply-refused': { readonly path: string }
     /** The commit message is blank or git refused the commit. */
     'git/commit-refused': Record<string, never>
     /** The remote action failed for a reason git reported. */
@@ -231,6 +233,18 @@ export interface GitChangedFile {
   readonly staged: boolean
   /** Whether the work tree differs from the index, so the path has an unstaged change. */
   readonly worktree: boolean
+  /**
+   * Source path of a renamed or copied change, relative to the repository
+   * root; absent for every other kind.
+   */
+  readonly origPath?: string
+  /**
+   * Lines the path adds against HEAD, summing its index and work-tree sides;
+   * absent for an untracked path, an ignored path, or a binary change.
+   */
+  readonly additions?: number
+  /** Lines the path deletes against HEAD, absent under the same rules as {@link additions}. */
+  readonly deletions?: number
 }
 
 /** Working-tree state of the Session's repository. */
@@ -241,6 +255,12 @@ export interface GitStatusValue {
   readonly commit: string | null
   /** Whether HEAD points at a commit rather than a branch. */
   readonly detached: boolean
+  /** Upstream ref such as `origin/main`, or null when the branch has no upstream. */
+  readonly upstream: string | null
+  /** Commits the branch has that its upstream lacks; 0 without an upstream. */
+  readonly ahead: number
+  /** Commits the upstream has that the branch lacks; 0 without an upstream. */
+  readonly behind: number
   /** Changed paths in git's output order. */
   readonly files: readonly GitChangedFile[]
 }
@@ -315,16 +335,117 @@ export interface GitPathValue {
   readonly operation: 'stage' | 'unstage' | 'discard'
 }
 
+/** Side of the repository a patch is applied to. */
+export type GitApplyTarget = 'index' | 'worktree'
+
+/** Patch requested for one changed path. */
+export interface GitApplyRequest {
+  /** Path relative to the repository root, as reported by {@link GitChangedFile.path}. */
+  readonly path: string
+  /** Unified patch that changes that path and nothing else. */
+  readonly patch: string
+  /** Apply to the index or to the work tree. */
+  readonly target: GitApplyTarget
+  /** Apply the patch backwards, undoing the changes it contains. */
+  readonly reverse?: boolean
+  /** Status the caller displayed before a destructive patch; a different current status answers `git/path-refused`. */
+  readonly expectedStatus?: string
+}
+
+/**
+ * Verb one applied patch settles. `stage`, `unstage`, and `discard` name the
+ * same outcomes as the whole-path verbs; `apply` is a forward patch applied to
+ * the work tree, which no whole-path verb expresses.
+ */
+export type GitApplyOperation = 'stage' | 'unstage' | 'discard' | 'apply'
+
+/** Result of one applied patch. */
+export interface GitApplyValue {
+  /** Path the patch applied to. */
+  readonly path: string
+  /** Verb the applied patch settled. */
+  readonly operation: GitApplyOperation
+}
+
 /** Commit requested for the staged index. */
 export interface GitCommitRequest {
   /** Non-blank commit message. */
   readonly message: string
+  /** Replace the current commit instead of adding one; an unborn HEAD answers `git/commit-refused`. */
+  readonly amend?: boolean
+  /** Append the committer's `Signed-off-by` trailer to the message. */
+  readonly signOff?: boolean
 }
 
 /** Result of a committed index. */
 export interface GitCommitValue {
   /** Full object id of the new commit. */
   readonly commit: string
+}
+
+/** One commit listed by `git/log`. */
+export interface GitCommitEntry {
+  /** Full object id. */
+  readonly oid: string
+  /** Full object ids of the parents, empty for a root commit. */
+  readonly parents: readonly string[]
+  /**
+   * Decorations normalized to `HEAD`, a local or remote branch name such as
+   * `main` or `origin/main`, or `tag:<name>`.
+   */
+  readonly refs: readonly string[]
+  /** First line of the commit message. */
+  readonly subject: string
+  /** Author name as recorded in the commit. */
+  readonly authorName: string
+  /** Author email as recorded in the commit. */
+  readonly authorEmail: string
+  /** Author instant as ISO 8601 with the author's UTC offset. */
+  readonly authorTime: string
+}
+
+/** History page requested from `git/log`. */
+export interface GitLogRequest {
+  /** Newest-first commit count; defaults to 50 and is capped at 200. */
+  readonly limit?: number
+  /** Commits to skip from HEAD; defaults to 0. */
+  readonly skip?: number
+}
+
+/** One newest-first page of commit history. */
+export interface GitLogValue {
+  /** Commits from newest to oldest. */
+  readonly commits: readonly GitCommitEntry[]
+  /** Whether the configured byte cap dropped older commits that the page requested. */
+  readonly truncated: boolean
+}
+
+/** One commit's patch requested from `git/show`. */
+export interface GitShowRequest {
+  /** Abbreviated or full object id, 4 to 64 hexadecimal digits. */
+  readonly commit: string
+  /** Restrict the patch to one repository-relative path. */
+  readonly path?: string
+}
+
+/** One commit's patch. */
+export interface GitShowValue {
+  /** Full object id the patch belongs to. */
+  readonly commit: string
+  /** Unified patch without the commit message header, or the empty string for an empty change. */
+  readonly patch: string
+  /** Whether the configured byte cap dropped the tail of {@link patch}. */
+  readonly truncated: boolean
+}
+
+/** Options for one push. */
+export interface GitPushRequest {
+  /**
+   * Publish the current branch to the repository's `origin` remote and record
+   * it as the branch's upstream. A detached HEAD or a repository without
+   * `origin` answers `git/remote-failed`.
+   */
+  readonly setUpstream?: boolean
 }
 
 /** Explicit remote action run against the repository. */

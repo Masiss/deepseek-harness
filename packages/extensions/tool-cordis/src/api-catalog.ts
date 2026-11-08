@@ -1630,10 +1630,16 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the settled path and verb.',
       },
       {
+        signature: '@Remote(\'apply\') apply( gitWorkspaceScope: GitWorkspaceScope, request: GitApplyRequest, signal: AbortSignal, ): Promise<GitApplyValue>',
+        description: 'Apply one unified patch to the index or the work tree.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'path, patch, target side, direction, and stale-review guard.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the settled path and verb.',
+      },
+      {
         signature: '@Remote(\'commit\') commit( gitWorkspaceScope: GitWorkspaceScope, request: GitCommitRequest, signal: AbortSignal, ): Promise<GitCommitValue>',
         description: 'Commit the staged index.',
-        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'non-blank commit message.' }, { name: 'signal', description: 'caller cancellation.' }],
-        returns: 'the new commit\'s full object id.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'non-blank commit message and amend or sign-off options.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the new or amended commit\'s full object id.',
       },
       {
         signature: '@Remote(\'fetch\') fetch(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitRemoteValue>',
@@ -1648,9 +1654,21 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'git\'s own summary.',
       },
       {
-        signature: '@Remote(\'push\') push(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitRemoteValue>',
+        signature: '@Remote(\'log\') log( gitWorkspaceScope: GitWorkspaceScope, request: GitLogRequest, signal: AbortSignal, ): Promise<GitLogValue>',
+        description: 'List commit history newest first.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'page size and commits to skip.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'commits with their parents and normalized refs.',
+      },
+      {
+        signature: '@Remote(\'show\') show( gitWorkspaceScope: GitWorkspaceScope, request: GitShowRequest, signal: AbortSignal, ): Promise<GitShowValue>',
+        description: 'Read one commit\'s patch.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'commit id and optional path.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the resolved object id and its capped patch.',
+      },
+      {
+        signature: '@Remote(\'push\') push( gitWorkspaceScope: GitWorkspaceScope, request: GitPushRequest, signal: AbortSignal, ): Promise<GitRemoteValue>',
         description: 'Push the current branch to its upstream.',
-        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'signal', description: 'caller cancellation.' }],
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'whether to publish the branch and record its upstream.' }, { name: 'signal', description: 'caller cancellation.' }],
         returns: 'git\'s own summary.',
       },
       {
@@ -6832,6 +6850,22 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GenericResultView {\n    card: \'generic\';\n    title?: string;\n    content?: ContentBlock[];\n}',
   },
   {
+    name: 'GitApplyOperation',
+    declaration: 'export type GitApplyOperation = \'stage\' | \'unstage\' | \'discard\' | \'apply\';',
+  },
+  {
+    name: 'GitApplyRequest',
+    declaration: 'export interface GitApplyRequest {\n    readonly path: string;\n    readonly patch: string;\n    readonly target: GitApplyTarget;\n    readonly reverse?: boolean;\n    readonly expectedStatus?: string;\n}',
+  },
+  {
+    name: 'GitApplyTarget',
+    declaration: 'export type GitApplyTarget = \'index\' | \'worktree\';',
+  },
+  {
+    name: 'GitApplyValue',
+    declaration: 'export interface GitApplyValue {\n    readonly path: string;\n    readonly operation: GitApplyOperation;\n}',
+  },
+  {
     name: 'GitBranch',
     declaration: 'export interface GitBranch {\n    readonly name: string;\n    readonly commit: string;\n    readonly current: boolean;\n}',
   },
@@ -6841,7 +6875,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'GitChangedFile',
-    declaration: 'export interface GitChangedFile {\n    readonly path: string;\n    readonly status: GitChangeStatus;\n    readonly staged: boolean;\n    readonly worktree: boolean;\n}',
+    declaration: 'export interface GitChangedFile {\n    readonly path: string;\n    readonly status: GitChangeStatus;\n    readonly staged: boolean;\n    readonly worktree: boolean;\n    readonly origPath?: string;\n    readonly additions?: number;\n    readonly deletions?: number;\n}',
   },
   {
     name: 'GitChangeStatus',
@@ -6860,8 +6894,12 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GitCherryPickRequest {\n    readonly commit: string;\n}',
   },
   {
+    name: 'GitCommitEntry',
+    declaration: 'export interface GitCommitEntry {\n    readonly oid: string;\n    readonly parents: readonly string[];\n    readonly refs: readonly string[];\n    readonly subject: string;\n    readonly authorName: string;\n    readonly authorEmail: string;\n    readonly authorTime: string;\n}',
+  },
+  {
     name: 'GitCommitRequest',
-    declaration: 'export interface GitCommitRequest {\n    readonly message: string;\n}',
+    declaration: 'export interface GitCommitRequest {\n    readonly message: string;\n    readonly amend?: boolean;\n    readonly signOff?: boolean;\n}',
   },
   {
     name: 'GitCommitValue',
@@ -6874,6 +6912,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GitDiffValue',
     declaration: 'export interface GitDiffValue {\n    readonly path: string;\n    readonly staged: boolean;\n    readonly patch: string;\n    readonly truncated: boolean;\n    readonly untracked: boolean;\n}',
+  },
+  {
+    name: 'GitLogRequest',
+    declaration: 'export interface GitLogRequest {\n    readonly limit?: number;\n    readonly skip?: number;\n}',
+  },
+  {
+    name: 'GitLogValue',
+    declaration: 'export interface GitLogValue {\n    readonly commits: readonly GitCommitEntry[];\n    readonly truncated: boolean;\n}',
   },
   {
     name: 'GitMergeRequest',
@@ -6900,6 +6946,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GitPathValue {\n    readonly path: string;\n    readonly operation: \'stage\' | \'unstage\' | \'discard\';\n}',
   },
   {
+    name: 'GitPushRequest',
+    declaration: 'export interface GitPushRequest {\n    readonly setUpstream?: boolean;\n}',
+  },
+  {
     name: 'GitRebaseRequest',
     declaration: 'export interface GitRebaseRequest {\n    readonly branch: string;\n}',
   },
@@ -6916,8 +6966,16 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GitRevertRequest {\n    readonly commit: string;\n}',
   },
   {
+    name: 'GitShowRequest',
+    declaration: 'export interface GitShowRequest {\n    readonly commit: string;\n    readonly path?: string;\n}',
+  },
+  {
+    name: 'GitShowValue',
+    declaration: 'export interface GitShowValue {\n    readonly commit: string;\n    readonly patch: string;\n    readonly truncated: boolean;\n}',
+  },
+  {
     name: 'GitStatusValue',
-    declaration: 'export interface GitStatusValue {\n    readonly branch: string | null;\n    readonly commit: string | null;\n    readonly detached: boolean;\n    readonly files: readonly GitChangedFile[];\n}',
+    declaration: 'export interface GitStatusValue {\n    readonly branch: string | null;\n    readonly commit: string | null;\n    readonly detached: boolean;\n    readonly upstream: string | null;\n    readonly ahead: number;\n    readonly behind: number;\n    readonly files: readonly GitChangedFile[];\n}',
   },
   {
     name: 'GitWorkspaceScope',
