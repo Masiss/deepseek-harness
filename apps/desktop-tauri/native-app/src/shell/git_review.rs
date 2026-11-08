@@ -15,7 +15,9 @@ use gpui::{
     Hsla, PathBuilder, Pixels, TextAlign, Window,
 };
 
-use super::app::{ChangesTab, DesktopApp, GitCommitAction, GitConfirmation};
+use super::app::{
+    ChangesTab, DesktopApp, GitBranchAction, GitCommitAction, GitConfirmation, GitRemoteAction,
+};
 use super::render::dialog_shell;
 use super::theme::Theme;
 use super::widgets;
@@ -396,13 +398,21 @@ fn push_blocker(commit: Option<&'static str>, upstream: Option<&str>, behind: u6
     }
     match upstream {
         None => Some(
-            "Publishing a branch needs an upstream; that flow lands in G3.".to_owned(),
+            "No upstream branch; use Push and set upstream in the sync menu.".to_owned(),
         ),
         Some(_) if behind > 0 => Some(format!(
-            "The upstream has {behind} newer commit(s); pull before pushing (G3)."
+            "The upstream has {behind} newer commit(s); pull before pushing."
         )),
         Some(_) => None,
     }
+}
+
+/// Ahead and behind counts the status bar shows next to the branch.
+///
+/// @param status — latest `git/status`.
+/// @returns `(ahead, behind)` when either count is nonzero.
+pub(crate) fn ahead_behind(status: &GitStatus) -> Option<(u64, u64)> {
+    (status.ahead > 0 || status.behind > 0).then_some((status.ahead, status.behind))
 }
 
 /// One-line tooltip text for the ahead/behind chip.
@@ -410,11 +420,518 @@ fn push_blocker(commit: Option<&'static str>, upstream: Option<&str>, behind: u6
 /// @param behind — commits the upstream has that the branch lacks.
 /// @param upstream — upstream ref, when the branch has one.
 /// @returns the chip's description.
-fn sync_tooltip(ahead: u64, behind: u64, upstream: Option<&str>) -> String {
+pub(crate) fn sync_tooltip(ahead: u64, behind: u64, upstream: Option<&str>) -> String {
     match upstream {
         Some(upstream) => format!("{ahead} ahead · {behind} behind {upstream}"),
         None => format!("{ahead} ahead · {behind} behind · no upstream branch"),
     }
+}
+
+/// One menu row action, or its disabled state with the reason it cannot run.
+///
+/// @param theme - Resolved theme snapshot.
+/// @param label - Text the row shows.
+/// @param selector - Stable element id and debug selector.
+/// @param enabled - Whether the action can start now.
+/// @param reason - Named reason shown while the action is disabled.
+/// @param cx - Context the click listener registers on.
+/// @param action - State change the row performs.
+/// @returns The row element.
+fn menu_action(
+    theme: &Theme,
+    label: &str,
+    selector: String,
+    enabled: bool,
+    reason: Option<String>,
+    cx: &mut Context<DesktopApp>,
+    action: impl Fn(&mut DesktopApp) + 'static,
+) -> AnyElement {
+    let debug = selector.clone();
+    let mut element = div()
+        .id(gpui::SharedString::from(selector))
+        .debug_selector(move || debug.clone())
+        .px(theme.sp(6.))
+        .py(px(2.))
+        .rounded(theme.corner())
+        .text_size(theme.fs(10.))
+        .text_color(if enabled { theme.text } else { theme.muted })
+        .child(label.to_owned());
+    if enabled {
+        element = element
+            .cursor_pointer()
+            .hover(|style| style.bg(theme.surface_raised))
+            .on_click(cx.listener(move |app, _, _, cx| {
+                action(app);
+                cx.notify();
+            }));
+    } else {
+        element = element.opacity(0.45).tooltip(widgets::HintView::tooltip(
+            theme,
+            reason.unwrap_or_else(|| "This action is unavailable.".to_owned()),
+        ));
+    }
+    element.into_any_element()
+}
+
+/// Bottom-left popover shell shared by the branch and sync menus.
+///
+/// The backdrop covers the window so a click outside the panel closes the menu,
+/// and the panel sits above the status bar instead of reflowing it.
+///
+/// @param theme - Resolved theme snapshot.
+/// @param backdrop - Debug selector of the full-window backdrop.
+/// @param panel - Debug selector of the menu panel.
+/// @param body - Menu contents.
+/// @param cx - Context used for the backdrop click.
+/// @returns The overlay element.
+fn git_menu_shell(
+    theme: &Theme,
+    backdrop: &'static str,
+    panel: &'static str,
+    body: AnyElement,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
+    div()
+        .absolute()
+        .inset_0()
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .id(backdrop)
+                .debug_selector(move || backdrop.to_owned())
+                .on_click(cx.listener(|app, _, _, cx| {
+                    app.git_menu = None;
+                    cx.notify();
+                })),
+        )
+        .child(
+            div()
+                .absolute()
+                .bottom(theme.sp(crate::layout::BOTTOM_BAR_HEIGHT + 2.))
+                .left(theme.sp(8.))
+                .flex()
+                .flex_col()
+                .w(theme.sp(360.))
+                .max_h(theme.sp(420.))
+                .id(gpui::SharedString::from(panel))
+                .overflow_y_scroll()
+                .rounded(theme.corner())
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.surface_raised)
+                .shadow_lg()
+                .debug_selector(move || panel.to_owned())
+                .child(body),
+        )
+        .into_any_element()
+}
+
+/// Branch menu opened from the status-bar branch label.
+///
+/// Lists the Host's local branches, marks the checked-out one, and routes
+/// checkout, merge, rebase, cherry-pick, and revert through the existing verbs.
+/// Detached-HEAD and dirty-tree refusals reach the menu as the Host text.
+///
+/// @param app - Shell state holding the branch list and the pending operation banner.
+/// @param theme - Resolved theme snapshot.
+/// @param cx - Context the menu rows register listeners on.
+/// @returns The overlay element.
+pub(super) fn branch_menu(
+    app: &mut DesktopApp,
+    theme: &Theme,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
+    let status = app.git_status.clone();
+    let branches = app.git_branches.clone();
+    let blocker = app.git_action_blocker();
+    let current = branches
+        .as_ref()
+        .and_then(|list| list.current.clone())
+        .or_else(|| status.as_ref().and_then(|status| status.branch.clone()));
+    let mut body = div()
+        .flex()
+        .flex_col()
+        .gap(theme.sp(3.))
+        .p(theme.sp(5.))
+        .text_size(theme.fs(10.5))
+        .child(widgets::section_label(theme, "BRANCHES"));
+    if let Some(status) = status.as_ref() {
+        let head = status.commit.as_deref().map(short_commit).unwrap_or("HEAD");
+        if status.detached {
+            body = body.child(
+                div()
+                    .debug_selector(|| "git-branch-menu-detached".to_owned())
+                    .text_color(theme.warn)
+                    .child(format!("Detached HEAD at {head}")),
+            );
+        } else if let Some(branch) = status.branch.as_deref() {
+            body = body.child(div().text_color(theme.muted).child(format!(
+                "On {branch} · {}",
+                sync_tooltip(status.ahead, status.behind, status.upstream.as_deref())
+            )));
+        } else {
+            body = body.child(div().text_color(theme.muted).child("No branch checked out"));
+        }
+    }
+    if let Some(reason) = blocker.clone() {
+        body = body.child(
+            div()
+                .debug_selector(|| "git-branch-menu-blocker".to_owned())
+                .text_size(theme.fs(9.5))
+                .text_color(theme.warn)
+                .child(reason),
+        );
+    }
+    match branches {
+        Some(list) if !list.branches.is_empty() => {
+            let mut rows = div().flex().flex_col().gap(px(1.));
+            for branch in &list.branches {
+                let name = branch.name.clone();
+                let commit = branch.commit.clone();
+                let is_current = branch.current || current.as_deref() == Some(name.as_str());
+                let mut actions = div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(theme.sp(1.));
+                if is_current {
+                    let revert_name = name.clone();
+                    let revert_commit = commit.clone();
+                    actions = actions.child(menu_action(
+                        theme,
+                        "Revert tip",
+                        format!("git-branch-menu-revert-{name}"),
+                        blocker.is_none(),
+                        blocker.clone(),
+                        cx,
+                        move |app| {
+                            app.request_git_branch_action(
+                                revert_name.clone(),
+                                revert_commit.clone(),
+                                GitBranchAction::Revert,
+                            )
+                        },
+                    ));
+                } else {
+                    let checkout_name = name.clone();
+                    actions = actions.child(menu_action(
+                        theme,
+                        "Checkout",
+                        format!("git-branch-menu-checkout-{name}"),
+                        blocker.is_none(),
+                        blocker.clone(),
+                        cx,
+                        move |app| app.checkout_git_branch(checkout_name.clone()),
+                    ));
+                    let merge_name = name.clone();
+                    let merge_commit = commit.clone();
+                    actions = actions.child(menu_action(
+                        theme,
+                        "Merge",
+                        format!("git-branch-menu-merge-{name}"),
+                        blocker.is_none(),
+                        blocker.clone(),
+                        cx,
+                        move |app| {
+                            app.request_git_branch_action(
+                                merge_name.clone(),
+                                merge_commit.clone(),
+                                GitBranchAction::Merge,
+                            )
+                        },
+                    ));
+                    let rebase_name = name.clone();
+                    let rebase_commit = commit.clone();
+                    actions = actions.child(menu_action(
+                        theme,
+                        "Rebase",
+                        format!("git-branch-menu-rebase-{name}"),
+                        blocker.is_none(),
+                        blocker.clone(),
+                        cx,
+                        move |app| {
+                            app.request_git_branch_action(
+                                rebase_name.clone(),
+                                rebase_commit.clone(),
+                                GitBranchAction::Rebase,
+                            )
+                        },
+                    ));
+                    let pick_name = name.clone();
+                    let pick_commit = commit.clone();
+                    actions = actions.child(menu_action(
+                        theme,
+                        "Cherry-pick",
+                        format!("git-branch-menu-pick-{name}"),
+                        blocker.is_none(),
+                        blocker.clone(),
+                        cx,
+                        move |app| {
+                            app.request_git_branch_action(
+                                pick_name.clone(),
+                                pick_commit.clone(),
+                                GitBranchAction::CherryPick,
+                            )
+                        },
+                    ));
+                }
+                rows = rows.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .justify_between()
+                        .gap(theme.sp(4.))
+                        .px(theme.sp(4.))
+                        .py(px(2.))
+                        .rounded(theme.corner())
+                        .when(is_current, |element| element.bg(theme.selection))
+                        .id(gpui::SharedString::from(format!("git-branch-menu-{name}")))
+                        .debug_selector({
+                            let row_name = name.clone();
+                            move || format!("git-branch-menu-{row_name}")
+                        })
+                        .child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(theme.sp(4.))
+                                .child(
+                                    div()
+                                        .w(theme.sp(10.))
+                                        .text_color(if is_current {
+                                            theme.accent
+                                        } else {
+                                            theme.muted
+                                        })
+                                        .when(is_current, |element| {
+                                            let marker_name = name.clone();
+                                            element.debug_selector(move || {
+                                                format!("git-branch-menu-current-{marker_name}")
+                                            })
+                                        })
+                                        .child(if is_current { "●" } else { "" }),
+                                )
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_color(if is_current { theme.accent } else { theme.text })
+                                        .child(name),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(theme.fs(9.))
+                                        .text_color(theme.muted)
+                                        .child(short_commit(&branch.commit).to_owned()),
+                                ),
+                        )
+                        .child(actions),
+                );
+            }
+            body = body.child(rows);
+        }
+        Some(_) => {
+            body = body.child(
+                div()
+                    .text_size(theme.fs(10.))
+                    .text_color(theme.muted)
+                    .child("This repository has no local branches yet."),
+            );
+        }
+        None if app.git_loading => {
+            body = body.child(
+                div()
+                    .text_size(theme.fs(10.))
+                    .text_color(theme.muted)
+                    .child("Reading branches…"),
+            );
+        }
+        None => {
+            body = body.child(
+                div()
+                    .text_size(theme.fs(10.))
+                    .text_color(theme.muted)
+                    .child("Branch list not loaded."),
+            );
+        }
+    }
+    body = body
+        .child(menu_action(
+            theme,
+            "Refresh",
+            "git-branch-menu-refresh".to_owned(),
+            !app.git_loading,
+            app.git_loading
+                .then(|| "A Git request is running; wait for its result.".to_owned()),
+            cx,
+            |app| app.refresh_git_branches(),
+        ))
+        .children(operation_banner(app, theme, cx))
+        .children(app.git_error.as_ref().map(|error| {
+            div()
+                .debug_selector(|| "git-branch-menu-error".to_owned())
+                .child(error_line(theme, error))
+        }));
+    git_menu_shell(
+        theme,
+        "git-branch-menu-backdrop",
+        "git-branch-menu",
+        body.into_any_element(),
+        cx,
+    )
+}
+
+/// Sync menu opened from the status-bar sync icon.
+///
+/// Fetch, pull, push, and publish are disabled with a named reason while one
+/// Git verb runs, and the panel shows only the Host's own summary or error.
+///
+/// @param app - Shell state holding the status, the summary, and the in-flight action.
+/// @param theme - Resolved theme snapshot.
+/// @param cx - Context the menu rows register listeners on.
+/// @returns The overlay element.
+pub(super) fn sync_menu(
+    app: &mut DesktopApp,
+    theme: &Theme,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
+    let status = app.git_status.clone();
+    let blocker = app.git_action_blocker();
+    let enabled = blocker.is_none();
+    let mut body = div()
+        .flex()
+        .flex_col()
+        .gap(theme.sp(3.))
+        .p(theme.sp(5.))
+        .text_size(theme.fs(10.5))
+        .child(widgets::section_label(theme, "SYNC"));
+    if let Some(status) = status.as_ref() {
+        let branch = match (&status.branch, status.detached) {
+            (Some(branch), _) => branch.clone(),
+            (None, true) => format!(
+                "detached {}",
+                status.commit.as_deref().map(short_commit).unwrap_or("HEAD")
+            ),
+            _ => "No branch".to_owned(),
+        };
+        body = body.child(
+            div()
+                .text_color(theme.text)
+                .child(branch)
+                .child(
+                    div()
+                        .text_size(theme.fs(9.5))
+                        .text_color(theme.muted)
+                        .child(match status.upstream.as_deref() {
+                            Some(upstream) => format!("upstream {upstream}"),
+                            None => "No upstream branch".to_owned(),
+                        }),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(theme.sp(4.))
+                        .text_size(theme.fs(9.5))
+                        .id("git-sync-counts")
+                        .tooltip(widgets::HintView::tooltip(
+                            theme,
+                            sync_tooltip(
+                                status.ahead,
+                                status.behind,
+                                status.upstream.as_deref(),
+                            ),
+                        ))
+                        .children((status.ahead > 0).then(|| {
+                            div()
+                                .debug_selector(|| "git-sync-ahead".to_owned())
+                                .text_color(theme.accent)
+                                .child(format!("↑{}", status.ahead))
+                        }))
+                        .children((status.behind > 0).then(|| {
+                            div()
+                                .debug_selector(|| "git-sync-behind".to_owned())
+                                .text_color(theme.warn)
+                                .child(format!("↓{}", status.behind))
+                        })),
+                ),
+        );
+    } else {
+        body = body.child(
+            div()
+                .text_size(theme.fs(10.))
+                .text_color(theme.muted)
+                .child("Repository status is not loaded yet."),
+        );
+    }
+    if let Some(reason) = blocker.clone() {
+        body = body.child(
+            div()
+                .debug_selector(|| "git-sync-blocker".to_owned())
+                .text_size(theme.fs(9.5))
+                .text_color(theme.warn)
+                .child(reason),
+        );
+    }
+    body = body
+        .child(menu_action(
+            theme,
+            "Fetch",
+            "git-sync-fetch".to_owned(),
+            enabled,
+            blocker.clone(),
+            cx,
+            |app| app.run_git_remote(GitRemoteAction::Fetch),
+        ))
+        .child(menu_action(
+            theme,
+            "Pull (fast-forward only)",
+            "git-sync-pull".to_owned(),
+            enabled,
+            blocker.clone(),
+            cx,
+            |app| app.run_git_remote(GitRemoteAction::Pull),
+        ))
+        .child(menu_action(
+            theme,
+            "Push",
+            "git-sync-push".to_owned(),
+            enabled,
+            blocker.clone(),
+            cx,
+            |app| app.request_git_push(false),
+        ))
+        .child(menu_action(
+            theme,
+            "Push and set upstream",
+            "git-sync-push-upstream".to_owned(),
+            enabled,
+            blocker,
+            cx,
+            |app| app.request_git_push(true),
+        ))
+        .children(app.git_remote_summary.as_ref().map(|summary| {
+            div()
+                .debug_selector(|| "git-sync-summary".to_owned())
+                .text_size(theme.fs(9.5))
+                .text_color(theme.muted)
+                .child(summary.clone())
+        }))
+        .children(app.git_error.as_ref().map(|error| {
+            div()
+                .debug_selector(|| "git-sync-error".to_owned())
+                .child(error_line(theme, error))
+        }));
+    git_menu_shell(
+        theme,
+        "git-sync-menu-backdrop",
+        "git-sync-menu",
+        body.into_any_element(),
+        cx,
+    )
 }
 
 /// Right column: review surface for agent changes, backed by Host data only.
@@ -432,7 +949,7 @@ pub(super) fn changes_column(
         app.ensure_git_history();
     }
     let commit_panel =
-        (tab != ChangesTab::Branches && tab != ChangesTab::History).then(|| commit_bar(app, theme, cx));
+        (tab != ChangesTab::History).then(|| commit_bar(app, theme, cx));
     div()
         .flex()
         .flex_col()
@@ -451,8 +968,8 @@ pub(super) fn changes_column(
         .bg(theme.background)
         .child(review_header(app, theme, cx))
         .child(view_tab_row(app, theme, cx))
+        .children(operation_banner(app, theme, cx))
         .child(match tab {
-            ChangesTab::Branches => branches_body(app, theme, cx),
             ChangesTab::Files => files_body(app, theme, cx),
             ChangesTab::History => history_body(app, theme, cx),
             ChangesTab::Diff => diff_body(app, theme, cx),
@@ -578,10 +1095,10 @@ fn review_header(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopAp
         .into_any_element()
 }
 
-/// Diff, Files, and History views; Branches joins them while it is open.
+/// Diff, Files, and History views.
 fn view_tab_row(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>) -> AnyElement {
     let tab = app.changes_tab;
-    let mut row = div()
+    let row = div()
         .flex()
         .flex_row()
         .items_center()
@@ -599,15 +1116,6 @@ fn view_tab_row(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp
             tab,
             cx,
         ));
-    if tab == ChangesTab::Branches {
-        row = row.child(view_tab_button(
-            theme,
-            "Branches",
-            ChangesTab::Branches,
-            tab,
-            cx,
-        ));
-    }
     row.into_any_element()
 }
 
@@ -635,223 +1143,12 @@ fn view_tab_button(
         .child(label.to_owned())
         .on_click(cx.listener(move |app, _, window, cx| {
             app.changes_tab = value;
-            if value == ChangesTab::Branches {
-                app.refresh_git_branches();
-            }
             if value == ChangesTab::History {
                 app.refresh_git_history();
                 window.focus(&app.git_history_focus);
             }
             cx.notify();
         }))
-        .into_any_element()
-}
-
-/// Branch list with inline checkout, backed by the Host `git/branches` verb.
-fn branches_body(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>) -> AnyElement {
-    let current = app
-        .git_branches
-        .as_ref()
-        .and_then(|branches| branches.current.clone())
-        .or_else(|| app.git_status.as_ref().and_then(|status| status.branch.clone()));
-    let push_confirm = app.git_push_confirm;
-    let summary = app.git_remote_summary.clone();
-    let mut list = div().flex().flex_col().gap(theme.sp(2.));
-    if let Some(branches) = app.git_branches.as_ref() {
-        if branches.branches.is_empty() {
-            list = list.child(
-                div()
-                    .text_size(theme.fs(10.5))
-                    .text_color(theme.muted)
-                    .child("This repository has no local branches yet."),
-            );
-        }
-        for branch in &branches.branches {
-            let name = branch.name.clone();
-            let selected = branch.current;
-            let checkout = name.clone();
-            let rebase = name.clone();
-            let pick = name.clone();
-            let merge = name.clone();
-            let revert = branch.commit.clone();
-            let mut actions = div().flex().flex_row().items_center().gap(theme.sp(4.));
-            if !selected {
-                actions = actions
-                    .child(
-                        action_text(theme, "Checkout", format!("git-checkout-{name}"))
-                            .on_click(cx.listener(move |app, _, _, cx| {
-                                app.checkout_git_branch(checkout.clone());
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        action_text(theme, "Rebase", format!("git-rebase-{name}"))
-                            .on_click(cx.listener(move |app, _, _, cx| {
-                                app.rebase_git_branch(rebase.clone());
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        action_text(theme, "Pick", format!("git-pick-{name}"))
-                            .on_click(cx.listener(move |app, _, _, cx| {
-                                app.cherry_pick_git_commit(pick.clone());
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        action_text(theme, "Merge", format!("git-merge-{name}"))
-                            .on_click(cx.listener(move |app, _, _, cx| {
-                                app.merge_git_branch(merge.clone());
-                                cx.notify();
-                            })),
-                    );
-            } else {
-                actions = actions.child(
-                    action_text(theme, "Revert tip", format!("git-revert-{name}")).on_click(
-                        cx.listener(move |app, _, _, cx| {
-                            app.revert_git_commit(revert.clone());
-                            cx.notify();
-                        }),
-                    ),
-                );
-            }
-            list = list.child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .gap(theme.sp(4.))
-                    .px(theme.sp(6.))
-                    .py(px(2.))
-                    .rounded(theme.corner())
-                    .when(selected, |element| element.bg(theme.selection))
-                    .hover(|style| style.bg(theme.surface_raised))
-                    .id(gpui::SharedString::from(format!("git-branch-{name}")))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(theme.sp(4.))
-                            .child(
-                                div()
-                                    .w(theme.sp(10.))
-                                    .text_color(if selected { theme.accent } else { theme.muted })
-                                    .child(if selected { "●" } else { "" }),
-                            )
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_size(theme.fs(10.5))
-                                    .text_color(if selected { theme.accent } else { theme.text })
-                                    .child(name),
-                            )
-                            .child(
-                                div()
-                                    .text_size(theme.fs(9.))
-                                    .text_color(theme.muted)
-                                    .child(short_commit(&branch.commit).to_owned()),
-                            ),
-                    )
-                    .child(actions),
-            );
-        }
-    }
-    let hint = if app.git_loading {
-        "Running a Git action…"
-    } else if app.git_branches.is_some() {
-        "Checkout switches branches; Rebase replays the current branch onto one; Pick cherry-picks its tip; Merge joins one into the current branch; Revert tip undoes the current branch's newest commit."
-    } else {
-        "Branch list not loaded."
-    };
-    div()
-        .flex()
-        .flex_col()
-        .gap(theme.sp(6.))
-        .p(theme.sp(12.))
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .text_size(theme.fs(11.5))
-                        .text_color(theme.text)
-                        .child(match current.as_deref() {
-                            Some(branch) => format!("On {branch}"),
-                            None => "Detached HEAD".to_owned(),
-                        }),
-                )
-                .child(
-                    div()
-                        .px(theme.sp(6.))
-                        .py(px(2.))
-                        .rounded(theme.corner())
-                        .cursor_pointer()
-                        .hover(|style| style.bg(theme.surface_raised))
-                        .id("git-branches-refresh")
-                        .text_size(theme.fs(10.))
-                        .text_color(theme.muted)
-                        .child("Refresh")
-                        .on_click(cx.listener(|app, _, _, cx| {
-                            app.refresh_git_branches();
-                            app.refresh_git_state();
-                            cx.notify();
-                        })),
-                ),
-        )
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(theme.sp(2.))
-                .child(action_text(theme, "Fetch", "git-fetch".to_owned()).on_click(
-                    cx.listener(|app, _, _, cx| {
-                        app.run_git_remote("fetch");
-                        cx.notify();
-                    }),
-                ))
-                .child(action_text(theme, "Pull", "git-pull".to_owned()).on_click(
-                    cx.listener(|app, _, _, cx| {
-                        app.run_git_remote("pull");
-                        cx.notify();
-                    }),
-                ))
-                .child(
-                    action_text(
-                        theme,
-                        if push_confirm { "Confirm push" } else { "Push" },
-                        "git-push".to_owned(),
-                    )
-                    .on_click(cx.listener(move |app, _, _, cx| {
-                        if app.git_push_confirm {
-                            app.run_git_remote("push");
-                        } else {
-                            app.git_push_confirm = true;
-                        }
-                        cx.notify();
-                    })),
-                ),
-        )
-        .children(operation_banner(app, theme, cx))
-        .child(
-            div()
-                .text_size(theme.fs(9.5))
-                .text_color(theme.muted)
-                .child(hint),
-        )
-        .children(summary.map(|summary| {
-            div()
-                .text_size(theme.fs(10.))
-                .text_color(theme.muted)
-                .child(summary)
-        }))
-        .children(app.git_error.as_ref().map(|error| error_line(theme, error)))
-        .child(list)
         .into_any_element()
 }
 
@@ -1714,6 +2011,7 @@ fn history_action(
 
 /// Small text action used by the Git surfaces.
 fn action_text(theme: &Theme, label: &str, id: String) -> gpui::Stateful<gpui::Div> {
+    let debug = id.clone();
     div()
         .px(theme.sp(6.))
         .py(px(2.))
@@ -1721,6 +2019,7 @@ fn action_text(theme: &Theme, label: &str, id: String) -> gpui::Stateful<gpui::D
         .cursor_pointer()
         .hover(|style| style.bg(theme.surface_raised))
         .id(gpui::SharedString::from(id))
+        .debug_selector(move || debug.clone())
         .text_size(theme.fs(10.))
         .text_color(theme.muted)
         .child(label.to_owned())
@@ -1739,6 +2038,7 @@ fn operation_banner(
     let mut conflicts = div().flex().flex_col().gap(theme.sp(1.));
     for path in &state.conflicts {
         let select = path.clone();
+        let conflict_path = path.clone();
         conflicts = conflicts.child(
             div()
                 .px(theme.sp(5.))
@@ -1747,6 +2047,7 @@ fn operation_banner(
                 .cursor_pointer()
                 .hover(|style| style.bg(theme.surface_raised))
                 .id(gpui::SharedString::from(format!("git-conflict-{path}")))
+                .debug_selector(move || format!("git-conflict-{conflict_path}"))
                 .text_size(theme.fs(10.))
                 .text_color(theme.error)
                 .child(path.clone())
@@ -3290,7 +3591,7 @@ fn option_toggle(theme: &Theme, label: &str, checked: bool) -> gpui::Stateful<gp
 
 /// Confirmation dialog for a destructive Git action.
 pub(super) fn confirmation_dialog(
-    _app: &mut DesktopApp,
+    app: &mut DesktopApp,
     theme: &Theme,
     confirmation: GitConfirmation,
     cx: &mut Context<DesktopApp>,
@@ -3371,6 +3672,74 @@ pub(super) fn confirmation_dialog(
                 ),
             }
         }
+        GitConfirmation::Push { set_upstream, .. } => {
+            let branch = app
+                .git_status
+                .as_ref()
+                .and_then(|status| status.branch.clone())
+                .unwrap_or_else(|| "the current branch".to_owned());
+            let upstream = app
+                .git_status
+                .as_ref()
+                .and_then(|status| status.upstream.clone());
+            if *set_upstream {
+                (
+                    "Publish branch?".to_owned(),
+                    format!(
+                        "Push \"{branch}\" to origin and record it as the upstream. The push never uses force; the surface reports only the result the Host returns."
+                    ),
+                    "Push and set upstream",
+                )
+            } else {
+                let target = match upstream {
+                    Some(upstream) => format!("its upstream \"{upstream}\""),
+                    None => "its upstream; no upstream is recorded yet, so the Host may refuse"
+                        .to_owned(),
+                };
+                (
+                    "Push branch?".to_owned(),
+                    format!(
+                        "Push \"{branch}\" to {target}. The push never uses force; the surface reports only the result the Host returns."
+                    ),
+                    "Push",
+                )
+            }
+        }
+        GitConfirmation::BranchEntry {
+            branch,
+            commit,
+            action,
+            ..
+        } => {
+            let short = short_commit(commit);
+            let (title, body) = match action {
+                GitBranchAction::Merge => (
+                    "Merge branch?".to_owned(),
+                    format!(
+                        "This asks the Host to merge \"{branch}\" ({short}) into the current branch. Conflicts keep the merge in progress."
+                    ),
+                ),
+                GitBranchAction::Rebase => (
+                    "Rebase onto branch?".to_owned(),
+                    format!(
+                        "This asks the Host to rebase the current branch onto \"{branch}\" ({short}). Conflicts keep the rebase in progress."
+                    ),
+                ),
+                GitBranchAction::CherryPick => (
+                    "Cherry-pick branch tip?".to_owned(),
+                    format!(
+                        "This asks the Host to cherry-pick {short} from \"{branch}\" onto the current branch. Conflicts keep the cherry-pick in progress."
+                    ),
+                ),
+                GitBranchAction::Revert => (
+                    "Revert branch tip?".to_owned(),
+                    format!(
+                        "This asks the Host to revert {short} on \"{branch}\". Conflicts keep the revert in progress."
+                    ),
+                ),
+            };
+            (title, body, action.label())
+        }
     };
     let details = body.to_owned();
     dialog_shell(theme, &title, |content| {
@@ -3395,6 +3764,7 @@ pub(super) fn confirmation_dialog(
                             widgets::Button::new(theme, "Cancel")
                                 .build()
                                 .id("git-confirm-cancel")
+                                .debug_selector(|| "git-confirm-cancel".to_owned())
                                 .cursor_pointer()
                                 .on_click(cx.listener(|app, _, _, cx| {
                                     app.git_confirmation = None;
@@ -3406,6 +3776,7 @@ pub(super) fn confirmation_dialog(
                                 .danger()
                                 .build()
                                 .id("git-confirm-action")
+                                .debug_selector(|| "git-confirm-action".to_owned())
                                 .cursor_pointer()
                                 .on_click(cx.listener(|app, _, _, cx| {
                                     app.confirm_git_confirmation();
@@ -3435,7 +3806,11 @@ fn bulk_discard_body(files: &[GitFile]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dsh_client_core::git::{GitFileSideStats, GitFileStats, GitShow};
+    use crate::shell::app::{GitMenu, GitRemoteAction};
+    use dsh_client_core::git::{
+        GitBranch, GitBranches, GitFileSideStats, GitFileStats, GitOperationState, GitShow,
+    };
+    use dsh_client_core::transport::HttpTransport;
 
     fn file(path: &str, status: &str, staged: bool, worktree: bool) -> GitFile {
         GitFile {
@@ -3789,7 +4164,9 @@ mod tests {
         );
         assert_eq!(
             push_blocker(None, None, 0),
-            Some("Publishing a branch needs an upstream; that flow lands in G3.".to_owned())
+            Some(
+                "No upstream branch; use Push and set upstream in the sync menu.".to_owned()
+            )
         );
         assert!(push_blocker(None, Some("origin/main"), 2)
             .expect("blocked")
@@ -4105,5 +4482,254 @@ mod tests {
         assert!(body.contains("· src/0.ts (modified)"));
         assert!(body.contains("…and 2 more"));
         assert!(!body.contains("· src/9.ts"));
+    }
+
+    /// Local branch list for one status snapshot.
+    fn branches(current: &str, names: &[&str]) -> GitBranches {
+        GitBranches {
+            branches: names
+                .iter()
+                .map(|name| GitBranch {
+                    name: (*name).to_owned(),
+                    commit: format!("{name}0000000"),
+                    current: *name == current,
+                })
+                .collect(),
+            current: Some(current.to_owned()),
+        }
+    }
+
+    /// Shell with one Session's repository and both status-bar menus available.
+    fn git_menu_harness(setup: impl FnOnce(&mut DesktopApp)) -> crate::harness::Harness {
+        crate::harness::Harness::open_with(1366., 768., move |app| {
+            app.selected_session = Some("git-session".to_owned());
+            app.transport = HttpTransport::new("http://127.0.0.1:9").ok();
+            app.git_status = Some(status(2, 1, Some("origin/main")));
+            app.git_branches = Some(branches("main", &["main", "feature"]));
+            setup(app);
+        })
+    }
+
+    #[test]
+    fn branch_menu_lists_local_branches_and_marks_the_current_one() {
+        let mut harness = git_menu_harness(|app| app.git_menu = Some(GitMenu::Branch));
+        assert!(harness.bounds("git-branch-menu").is_some());
+        assert!(harness.bounds("git-branch-menu-main").is_some());
+        assert!(harness.bounds("git-branch-menu-feature").is_some());
+        assert!(harness.bounds("git-branch-menu-current-main").is_some());
+        assert!(harness.bounds("git-branch-menu-current-feature").is_none());
+        assert!(harness.bounds("git-branch-menu-checkout-feature").is_some());
+        assert!(harness.bounds("git-branch-menu-checkout-main").is_none());
+        assert!(harness.bounds("git-branch-menu-revert-main").is_some());
+        // The Host has no create, delete, or rename verb, so none is offered.
+        assert!(harness.bounds("git-branch-menu-create").is_none());
+        assert!(harness.bounds("git-branch-menu-delete-main").is_none());
+        assert!(harness.bounds("git-branch-menu-rename-main").is_none());
+    }
+
+    #[test]
+    fn branch_menu_confirms_checkout_merge_rebase_and_cherry_pick() {
+        let mut checkout = git_menu_harness(|app| app.git_menu = Some(GitMenu::Branch));
+        assert!(checkout.click("git-branch-menu-checkout-feature"));
+        assert!(matches!(
+            checkout.with(|app, _| app.git_confirmation.clone()),
+            Some(GitConfirmation::Checkout { target, .. }) if target == "feature"
+        ));
+        assert!(checkout.bounds("git-confirm-action").is_some());
+
+        let mut merge = git_menu_harness(|app| app.git_menu = Some(GitMenu::Branch));
+        assert!(merge.click("git-branch-menu-merge-feature"));
+        assert!(matches!(
+            merge.with(|app, _| app.git_confirmation.clone()),
+            Some(GitConfirmation::BranchEntry {
+                action: GitBranchAction::Merge,
+                branch,
+                ..
+            }) if branch == "feature"
+        ));
+
+        let mut rebase = git_menu_harness(|app| app.git_menu = Some(GitMenu::Branch));
+        assert!(rebase.click("git-branch-menu-rebase-feature"));
+        assert!(matches!(
+            rebase.with(|app, _| app.git_confirmation.clone()),
+            Some(GitConfirmation::BranchEntry {
+                action: GitBranchAction::Rebase,
+                ..
+            })
+        ));
+
+        let mut pick = git_menu_harness(|app| app.git_menu = Some(GitMenu::Branch));
+        assert!(pick.click("git-branch-menu-pick-feature"));
+        assert!(matches!(
+            pick.with(|app, _| app.git_confirmation.clone()),
+            Some(GitConfirmation::BranchEntry {
+                action: GitBranchAction::CherryPick,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn branch_menu_names_detached_head_and_shows_host_refusals() {
+        let mut detached = git_menu_harness(|app| {
+            app.git_menu = Some(GitMenu::Branch);
+            let status = app.git_status.as_mut().expect("status");
+            status.branch = None;
+            status.detached = true;
+        });
+        assert!(detached.bounds("git-branch-menu-detached").is_some());
+        assert!(detached.bounds("git-branch-menu-checkout-feature").is_some());
+
+        let mut refused = git_menu_harness(|app| {
+            app.git_menu = Some(GitMenu::Branch);
+            app.git_error = Some(
+                "checking out \"feature\" failed: error: Your local changes to the following files would be overwritten by checkout: src/a.ts"
+                    .to_owned(),
+            );
+        });
+        assert!(refused.bounds("git-branch-menu-error").is_some());
+    }
+
+    #[test]
+    fn sync_menu_offers_fetch_pull_push_and_publish_without_force() {
+        let mut harness = git_menu_harness(|app| app.git_menu = Some(GitMenu::Sync));
+        for selector in [
+            "git-sync-fetch",
+            "git-sync-pull",
+            "git-sync-push",
+            "git-sync-push-upstream",
+        ] {
+            assert!(harness.bounds(selector).is_some(), "{selector} renders");
+        }
+        assert!(harness.bounds("git-sync-force").is_none());
+        assert!(harness.bounds("git-sync-ahead").is_some());
+        assert!(harness.bounds("git-sync-behind").is_some());
+    }
+
+    #[test]
+    fn sync_push_confirms_first_and_publish_sets_the_upstream_option() {
+        let mut push = git_menu_harness(|app| app.git_menu = Some(GitMenu::Sync));
+        assert!(push.click("git-sync-push"));
+        assert!(matches!(
+            push.with(|app, _| app.git_confirmation.clone()),
+            Some(GitConfirmation::Push {
+                set_upstream: false,
+                ..
+            })
+        ));
+        assert!(push.bounds("git-confirm-action").is_some());
+
+        let mut publish = git_menu_harness(|app| app.git_menu = Some(GitMenu::Sync));
+        assert!(publish.click("git-sync-push-upstream"));
+        assert!(matches!(
+            publish.with(|app, _| app.git_confirmation.clone()),
+            Some(GitConfirmation::Push {
+                set_upstream: true,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn branch_menu_names_a_running_action_and_disables_the_rows() {
+        let mut harness = git_menu_harness(|app| {
+            app.git_menu = Some(GitMenu::Branch);
+            app.git_remote_pending = Some(GitRemoteAction::Pull);
+            app.git_loading = true;
+        });
+        assert!(harness.bounds("git-branch-menu-blocker").is_some());
+        assert!(harness.click("git-branch-menu-checkout-feature"));
+        assert!(harness.with(|app, _| app.git_confirmation.is_none()));
+    }
+
+    #[test]
+    fn sync_menu_names_the_running_action_and_disables_the_remote_rows() {
+        let mut harness = git_menu_harness(|app| {
+            app.git_menu = Some(GitMenu::Sync);
+            app.git_remote_pending = Some(GitRemoteAction::Fetch);
+            app.git_loading = true;
+        });
+        assert!(harness.bounds("git-sync-blocker").is_some());
+        assert!(harness.click("git-sync-pull"));
+        assert_eq!(
+            harness.with(|app, _| app.git_remote_pending),
+            Some(GitRemoteAction::Fetch)
+        );
+        assert!(harness.with(|app, _| app.git_remote_summary.is_none()));
+    }
+
+    #[test]
+    fn sync_menu_shows_the_host_summary_and_error_text() {
+        let mut summary = git_menu_harness(|app| {
+            app.git_menu = Some(GitMenu::Sync);
+            app.git_remote_summary = Some("Everything up-to-date".to_owned());
+        });
+        assert!(summary.bounds("git-sync-summary").is_some());
+
+        let mut failed = git_menu_harness(|app| {
+            app.git_menu = Some(GitMenu::Sync);
+            app.git_error = Some("push needs an upstream branch".to_owned());
+        });
+        assert!(failed.bounds("git-sync-error").is_some());
+    }
+
+    #[test]
+    fn status_bar_shows_ahead_and_behind_next_to_the_branch() {
+        let mut harness = git_menu_harness(|_| {});
+        assert!(harness.bounds("bottom-git-ahead").is_some());
+        assert!(harness.bounds("bottom-git-behind").is_some());
+
+        let mut clean = git_menu_harness(|app| {
+            app.git_status = Some(status(0, 0, Some("origin/main")));
+        });
+        assert!(clean.bounds("bottom-git-ahead").is_none());
+        assert!(clean.bounds("bottom-git-behind").is_none());
+    }
+
+    #[test]
+    fn branch_menu_keeps_continue_and_abort_for_an_in_progress_operation() {
+        let mut harness = git_menu_harness(|app| {
+            app.git_menu = Some(GitMenu::Branch);
+            app.git_state = Some(GitOperationState {
+                operation: "merge".to_owned(),
+                conflicts: vec!["a.txt".to_owned()],
+            });
+        });
+        assert!(harness.bounds("git-operation-continue").is_some());
+        assert!(harness.bounds("git-operation-abort").is_some());
+        assert!(harness.bounds("git-conflict-a.txt").is_some());
+    }
+
+    #[test]
+    fn escape_closes_the_git_menus_and_returns_focus_to_the_trigger() {
+        let mut harness = git_menu_harness(|_| {});
+        assert!(harness.click("bottom-git-branch"));
+        assert_eq!(harness.with(|app, _| app.git_menu), Some(GitMenu::Branch));
+        let expected = harness.with(|app, _| app.chrome_focus.git_branch.clone());
+        harness.dismiss();
+        assert_eq!(harness.with(|app, _| app.git_menu), None);
+        assert_eq!(harness.focused(), Some(expected));
+
+        assert!(harness.click("bottom-sync"));
+        assert_eq!(harness.with(|app, _| app.git_menu), Some(GitMenu::Sync));
+        let expected = harness.with(|app, _| app.chrome_focus.git_sync.clone());
+        harness.dismiss();
+        assert_eq!(harness.with(|app, _| app.git_menu), None);
+        assert_eq!(harness.focused(), Some(expected));
+    }
+
+    #[test]
+    fn git_menu_triggers_open_from_the_keyboard() {
+        let mut harness = git_menu_harness(|_| {});
+        assert!(harness.click("bottom-git-branch"));
+        harness.dismiss();
+        harness.keys("enter");
+        assert_eq!(harness.with(|app, _| app.git_menu), Some(GitMenu::Branch));
+
+        harness.dismiss();
+        assert!(harness.click("bottom-sync"));
+        harness.dismiss();
+        harness.keys("enter");
+        assert_eq!(harness.with(|app, _| app.git_menu), Some(GitMenu::Sync));
     }
 }
