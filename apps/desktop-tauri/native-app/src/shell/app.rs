@@ -408,7 +408,73 @@ pub(crate) enum ChangesTab {
     Diff,
     Files,
     History,
-    Branches,
+}
+
+/// Status-bar Git menu that is open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GitMenu {
+    /// Local branches, checkout, and branch operations.
+    Branch,
+    /// Fetch, pull, push, and publish.
+    Sync,
+}
+
+/// One remote mutation the sync menu starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GitRemoteAction {
+    Fetch,
+    Pull,
+    Push,
+    /// Push the current branch and record `origin` as its upstream.
+    PushSetUpstream,
+}
+
+impl GitRemoteAction {
+    /// Label the sync menu and the in-flight reason show.
+    ///
+    /// @returns The action name as the user reads it.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Fetch => "Fetch",
+            Self::Pull => "Pull",
+            Self::Push => "Push",
+            Self::PushSetUpstream => "Push and set upstream",
+        }
+    }
+
+    /// Verb name the Host returns for this action.
+    ///
+    /// @returns `fetch`, `pull`, or `push`.
+    pub(crate) fn verb(self) -> &'static str {
+        match self {
+            Self::Fetch => "fetch",
+            Self::Pull => "pull",
+            Self::Push | Self::PushSetUpstream => "push",
+        }
+    }
+}
+
+/// Branch or branch-tip action the branch menu confirms first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GitBranchAction {
+    Merge,
+    Rebase,
+    CherryPick,
+    Revert,
+}
+
+impl GitBranchAction {
+    /// Label the confirmation dialog's action button.
+    ///
+    /// @returns The action name.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Merge => "Merge",
+            Self::Rebase => "Rebase",
+            Self::CherryPick => "Cherry-pick",
+            Self::Revert => "Revert",
+        }
+    }
 }
 
 /// History entry action a confirmation dialog asks about.
@@ -458,6 +524,18 @@ pub(crate) enum GitConfirmation {
         commit: String,
         subject: String,
         action: GitCommitAction,
+    },
+    /// Push the current branch, optionally publishing it upstream.
+    Push {
+        session_id: String,
+        set_upstream: bool,
+    },
+    /// Merge, rebase, cherry-pick, or revert through one local branch.
+    BranchEntry {
+        session_id: String,
+        branch: String,
+        commit: String,
+        action: GitBranchAction,
     },
 }
 
@@ -612,6 +690,8 @@ pub(crate) enum ChromeTrigger {
     Search,
     Workspace,
     StatusTools,
+    GitBranch,
+    GitSync,
 }
 
 /// Keyboard focus handles of the chrome controls that open an overlay.
@@ -623,6 +703,8 @@ pub(crate) struct ChromeFocus {
     pub(crate) search: FocusHandle,
     pub(crate) workspace: FocusHandle,
     pub(crate) status_tools: FocusHandle,
+    pub(crate) git_branch: FocusHandle,
+    pub(crate) git_sync: FocusHandle,
 }
 
 impl ChromeFocus {
@@ -636,6 +718,8 @@ impl ChromeFocus {
             ChromeTrigger::Search => &self.search,
             ChromeTrigger::Workspace => &self.workspace,
             ChromeTrigger::StatusTools => &self.status_tools,
+            ChromeTrigger::GitBranch => &self.git_branch,
+            ChromeTrigger::GitSync => &self.git_sync,
         }
     }
 }
@@ -896,8 +980,10 @@ pub(crate) struct DesktopApp {
     pub(crate) git_state: Option<GitOperationState>,
     /// Git's own text for the last remote or multi-step action.
     pub(crate) git_remote_summary: Option<String>,
-    /// Two-step confirmation for push.
-    pub(crate) git_push_confirm: bool,
+    /// Status-bar menu the user has open, if any.
+    pub(crate) git_menu: Option<GitMenu>,
+    /// Remote mutation in flight; the sync menu names it while it runs.
+    pub(crate) git_remote_pending: Option<GitRemoteAction>,
     /// Set when a state refresh waits for the current Git worker.
     pub(crate) git_state_pending: bool,
     /// Set when the selected path's diff must be read once the worker is free.
@@ -1254,6 +1340,8 @@ impl DesktopApp {
                 search: cx.focus_handle(),
                 workspace: cx.focus_handle(),
                 status_tools: cx.focus_handle(),
+                git_branch: cx.focus_handle(),
+                git_sync: cx.focus_handle(),
             },
             pending_chrome_focus: None,
             cancel_receiver: None,
@@ -1381,7 +1469,8 @@ impl DesktopApp {
             git_diff: None,
             git_state: None,
             git_remote_summary: None,
-            git_push_confirm: false,
+            git_menu: None,
+            git_remote_pending: None,
             git_confirmation: None,
             git_refresh_pending: false,
             git_refresh_probe_started_at: None,
@@ -2325,7 +2414,7 @@ impl DesktopApp {
         self.git_diff = None;
         self.git_state = None;
         self.git_remote_summary = None;
-        self.git_push_confirm = false;
+        self.git_remote_pending = None;
         self.git_confirmation = None;
         self.git_refresh_pending = false;
         self.git_refresh_probe_started_at = None;
@@ -2406,6 +2495,104 @@ impl DesktopApp {
         self.git_error = None;
     }
 
+    /// Opens or closes one status-bar Git menu.
+    ///
+    /// Opening a menu closes the other chrome overlays so only one is painted,
+    /// and a branch menu asks the Host for the local branch list when it opens.
+    ///
+    /// @param menu - Branch or sync menu to toggle.
+    pub(crate) fn toggle_git_menu(&mut self, menu: GitMenu) {
+        if self.git_menu == Some(menu) {
+            self.git_menu = None;
+            return;
+        }
+        self.git_menu = Some(menu);
+        self.top_menu_open = false;
+        self.workspace_picker_open = false;
+        self.show_session_menu = false;
+        self.status_menu_open = false;
+        if menu == GitMenu::Branch {
+            self.refresh_git_branches();
+        }
+    }
+
+    /// Why branch and remote actions are disabled, or `None` when one may start.
+    ///
+    /// The shell runs one Git verb at a time, so a remote mutation in flight
+    /// names itself rather than letting a second click queue silently.
+    ///
+    /// @returns The reason the menus show, or `None` when an action may start.
+    pub(crate) fn git_action_blocker(&self) -> Option<String> {
+        if let Some(action) = self.git_remote_pending {
+            return Some(format!("{} is running; wait for its result.", action.label()));
+        }
+        if self.git_loading {
+            return Some("A Git request is running; wait for its result.".to_owned());
+        }
+        if self.transport.is_none() {
+            return Some("Host is offline.".to_owned());
+        }
+        if self.selected_session.is_none() {
+            return Some("Select a Session to use its repository.".to_owned());
+        }
+        None
+    }
+
+    /// Confirms one merge, rebase, cherry-pick, or revert through a local branch.
+    ///
+    /// @param branch - Local branch the menu row names.
+    /// @param commit - That branch's tip, which the cherry-pick and revert verbs take.
+    /// @param action - Which branch operation to run after confirmation.
+    pub(crate) fn request_git_branch_action(
+        &mut self,
+        branch: String,
+        commit: String,
+        action: GitBranchAction,
+    ) {
+        let Some(session_id) = self.selected_session.clone() else {
+            return;
+        };
+        if let Some(reason) = self.git_action_blocker() {
+            self.git_error = Some(reason);
+            return;
+        }
+        let listed = self
+            .git_branches
+            .as_ref()
+            .is_some_and(|branches| branches.branches.iter().any(|item| item.name == branch));
+        if !listed {
+            self.git_error = Some(format!(
+                "{} unavailable: \"{branch}\" is no longer in the branch list.",
+                action.label()
+            ));
+            self.refresh_git_branches();
+            return;
+        }
+        self.git_confirmation = Some(GitConfirmation::BranchEntry {
+            session_id,
+            branch,
+            commit,
+            action,
+        });
+    }
+
+    /// Confirms a push of the current branch before the Host runs it.
+    ///
+    /// @param set_upstream - Publish the branch to `origin` and record its upstream.
+    pub(crate) fn request_git_push(&mut self, set_upstream: bool) {
+        let Some(session_id) = self.selected_session.clone() else {
+            return;
+        };
+        if let Some(reason) = self.git_action_blocker() {
+            self.git_error = Some(reason);
+            return;
+        }
+        self.git_confirmation = Some(GitConfirmation::Push {
+            session_id,
+            set_upstream,
+        });
+    }
+
     /// Loads the in-progress operation and conflict paths.
     pub(crate) fn refresh_git_state(&mut self) {
         let (Some(session_id), Some(transport)) =
@@ -2428,7 +2615,9 @@ impl DesktopApp {
     }
 
     /// Runs one remote action and reloads the repository after it settles.
-    pub(crate) fn run_git_remote(&mut self, operation: &'static str) {
+    ///
+    /// @param action - Fetch, pull, push, or push with an upstream.
+    pub(crate) fn run_git_remote(&mut self, action: GitRemoteAction) {
         let (Some(session_id), Some(transport)) =
             (self.selected_session.clone(), self.transport.clone())
         else {
@@ -2438,40 +2627,23 @@ impl DesktopApp {
         if self.git_receiver.is_some() {
             return;
         }
+        let operation = action.verb();
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
             let client = GitClient::new(&transport);
-            let result = match operation {
-                "fetch" => client.fetch(session_id),
-                "pull" => client.pull(session_id),
-                _ => client.push(session_id),
+            let result = match action {
+                GitRemoteAction::Fetch => client.fetch(session_id),
+                GitRemoteAction::Pull => client.pull(session_id),
+                GitRemoteAction::Push => client.push(session_id),
+                GitRemoteAction::PushSetUpstream => client.push_with_options(session_id, true),
             };
             let _ = sender.send(GitUpdate::Remote(operation, result));
         });
         self.git_receiver = Some(receiver);
         self.git_loading = true;
+        self.git_remote_pending = Some(action);
         self.git_remote_summary = None;
         self.git_error = None;
-    }
-
-    /// Rebases the current branch onto one local branch.
-    pub(crate) fn rebase_git_branch(&mut self, branch: String) {
-        self.run_git_operation(move |client, session_id| client.rebase(session_id, branch));
-    }
-
-    /// Merges one local branch into the current branch.
-    pub(crate) fn merge_git_branch(&mut self, branch: String) {
-        self.run_git_operation(move |client, session_id| client.merge(session_id, branch));
-    }
-
-    /// Cherry-picks one commit onto the current branch.
-    pub(crate) fn cherry_pick_git_commit(&mut self, commit: String) {
-        self.run_git_operation(move |client, session_id| client.cherry_pick(session_id, commit));
-    }
-
-    /// Reverts one commit on the current branch.
-    pub(crate) fn revert_git_commit(&mut self, commit: String) {
-        self.run_git_operation(move |client, session_id| client.revert(session_id, commit));
     }
 
     /// Continues the in-progress merge, rebase, cherry-pick, or revert.
@@ -2978,6 +3150,59 @@ impl DesktopApp {
                 }
                 self.run_git_commit_entry(action, session_id, commit);
             }
+            GitConfirmation::Push {
+                session_id,
+                set_upstream,
+            } => {
+                if self.selected_session.as_deref() != Some(session_id.as_str()) {
+                    self.git_error = Some(
+                        "The confirmed push belongs to another Session; nothing was run."
+                            .to_owned(),
+                    );
+                    return;
+                }
+                if let Some(reason) = self.git_action_blocker() {
+                    self.git_error = Some(reason);
+                    return;
+                }
+                self.run_git_remote(if set_upstream {
+                    GitRemoteAction::PushSetUpstream
+                } else {
+                    GitRemoteAction::Push
+                });
+            }
+            GitConfirmation::BranchEntry {
+                session_id,
+                branch,
+                commit,
+                action,
+            } => {
+                if self.selected_session.as_deref() != Some(session_id.as_str()) {
+                    self.git_error = Some(
+                        "The confirmed branch action belongs to another Session; nothing was run."
+                            .to_owned(),
+                    );
+                    return;
+                }
+                if let Some(reason) = self.git_action_blocker() {
+                    self.git_error = Some(reason);
+                    return;
+                }
+                match action {
+                    GitBranchAction::Merge => self.run_git_operation(move |client, session_id| {
+                        client.merge(session_id, branch)
+                    }),
+                    GitBranchAction::Rebase => self.run_git_operation(move |client, session_id| {
+                        client.rebase(session_id, branch)
+                    }),
+                    GitBranchAction::CherryPick => self.run_git_operation(move |client, session_id| {
+                        client.cherry_pick(session_id, commit)
+                    }),
+                    GitBranchAction::Revert => self.run_git_operation(move |client, session_id| {
+                        client.revert(session_id, commit)
+                    }),
+                }
+            }
         }
     }
 
@@ -3369,6 +3594,7 @@ impl DesktopApp {
             Ok(update) => {
                 self.git_receiver = None;
                 self.git_loading = false;
+                self.git_remote_pending = None;
                 match update {
                     GitUpdate::Status(Ok(status)) => {
                         let files = status.files.clone();
@@ -3448,9 +3674,6 @@ impl DesktopApp {
                             }
                         }
                         self.refresh_git();
-                        if self.changes_tab == ChangesTab::Branches {
-                            self.refresh_git_branches();
-                        }
                     }
                     GitUpdate::Apply(Ok(result)) => {
                         self.git_diff = None;
@@ -3570,7 +3793,6 @@ impl DesktopApp {
                         self.git_error = Some(failure_text(&error));
                     }
                     GitUpdate::Remote(operation, Ok(result)) => {
-                        self.git_push_confirm = false;
                         self.git_remote_summary = Some(if result.summary.is_empty() {
                             format!("{} complete", result.operation)
                         } else {
@@ -3581,7 +3803,6 @@ impl DesktopApp {
                         self.refresh_git_state();
                     }
                     GitUpdate::Remote(_, Err(error)) => {
-                        self.git_push_confirm = false;
                         self.git_error = Some(failure_text(&error));
                     }
                     GitUpdate::Operation(Ok(result)) => {
@@ -3601,7 +3822,7 @@ impl DesktopApp {
                 }
                 if self.git_push_pending && self.git_receiver.is_none() {
                     self.git_push_pending = false;
-                    self.run_git_remote("push");
+                    self.run_git_remote(GitRemoteAction::Push);
                 }
                 if self.git_diff_pending && self.git_receiver.is_none() {
                     self.refresh_git_diff();
@@ -5970,6 +6191,13 @@ impl DesktopApp {
         }
         if self.update_prompt.is_some() {
             self.update_prompt = None;
+            return true;
+        }
+        if let Some(menu) = self.git_menu.take() {
+            self.pending_chrome_focus = Some(match menu {
+                GitMenu::Branch => ChromeTrigger::GitBranch,
+                GitMenu::Sync => ChromeTrigger::GitSync,
+            });
             return true;
         }
         if self.status_menu_open {
@@ -8718,6 +8946,34 @@ mod tests {
         assert_eq!(failure_text(&refused), "\"a.txt\" has no staged change");
         assert_eq!(short_object_id("0123456789abcdef"), "0123456");
         assert_eq!(short_object_id("abc"), "abc");
+    }
+
+    #[test]
+    fn remote_git_failures_keep_the_host_message() {
+        for code in [
+            "git/remote-auth",
+            "git/remote-diverged",
+            "git/remote-no-upstream",
+            "git/remote-failed",
+        ] {
+            let error = Error::Remote {
+                code: code.to_owned(),
+                message: format!("{code} detail from git"),
+                details: serde_json::Map::new(),
+            };
+            assert_eq!(failure_text(&error), format!("{code} detail from git"));
+        }
+    }
+
+    #[test]
+    fn checkout_refusals_keep_the_git_message() {
+        let message = "checking out \"feature\" failed: error: Your local changes to the following files would be overwritten by checkout: src/a.ts";
+        let error = Error::Remote {
+            code: "git/checkout-refused".to_owned(),
+            message: message.to_owned(),
+            details: serde_json::Map::new(),
+        };
+        assert_eq!(failure_text(&error), message);
     }
 
     #[test]

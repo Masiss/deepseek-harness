@@ -21,7 +21,7 @@ use super::widgets;
 use crate::command_registry::CommandId;
 use crate::layout;
 use crate::shell::app::{
-    ActiveView, BottomTool, ChangesTab, DesktopApp, PaletteEntry, ResizeTarget,
+    ActiveView, BottomTool, ChangesTab, DesktopApp, GitMenu, PaletteEntry, ResizeTarget,
     MAX_TERMINAL_PANES, TERMINAL_INPUT_KEYS, TERMINAL_TITLE_KEYS,
 };
 use crate::shell::theme::Theme;
@@ -160,6 +160,12 @@ pub(crate) fn render(
     }
     if app.status_menu_open {
         root = root.child(status_tools_popover(app, &theme, cx));
+    }
+    if app.git_menu == Some(GitMenu::Branch) {
+        root = root.child(git_review::branch_menu(app, &theme, cx));
+    }
+    if app.git_menu == Some(GitMenu::Sync) {
+        root = root.child(git_review::sync_menu(app, &theme, cx));
     }
     if let Some(prompt) = app.update_prompt.clone() {
         root = root.child(update_prompt(app, &theme, &prompt, cx));
@@ -1772,6 +1778,21 @@ fn bottom_bar(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>)
     let active_tool = app.bottom_tool;
     let tools_open = app.status_menu_open;
     let tools_focus = app.chrome_focus.status_tools.clone();
+    let branch_focus = app.chrome_focus.git_branch.clone();
+    let sync_focus = app.chrome_focus.git_sync.clone();
+    let branch_menu_open = app.git_menu == Some(GitMenu::Branch);
+    let sync_menu_open = app.git_menu == Some(GitMenu::Sync);
+    let ahead_behind = app
+        .git_status
+        .as_ref()
+        .and_then(git_review::ahead_behind);
+    let sync_hint = app
+        .git_status
+        .as_ref()
+        .map(|status| {
+            git_review::sync_tooltip(status.ahead, status.behind, status.upstream.as_deref())
+        })
+        .unwrap_or_else(|| "Fetch, pull, push, and publish".to_owned());
     let (_, terminal_glyph, terminal_count) = bottom_tool_row(app, BottomTool::Terminal);
     let (_, problems_glyph, problem_count) = bottom_tool_row(app, BottomTool::Diagnostics);
     let git_label = match (&app.git_status, app.git_error.as_deref(), app.git_loading) {
@@ -1822,21 +1843,47 @@ fn bottom_bar(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>)
                         .px(theme.sp(7.))
                         .truncate()
                         .cursor_pointer()
+                        .track_focus(&branch_focus)
+                        .when(branch_menu_open, |element| element.bg(theme.selection))
                         .hover(|style| style.bg(theme.surface_raised))
                         .id("bottom-git-branch")
                         .debug_selector(|| "bottom-git-branch".to_owned())
                         .tooltip(widgets::HintView::tooltip(
                             theme,
-                            "Branches, merges, and stashes",
+                            "Branch menu: checkout, merge, rebase, and revert",
                         ))
                         .on_click(cx.listener(|app, _, _, cx| {
-                            app.show_changes = true;
-                            app.changes_tab = ChangesTab::Branches;
-                            app.refresh_git_branches();
+                            app.toggle_git_menu(GitMenu::Branch);
                             cx.notify();
+                        }))
+                        .on_key_down(cx.listener(|app, event: &gpui::KeyDownEvent, _, cx| {
+                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                app.toggle_git_menu(GitMenu::Branch);
+                                cx.notify();
+                            }
                         }))
                         .child(div().child("⎇"))
                         .child(div().truncate().child(git_label))
+                        .children(ahead_behind.map(|(ahead, behind)| {
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(theme.sp(3.))
+                                .text_size(theme.fs(9.))
+                                .children((ahead > 0).then(|| {
+                                    div()
+                                        .debug_selector(|| "bottom-git-ahead".to_owned())
+                                        .text_color(theme.accent)
+                                        .child(format!("↑{ahead}"))
+                                }))
+                                .children((behind > 0).then(|| {
+                                    div()
+                                        .debug_selector(|| "bottom-git-behind".to_owned())
+                                        .text_color(theme.warn)
+                                        .child(format!("↓{behind}"))
+                                }))
+                        }))
                         .child(div().text_size(theme.fs(8.5)).child("▾")),
                 )
                 .child(
@@ -1849,9 +1896,19 @@ fn bottom_bar(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>)
                         })),
                 )
                 .child(
-                    chrome_icon_button(theme, "bottom-sync", "⟳", None, false)
-                        .opacity(0.45)
-                        .tooltip(widgets::HintView::tooltip(theme, "Sync is not available")),
+                    chrome_icon_button(theme, "bottom-sync", "⟳", None, sync_menu_open)
+                        .track_focus(&sync_focus)
+                        .tooltip(widgets::HintView::tooltip(theme, sync_hint))
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.toggle_git_menu(GitMenu::Sync);
+                            cx.notify();
+                        }))
+                        .on_key_down(cx.listener(|app, event: &gpui::KeyDownEvent, _, cx| {
+                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                app.toggle_git_menu(GitMenu::Sync);
+                                cx.notify();
+                            }
+                        })),
                 ),
         )
         .child(
