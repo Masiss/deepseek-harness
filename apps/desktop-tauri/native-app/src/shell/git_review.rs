@@ -8,7 +8,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use dsh_client_core::git::{
-    GitApplyTarget, GitCommitEntry, GitDiff, GitFile, GitFileSideStats, GitStatus,
+    GitApplyTarget, GitCommitEntry, GitConflictStage, GitDiff, GitFile, GitFileSideStats,
+    GitResolveSide, GitStatus,
 };
 use gpui::{
     canvas, div, point, prelude::*, px, AnyElement, BorderStyle, Bounds, Context, Corners, Edges,
@@ -16,7 +17,8 @@ use gpui::{
 };
 
 use super::app::{
-    ChangesTab, DesktopApp, GitBranchAction, GitCommitAction, GitConfirmation, GitRemoteAction,
+    ChangesTab, ChromeTrigger, DesktopApp, GitBranchAction, GitCommitAction, GitConfirmation,
+    GitConflictView, GitRemoteAction, StashEntryAction,
 };
 use super::render::dialog_shell;
 use super::theme::Theme;
@@ -89,9 +91,12 @@ impl FileGroups<'_> {
     }
 }
 
+/// Status Git reports for a path that is not in the index yet.
+pub(crate) const UNTRACKED_STATUS: &str = "untracked";
+
 /// Whether Git reports the path as untracked.
 pub(crate) fn is_untracked(file: &GitFile) -> bool {
-    file.status == "untracked"
+    file.status == UNTRACKED_STATUS
 }
 
 /// Groups changed paths for the Files tab, applying a case-insensitive path filter.
@@ -768,6 +773,15 @@ pub(super) fn branch_menu(
             cx,
             |app| app.refresh_git_branches(),
         ))
+        .child(menu_action(
+            theme,
+            "Stash…",
+            "git-branch-menu-stash".to_owned(),
+            blocker.is_none(),
+            blocker,
+            cx,
+            |app| app.open_git_stash(ChromeTrigger::GitBranch),
+        ))
         .children(operation_banner(app, theme, cx))
         .children(app.git_error.as_ref().map(|error| {
             div()
@@ -909,9 +923,18 @@ pub(super) fn sync_menu(
             "Push and set upstream",
             "git-sync-push-upstream".to_owned(),
             enabled,
-            blocker,
+            blocker.clone(),
             cx,
             |app| app.request_git_push(true),
+        ))
+        .child(menu_action(
+            theme,
+            "Stash…",
+            "git-sync-stash".to_owned(),
+            enabled,
+            blocker,
+            cx,
+            |app| app.open_git_stash(ChromeTrigger::GitSync),
         ))
         .children(app.git_remote_summary.as_ref().map(|summary| {
             div()
@@ -932,6 +955,295 @@ pub(super) fn sync_menu(
         body.into_any_element(),
         cx,
     )
+}
+
+/// Stash list and controls opened from the branch or sync menu.
+///
+/// Every row carries one Host verb: save, apply, pop, or drop. Apply, pop, and
+/// drop confirm first, and the panel shows only the summary or error the Host
+/// returned.
+///
+/// @param app - Shell state holding the panel, its request state, and its error text.
+/// @param theme - Resolved theme snapshot.
+/// @param cx - Context the panel's controls register listeners on.
+/// @returns The overlay element.
+pub(super) fn stash_panel(
+    app: &mut DesktopApp,
+    theme: &Theme,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
+    let Some(panel) = app.git_stash.clone() else {
+        return div().into_any_element();
+    };
+    if app.take_git_stash_clear() {
+        app.set_input("git-stash-message", "", cx);
+    }
+    let blocker = app.git_action_blocker();
+    let message_input = app.text_field("git-stash-message", "Stash message (optional)", false, cx);
+    let include = panel.include_untracked;
+    let include_toggle = option_toggle(theme, "Include untracked", include)
+        .id("git-stash-include-untracked")
+        .debug_selector(|| "git-stash-include-untracked".to_owned())
+        .on_click(cx.listener(|app, _, _, cx| {
+            if let Some(panel) = app.git_stash.as_mut() {
+                panel.include_untracked = !panel.include_untracked;
+            }
+            cx.notify();
+        }));
+    let mut save = widgets::Button::new(theme, "Save stash")
+        .primary()
+        .enabled(blocker.is_none())
+        .build()
+        .id("git-stash-save")
+        .debug_selector(|| "git-stash-save".to_owned());
+    save = match &blocker {
+        Some(reason) => save.tooltip(widgets::HintView::tooltip(theme, reason.clone())),
+        None => save.on_click(cx.listener(|app, _, _, cx| {
+            let message = app.input_text("git-stash-message", cx);
+            let include = app
+                .git_stash
+                .as_ref()
+                .is_some_and(|panel| panel.include_untracked);
+            app.save_git_stash(message, include);
+            cx.notify();
+        })),
+    };
+    let mut body = div()
+        .flex()
+        .flex_col()
+        .gap(theme.sp(5.))
+        .p(theme.sp(6.))
+        .text_size(theme.fs(10.5))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(theme.sp(4.))
+                        .child(
+                            div()
+                                .text_size(theme.fs(9.5))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(theme.muted)
+                                .child("STASH"),
+                        )
+                        .child(
+                            div()
+                                .text_size(theme.fs(9.5))
+                                .text_color(theme.muted)
+                                .child(match panel.entries.len() {
+                                    0 => "No entries".to_owned(),
+                                    1 => "1 entry".to_owned(),
+                                    count => format!("{count} entries"),
+                                }),
+                        ),
+                )
+                .child(
+                    widgets::Button::new(theme, "×")
+                        .build()
+                        .id("git-stash-close")
+                        .debug_selector(|| "git-stash-close".to_owned())
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.close_git_stash();
+                            cx.notify();
+                        })),
+                ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(theme.sp(3.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .h(theme.control_height())
+                        .child(message_input),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(theme.sp(5.))
+                        .child(include_toggle)
+                        .child(div().flex_1())
+                        .child(save),
+                ),
+        );
+    if let Some(summary) = panel.summary.as_ref() {
+        body = body.child(
+            div()
+                .debug_selector(|| "git-stash-summary".to_owned())
+                .text_size(theme.fs(9.5))
+                .text_color(theme.muted)
+                .child(summary.clone()),
+        );
+    }
+    if let Some(error) = panel.error.as_ref() {
+        body = body.child(
+            div()
+                .debug_selector(|| "git-stash-error".to_owned())
+                .child(error_line(theme, error)),
+        );
+    }
+    if panel.entries.is_empty() {
+        body = body.child(
+            div()
+                .debug_selector(|| "git-stash-empty".to_owned())
+                .text_size(theme.fs(9.5))
+                .text_color(theme.muted)
+                .child(if panel.loading {
+                    "Reading stash…"
+                } else {
+                    "No stash entries."
+                }),
+        );
+    } else {
+        let mut rows = div().flex().flex_col().gap(px(1.));
+        for entry in &panel.entries {
+            let index = entry.index;
+            let message = entry.message.clone();
+            let mut actions = div().flex().flex_row().items_center().gap(theme.sp(1.));
+            for action in [
+                StashEntryAction::Apply,
+                StashEntryAction::Pop,
+                StashEntryAction::Drop,
+            ] {
+                let label = action.label();
+                let selector = format!("git-stash-{}-{index}", label.to_lowercase());
+                let debug = selector.clone();
+                let mut row = div()
+                    .px(theme.sp(3.))
+                    .py(px(1.))
+                    .rounded(theme.corner())
+                    .text_size(theme.fs(9.))
+                    .text_color(if action == StashEntryAction::Drop {
+                        theme.error
+                    } else {
+                        theme.muted
+                    })
+                    .id(gpui::SharedString::from(selector))
+                    .debug_selector(move || debug.clone())
+                    .child(label.to_owned());
+                row = match &blocker {
+                    Some(reason) => row
+                        .opacity(0.45)
+                        .tooltip(widgets::HintView::tooltip(theme, reason.clone())),
+                    None => {
+                        let message = message.clone();
+                        row.cursor_pointer()
+                            .hover(|style| style.bg(theme.surface_raised))
+                            .on_click(cx.listener(move |app, _, _, cx| {
+                                app.request_stash_action(action, index, message.clone());
+                                cx.notify();
+                            }))
+                    }
+                };
+                actions = actions.child(row);
+            }
+            rows = rows.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .gap(theme.sp(4.))
+                    .px(theme.sp(3.))
+                    .py(px(2.))
+                    .rounded(theme.corner())
+                    .id(gpui::SharedString::from(format!("git-stash-entry-{index}")))
+                    .debug_selector({
+                        let selector = format!("git-stash-entry-{index}");
+                        move || selector.clone()
+                    })
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .min_w(px(0.))
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_color(theme.text)
+                                    .child(entry.message.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(theme.fs(9.))
+                                    .text_color(theme.muted)
+                                    .child(format!(
+                                        "stash@{{{index}}} · {} · {}",
+                                        short_commit(&entry.oid),
+                                        entry.time
+                                    )),
+                            ),
+                    )
+                    .child(actions),
+            );
+        }
+        body = body.child(rows);
+        if panel.truncated {
+            body = body.child(
+                div()
+                    .debug_selector(|| "git-stash-truncated".to_owned())
+                    .text_size(theme.fs(9.))
+                    .text_color(theme.warn)
+                    .child("The Host capped the stash list; older entries are not shown."),
+            );
+        }
+    }
+    if panel.loading && !panel.entries.is_empty() {
+        body = body.child(
+            div()
+                .debug_selector(|| "git-stash-loading".to_owned())
+                .text_size(theme.fs(9.))
+                .text_color(theme.muted)
+                .child("Refreshing stash…"),
+        );
+    }
+    div()
+        .absolute()
+        .inset_0()
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .id("git-stash-backdrop")
+                .occlude()
+                .debug_selector(|| "git-stash-backdrop".to_owned()),
+        )
+        .child(
+            div()
+                .absolute()
+                .bottom(theme.sp(crate::layout::BOTTOM_BAR_HEIGHT + 2.))
+                .left(theme.sp(8.))
+                .flex()
+                .flex_col()
+                .w(theme.sp(360.))
+                .max_h(theme.sp(460.))
+                .id("git-stash-panel")
+                .overflow_y_scroll()
+                .rounded(theme.corner())
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.surface_raised)
+                .shadow_lg()
+                .debug_selector(|| "git-stash-panel".to_owned())
+                .on_mouse_down_out(cx.listener(|app, _, _, cx| {
+                    app.close_git_stash();
+                    cx.notify();
+                }))
+                .child(body),
+        )
+        .into_any_element()
 }
 
 /// Right column: review surface for agent changes, backed by Host data only.
@@ -969,10 +1281,13 @@ pub(super) fn changes_column(
         .child(review_header(app, theme, cx))
         .child(view_tab_row(app, theme, cx))
         .children(operation_banner(app, theme, cx))
-        .child(match tab {
-            ChangesTab::Files => files_body(app, theme, cx),
-            ChangesTab::History => history_body(app, theme, cx),
-            ChangesTab::Diff => diff_body(app, theme, cx),
+        .child(match app.git_conflict_view.clone() {
+            Some(view) => conflict_body(app, theme, view, cx),
+            None => match tab {
+                ChangesTab::Files => files_body(app, theme, cx),
+                ChangesTab::History => history_body(app, theme, cx),
+                ChangesTab::Diff => diff_body(app, theme, cx),
+            },
         })
         .children(commit_panel)
         .into_any_element()
@@ -1306,7 +1621,6 @@ fn history_body(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp
             app.move_git_history_selection(delta);
             cx.notify();
         }))
-        .children(operation_banner(app, theme, cx))
         .children(app.git_error.as_ref().map(|error| error_line(theme, error)))
         .children(app.git_history_error.as_ref().map(|error| {
             history_note(
@@ -2035,6 +2349,8 @@ fn operation_banner(
         .git_state
         .clone()
         .filter(|state| state.operation != "none" || !state.conflicts.is_empty())?;
+    let focus = app.git_conflict_focus.clone();
+    let busy = app.git_loading;
     let mut conflicts = div().flex().flex_col().gap(theme.sp(1.));
     for path in &state.conflicts {
         let select = path.clone();
@@ -2045,6 +2361,7 @@ fn operation_banner(
                 .py(px(1.))
                 .rounded(theme.corner())
                 .cursor_pointer()
+                .track_focus(&focus)
                 .hover(|style| style.bg(theme.surface_raised))
                 .id(gpui::SharedString::from(format!("git-conflict-{path}")))
                 .debug_selector(move || format!("git-conflict-{conflict_path}"))
@@ -2052,12 +2369,31 @@ fn operation_banner(
                 .text_color(theme.error)
                 .child(path.clone())
                 .on_click(cx.listener(move |app, _, _, cx| {
-                    app.changes_tab = ChangesTab::Diff;
-                    app.select_git_path(select.clone());
+                    app.open_git_conflict(select.clone());
                     cx.notify();
                 })),
         );
     }
+    let mut continue_action =
+        action_text(theme, "Continue", "git-operation-continue".to_owned());
+    continue_action = if state.conflicts.is_empty() && !busy {
+        continue_action.on_click(cx.listener(|app, _, _, cx| {
+            app.continue_git_operation();
+            cx.notify();
+        }))
+    } else {
+        continue_action.opacity(0.45).tooltip(widgets::HintView::tooltip(
+            theme,
+            if busy {
+                "A Git request is running; wait for its result.".to_owned()
+            } else {
+                format!(
+                    "Resolve the {} remaining conflict(s) before Continue.",
+                    state.conflicts.len()
+                )
+            },
+        ))
+    };
     Some(
         div()
             .flex()
@@ -2087,17 +2423,7 @@ fn operation_banner(
                             .flex()
                             .flex_row()
                             .gap(theme.sp(4.))
-                            .child(
-                                action_text(
-                                    theme,
-                                    "Continue",
-                                    "git-operation-continue".to_owned(),
-                                )
-                                .on_click(cx.listener(|app, _, _, cx| {
-                                    app.continue_git_operation();
-                                    cx.notify();
-                                })),
-                            )
+                            .child(continue_action)
                             .child(
                                 action_text(theme, "Abort", "git-operation-abort".to_owned())
                                     .on_click(cx.listener(|app, _, _, cx| {
@@ -2111,11 +2437,251 @@ fn operation_banner(
                 div()
                     .text_size(theme.fs(9.5))
                     .text_color(theme.muted)
-                    .child("Edit each conflicted file, stage it, then Continue."),
+                    .child(if state.conflicts.is_empty() {
+                        "No conflicts remain; Continue finishes the operation.".to_owned()
+                    } else {
+                        "Select a conflict path to read its stages and keep a side.".to_owned()
+                    }),
             )
             .child(conflicts)
             .into_any_element(),
     )
+}
+
+/// Conflict stages for one unmerged path, with an Accept action per side.
+///
+/// The base stage is read-only. Each side names the Host byte cap when it
+/// shortened that stage, so a cut side is never mistaken for the whole file.
+///
+/// @param app - Shell state that holds the pending confirmation.
+/// @param theme - Resolved theme snapshot.
+/// @param view - Loaded or in-flight stages for one path.
+/// @param cx - Context the Accept buttons register listeners on.
+/// @returns The Changes-column body while the conflict view is open.
+fn conflict_body(
+    app: &mut DesktopApp,
+    theme: &Theme,
+    view: GitConflictView,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
+    let path = view.path.clone();
+    let header_path = path.clone();
+    let mut body = div()
+        .flex()
+        .flex_col()
+        .gap(theme.sp(5.))
+        .min_h(px(0.))
+        .p(theme.sp(8.))
+        .debug_selector(|| "git-conflict-panel".to_owned())
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap(theme.sp(6.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .min_w(px(0.))
+                        .child(
+                            div()
+                                .text_size(theme.fs(11.))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(theme.text)
+                                .child("Resolve conflict"),
+                        )
+                        .child(
+                            div()
+                                .truncate()
+                                .text_size(theme.fs(9.5))
+                                .text_color(theme.muted)
+                                .child(header_path),
+                        ),
+                )
+                .child(
+                    widgets::Button::new(theme, "×")
+                        .build()
+                        .id("git-conflict-close")
+                        .debug_selector(|| "git-conflict-close".to_owned())
+                        .on_click(cx.listener(|app, _, _, cx| {
+                            app.close_git_conflict();
+                            cx.notify();
+                        })),
+                ),
+        );
+    if let Some(error) = view.error.as_ref() {
+        body = body.child(
+            div()
+                .debug_selector(|| "git-conflict-error".to_owned())
+                .child(error_line(theme, error)),
+        );
+    }
+    if view.loading && view.conflict.is_none() {
+        body = body.child(
+            div()
+                .debug_selector(|| "git-conflict-loading".to_owned())
+                .text_size(theme.fs(9.5))
+                .text_color(theme.muted)
+                .child("Reading conflict stages…"),
+        );
+    }
+    if let Some(conflict) = view.conflict.as_ref() {
+        let truncated = &conflict.truncated;
+        body = body
+            .child(conflict_side(
+                theme,
+                "Base",
+                "base",
+                conflict.base.as_deref(),
+                truncated.contains(&GitConflictStage::Base),
+                true,
+            ))
+            .child(conflict_side(
+                theme,
+                "Ours",
+                "ours",
+                conflict.ours.as_deref(),
+                truncated.contains(&GitConflictStage::Ours),
+                false,
+            ))
+            .child(conflict_side(
+                theme,
+                "Theirs",
+                "theirs",
+                conflict.theirs.as_deref(),
+                truncated.contains(&GitConflictStage::Theirs),
+                false,
+            ));
+        let busy = app.git_loading;
+        let mut ours = widgets::Button::new(theme, "Accept ours")
+            .primary()
+            .enabled(!busy)
+            .build()
+            .id("git-conflict-accept-ours")
+            .debug_selector(|| "git-conflict-accept-ours".to_owned());
+        ours = if busy {
+            ours.tooltip(widgets::HintView::tooltip(
+                theme,
+                "A Git request is running; wait for its result.",
+            ))
+        } else {
+            let selected = path.clone();
+            ours.on_click(cx.listener(move |app, _, _, cx| {
+                app.request_resolve_conflict(selected.clone(), GitResolveSide::Ours);
+                cx.notify();
+            }))
+        };
+        let mut theirs = widgets::Button::new(theme, "Accept theirs")
+            .enabled(!busy)
+            .build()
+            .id("git-conflict-accept-theirs")
+            .debug_selector(|| "git-conflict-accept-theirs".to_owned());
+        theirs = if busy {
+            theirs.tooltip(widgets::HintView::tooltip(
+                theme,
+                "A Git request is running; wait for its result.",
+            ))
+        } else {
+            let selected = path.clone();
+            theirs.on_click(cx.listener(move |app, _, _, cx| {
+                app.request_resolve_conflict(selected.clone(), GitResolveSide::Theirs);
+                cx.notify();
+            }))
+        };
+        body = body.child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_end()
+                .gap(theme.sp(4.))
+                .child(theirs)
+                .child(ours),
+        );
+    }
+    body.into_any_element()
+}
+
+/// One read-only stage block with its byte-cap note and absent-stage state.
+///
+/// @param theme - Resolved theme snapshot.
+/// @param label - Stage name the header and notes show.
+/// @param key - Stable selector suffix for this stage.
+/// @param text - Stage content; `None` when the index holds no such stage.
+/// @param truncated - Whether the Host byte cap shortened this stage.
+/// @param read_only - Whether the header marks the stage read-only.
+/// @returns The stage block.
+fn conflict_side(
+    theme: &Theme,
+    label: &'static str,
+    key: &'static str,
+    text: Option<&str>,
+    truncated: bool,
+    read_only: bool,
+) -> AnyElement {
+    let mut pane = div()
+        .flex()
+        .flex_col()
+        .gap(theme.sp(2.))
+        .min_h(px(0.))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(theme.sp(3.))
+                .child(
+                    div()
+                        .text_size(theme.fs(9.5))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(theme.text)
+                        .child(label),
+                )
+                .when(read_only, |element| {
+                    element.child(
+                        div()
+                            .text_size(theme.fs(9.))
+                            .text_color(theme.muted)
+                            .child("read-only"),
+                    )
+                }),
+        );
+    if truncated {
+        pane = pane.child(
+            div()
+                .debug_selector(move || format!("git-conflict-truncated-{key}"))
+                .text_size(theme.fs(9.))
+                .text_color(theme.warn)
+                .child(format!("{label} is shortened by the Host byte cap.")),
+        );
+    }
+    match text {
+        Some(text) => pane.child(
+            div()
+                .debug_selector(move || format!("git-conflict-side-{key}"))
+                .max_h(theme.sp(150.))
+                .id(gpui::SharedString::from(format!("git-conflict-scroll-{key}")))
+                .overflow_y_scroll()
+                .rounded(theme.corner())
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.surface)
+                .p(theme.sp(5.))
+                .text_size(theme.fs(9.5))
+                .font(theme.mono_font())
+                .child(text.to_owned()),
+        ),
+        None => pane.child(
+            div()
+                .debug_selector(move || format!("git-conflict-side-{key}-absent"))
+                .text_size(theme.fs(9.5))
+                .text_color(theme.muted)
+                .child(format!("No {label} stage content for this path.")),
+        ),
+    }
+    .into_any_element()
 }
 
 /// First seven characters of an object id, or the id itself when shorter.
@@ -2417,7 +2983,6 @@ fn files_body(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>)
         .min_h(px(0.))
         .child(toolbar)
         .children(selection_bar(app, theme, cx))
-        .children(operation_banner(app, theme, cx))
         .children(app.git_error.as_ref().map(|error| error_line(theme, error)))
         .child(
             div()
@@ -2788,7 +3353,25 @@ fn file_actions(
                 cx.notify();
             }))
         };
-        actions = actions.child(stage).child(delete_untracked_action(theme, &group));
+        actions = actions.child(stage);
+        let mut delete = row_action(
+            theme,
+            "Delete",
+            format!("git-row-delete-{group}"),
+            group.clone(),
+            true,
+        );
+        delete = if busy {
+            delete.opacity(0.45).tooltip(widgets::HintView::tooltip(theme, busy_reason))
+        } else {
+            let path = file.path.clone();
+            delete.on_click(cx.listener(move |app, _, _, cx| {
+                app.request_discard_untracked(path.clone());
+                cx.stop_propagation();
+                cx.notify();
+            }))
+        };
+        actions = actions.child(delete);
     } else {
         let mut stage = row_action(
             theme,
@@ -2857,25 +3440,6 @@ fn row_action(
         .id(gpui::SharedString::from(id))
         .cursor_pointer()
         .child(label.to_owned())
-}
-
-/// Untracked delete stays disabled until the Host gains the verb in G4.
-fn delete_untracked_action(theme: &Theme, group: &str) -> AnyElement {
-    div()
-        .px(theme.sp(3.))
-        .py(px(1.))
-        .rounded(theme.corner())
-        .text_size(theme.fs(9.))
-        .text_color(theme.muted)
-        .opacity(0.)
-        .group_hover(group.to_owned(), |style| style.opacity(0.5))
-        .id(gpui::SharedString::from(format!("git-row-delete-{group}")))
-        .tooltip(widgets::HintView::tooltip(
-            theme,
-            "Deleting an untracked path needs a Host verb; it lands in G4.",
-        ))
-        .child("Delete")
-        .into_any_element()
 }
 
 /// Whether the Host accepts a discard for this change kind.
@@ -3046,7 +3610,6 @@ fn diff_body(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>) 
         .flex_col()
         .flex_1()
         .min_h(px(0.))
-        .children(operation_banner(app, theme, cx))
         .children(app.git_error.as_ref().map(|error| error_line(theme, error)))
         .child(file_bar)
         .child(
@@ -3740,6 +4303,57 @@ pub(super) fn confirmation_dialog(
             };
             (title, body, action.label())
         }
+        GitConfirmation::ResolveConflict { path, side, .. } => {
+            let (side_name, action_label) = match side {
+                GitResolveSide::Ours => ("ours", "Accept ours"),
+                GitResolveSide::Theirs => ("theirs", "Accept theirs"),
+            };
+            (
+                format!("Accept {side_name} for this conflict?"),
+                format!(
+                    "This keeps the {side_name} side of \"{path}\" and stages the result. The path stays listed until the Host reports the resolution."
+                ),
+                action_label,
+            )
+        }
+        GitConfirmation::Stash {
+            action,
+            index,
+            message,
+            ..
+        } => {
+            let entry = format!("stash@{{{index}}} \"{message}\"");
+            match action {
+                StashEntryAction::Apply => (
+                    "Apply stash entry?".to_owned(),
+                    format!(
+                        "This applies {entry} to the work tree and keeps it in the stash list. The surface reports only the result the Host returns."
+                    ),
+                    "Apply",
+                ),
+                StashEntryAction::Pop => (
+                    "Pop stash entry?".to_owned(),
+                    format!(
+                        "This applies {entry} to the work tree and drops it from the stash list. The surface reports only the result the Host returns."
+                    ),
+                    "Pop",
+                ),
+                StashEntryAction::Drop => (
+                    "Drop stash entry?".to_owned(),
+                    format!(
+                        "This removes {entry} from the stash list without touching the work tree. This cannot be undone."
+                    ),
+                    "Drop",
+                ),
+            }
+        }
+        GitConfirmation::DiscardUntracked { path, .. } => (
+            "Delete untracked file?".to_owned(),
+            format!(
+                "This permanently deletes the untracked file \"{path}\" from disk. Git cannot restore an untracked file, so this cannot be undone."
+            ),
+            "Delete file",
+        ),
     };
     let details = body.to_owned();
     dialog_shell(theme, &title, |content| {
@@ -3808,7 +4422,8 @@ mod tests {
     use super::*;
     use crate::shell::app::{GitMenu, GitRemoteAction};
     use dsh_client_core::git::{
-        GitBranch, GitBranches, GitFileSideStats, GitFileStats, GitOperationState, GitShow,
+        GitBranch, GitBranches, GitConflict, GitFileSideStats, GitFileStats, GitOperationState,
+        GitShow, GitStashEntry,
     };
     use dsh_client_core::transport::HttpTransport;
 
@@ -4731,5 +5346,313 @@ mod tests {
         harness.dismiss();
         harness.keys("enter");
         assert_eq!(harness.with(|app, _| app.git_menu), Some(GitMenu::Sync));
+    }
+
+    /// One conflict view with a base, ours, and an absent theirs.
+    fn conflict_view(path: &str) -> GitConflictView {
+        GitConflictView {
+            path: path.to_owned(),
+            conflict: Some(GitConflict {
+                path: path.to_owned(),
+                base: Some("base\n".to_owned()),
+                ours: Some("ours\n".to_owned()),
+                theirs: None,
+                truncated: vec![GitConflictStage::Ours],
+            }),
+            loading: false,
+            error: None,
+        }
+    }
+
+    /// Shell with a merge in progress and its two conflict paths.
+    fn conflict_harness(setup: impl FnOnce(&mut DesktopApp)) -> crate::harness::Harness {
+        crate::harness::Harness::open_with(1366., 768., move |app| {
+            app.selected_session = Some("git-session".to_owned());
+            app.transport = HttpTransport::new("http://127.0.0.1:9").ok();
+            app.git_state = Some(GitOperationState {
+                operation: "merge".to_owned(),
+                conflicts: vec!["a.txt".to_owned(), "b.txt".to_owned()],
+            });
+            setup(app);
+        })
+    }
+
+    #[test]
+    fn conflict_view_shows_both_sides_the_base_and_the_host_cap() {
+        let mut harness =
+            conflict_harness(|app| app.git_conflict_view = Some(conflict_view("a.txt")));
+        assert!(harness.bounds("git-conflict-panel").is_some());
+        assert!(harness.bounds("git-conflict-side-base").is_some());
+        assert!(harness.bounds("git-conflict-side-ours").is_some());
+        assert!(harness.bounds("git-conflict-side-theirs-absent").is_some());
+        assert!(harness.bounds("git-conflict-truncated-ours").is_some());
+        assert!(harness.bounds("git-conflict-truncated-base").is_none());
+        assert!(harness.bounds("git-conflict-accept-ours").is_some());
+        assert!(harness.bounds("git-conflict-accept-theirs").is_some());
+    }
+
+    #[test]
+    fn conflict_view_names_a_running_read_and_the_host_refusal() {
+        let mut loading = conflict_harness(|app| {
+            app.git_conflict_view = Some(GitConflictView {
+                path: "a.txt".to_owned(),
+                conflict: None,
+                loading: true,
+                error: None,
+            });
+        });
+        assert!(loading.bounds("git-conflict-loading").is_some());
+        assert!(loading.bounds("git-conflict-side-base").is_none());
+
+        let mut failed = conflict_harness(|app| {
+            app.git_conflict_view = Some(GitConflictView {
+                path: "a.txt".to_owned(),
+                conflict: None,
+                loading: false,
+                error: Some("\"a.txt\" is not an unmerged path".to_owned()),
+            });
+        });
+        assert!(failed.bounds("git-conflict-error").is_some());
+        assert!(failed.bounds("git-conflict-loading").is_none());
+    }
+
+    #[test]
+    fn accept_ours_and_theirs_open_their_confirmation() {
+        let mut harness =
+            conflict_harness(|app| app.git_conflict_view = Some(conflict_view("a.txt")));
+        assert!(harness.click("git-conflict-accept-ours"));
+        assert_eq!(
+            harness.with(|app, _| app.git_confirmation.clone()),
+            Some(GitConfirmation::ResolveConflict {
+                session_id: "git-session".to_owned(),
+                path: "a.txt".to_owned(),
+                side: GitResolveSide::Ours,
+            })
+        );
+        assert!(harness.bounds("git-confirm-action").is_some());
+
+        assert!(harness.click("git-confirm-cancel"));
+        assert!(harness.click("git-conflict-accept-theirs"));
+        assert_eq!(
+            harness.with(|app, _| app.git_confirmation.clone()),
+            Some(GitConfirmation::ResolveConflict {
+                session_id: "git-session".to_owned(),
+                path: "a.txt".to_owned(),
+                side: GitResolveSide::Theirs,
+            })
+        );
+    }
+
+    #[test]
+    fn continue_stays_disabled_until_the_host_reports_no_conflicts() {
+        // Without a transport the verb resets Git state, so a click that reached
+        // the handler is visible without waiting for a worker.
+        let mut open = conflict_harness(|app| {
+            app.transport = None;
+            app.git_conflict_view = Some(conflict_view("a.txt"));
+        });
+        assert!(open.bounds("git-operation-continue").is_some());
+        assert!(open.click("git-operation-continue"));
+        open.with(|app, _| {
+            assert!(app.git_state.is_some());
+            assert!(!app.git_loading);
+        });
+
+        let mut resolved = conflict_harness(|app| {
+            app.transport = None;
+            app.git_state = Some(GitOperationState {
+                operation: "merge".to_owned(),
+                conflicts: Vec::new(),
+            });
+        });
+        eprintln!("continue bounds: {:?}", resolved.bounds("git-operation-continue"));
+        eprintln!("abort bounds: {:?}", resolved.bounds("git-operation-abort"));
+        eprintln!("banner: {:?}", resolved.bounds("git-operation-banner"));
+        // probe both stacked banners
+        resolved.click_at(1284., 116.);
+        resolved.with(|app, _| eprintln!("probe 116: state={:?}", app.git_state.is_some()));
+        resolved.click_at(1284., 175.);
+        resolved.with(|app, _| eprintln!("probe 175: state={:?}", app.git_state.is_some()));
+        eprintln!("panel: {:?}", resolved.bounds("changes-panel"));
+        eprintln!("tab bounds: {:?}", resolved.bounds("changes-tab-Files"));
+        assert!(resolved.click("changes-tab-Files"));
+        resolved.with(|app, _| eprintln!("after tab: {:?}", app.changes_tab));
+        assert!(resolved.click("git-operation-abort"));
+        resolved.with(|app, _| eprintln!("after abort: state={:?}", app.git_state));
+        assert!(resolved.click("git-operation-continue"));
+        resolved.with(|app, _| eprintln!("after click: state={:?} loading={} err={:?}", app.git_state, app.git_loading, app.git_error));
+        resolved.with(|app, _| app.continue_git_operation());
+        resolved.with(|app, _| eprintln!("after call: state={:?}", app.git_state));
+        resolved.with(|app, _| assert!(app.git_state.is_none()));
+    }
+
+    fn stash_entry(index: u32, message: &str) -> GitStashEntry {
+        GitStashEntry {
+            index,
+            oid: format!("oid{index}0000"),
+            message: message.to_owned(),
+            time: "2026-11-08T10:00:00+07:00".to_owned(),
+        }
+    }
+
+    /// Shell with the Stash panel open over two entries.
+    fn stash_harness(setup: impl FnOnce(&mut DesktopApp)) -> crate::harness::Harness {
+        crate::harness::Harness::open_with(1366., 768., move |app| {
+            app.selected_session = Some("git-session".to_owned());
+            app.transport = HttpTransport::new("http://127.0.0.1:9").ok();
+            app.git_stash = Some(crate::shell::app::StashPanel {
+                entries: vec![stash_entry(0, "wip one"), stash_entry(1, "wip two")],
+                truncated: false,
+                loading: false,
+                error: None,
+                summary: None,
+                include_untracked: false,
+                trigger: ChromeTrigger::GitBranch,
+            });
+            setup(app);
+        })
+    }
+
+    #[test]
+    fn both_status_menus_offer_the_stash_panel() {
+        let mut branch = git_menu_harness(|app| app.git_menu = Some(GitMenu::Branch));
+        assert!(branch.bounds("git-branch-menu-stash").is_some());
+        let mut sync = git_menu_harness(|app| app.git_menu = Some(GitMenu::Sync));
+        assert!(sync.bounds("git-sync-stash").is_some());
+    }
+
+    #[test]
+    fn stash_panel_lists_entries_and_confirms_each_entry_action() {
+        let mut harness = stash_harness(|_| {});
+        assert!(harness.bounds("git-stash-panel").is_some());
+        assert!(harness.bounds("git-stash-entry-0").is_some());
+        assert!(harness.bounds("git-stash-entry-1").is_some());
+
+        assert!(harness.click("git-stash-apply-0"));
+        assert_eq!(
+            harness.with(|app, _| app.git_confirmation.clone()),
+            Some(GitConfirmation::Stash {
+                session_id: "git-session".to_owned(),
+                action: StashEntryAction::Apply,
+                index: 0,
+                message: "wip one".to_owned(),
+            })
+        );
+        assert!(harness.click("git-confirm-cancel"));
+
+        assert!(harness.click("git-stash-pop-1"));
+        assert_eq!(
+            harness.with(|app, _| app.git_confirmation.clone()),
+            Some(GitConfirmation::Stash {
+                session_id: "git-session".to_owned(),
+                action: StashEntryAction::Pop,
+                index: 1,
+                message: "wip two".to_owned(),
+            })
+        );
+        assert!(harness.click("git-confirm-cancel"));
+
+        assert!(harness.click("git-stash-drop-0"));
+        assert_eq!(
+            harness.with(|app, _| app.git_confirmation.clone()),
+            Some(GitConfirmation::Stash {
+                session_id: "git-session".to_owned(),
+                action: StashEntryAction::Drop,
+                index: 0,
+                message: "wip one".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn stash_panel_disables_every_mutation_while_a_request_runs() {
+        let mut harness =
+            stash_harness(|app| app.git_remote_pending = Some(GitRemoteAction::Push));
+        assert!(harness.click("git-stash-apply-0"));
+        assert!(harness.click("git-stash-save"));
+        harness.with(|app, _| {
+            assert!(app.git_confirmation.is_none());
+            assert!(!app.git_loading);
+        });
+    }
+
+    #[test]
+    fn stash_panel_names_an_empty_list_and_the_host_cap() {
+        let mut empty = stash_harness(|app| {
+            if let Some(panel) = app.git_stash.as_mut() {
+                panel.entries.clear();
+            }
+        });
+        assert!(empty.bounds("git-stash-empty").is_some());
+
+        let mut capped = stash_harness(|app| {
+            if let Some(panel) = app.git_stash.as_mut() {
+                panel.truncated = true;
+            }
+        });
+        assert!(capped.bounds("git-stash-truncated").is_some());
+    }
+
+    #[test]
+    fn escape_closes_the_stash_panel_and_returns_focus_to_its_trigger() {
+        let mut harness = stash_harness(|_| {});
+        let expected = harness.with(|app, _| app.chrome_focus.git_branch.clone());
+        harness.dismiss();
+        assert!(harness.with(|app, _| app.git_stash.is_none()));
+        assert_eq!(harness.focused(), Some(expected));
+    }
+
+    #[test]
+    fn escape_closes_the_conflict_view_and_returns_focus_to_the_conflict_chips() {
+        let mut harness =
+            conflict_harness(|app| app.git_conflict_view = Some(conflict_view("a.txt")));
+        let expected = harness.with(|app, _| app.chrome_focus.git_conflict.clone());
+        harness.dismiss();
+        assert!(harness.with(|app, _| app.git_conflict_view.is_none()));
+        assert_eq!(harness.focused(), Some(expected));
+    }
+
+    /// Shell with one untracked row in the Files tab.
+    fn untracked_harness(path: &'static str) -> crate::harness::Harness {
+        crate::harness::Harness::open_with(1366., 768., move |app| {
+            app.selected_session = Some("git-session".to_owned());
+            app.transport = HttpTransport::new("http://127.0.0.1:9").ok();
+            let mut status = status(0, 0, None);
+            status.files = vec![file(path, "untracked", false, true)];
+            app.git_status = Some(status);
+        })
+    }
+
+    #[test]
+    fn untracked_delete_confirms_the_path_before_the_host_runs() {
+        let mut harness = untracked_harness("docs/new.md");
+        harness.with(|app, cx| {
+            app.request_discard_untracked("docs/new.md".to_owned());
+            cx.notify();
+        });
+        harness.settle();
+        assert_eq!(
+            harness.with(|app, _| app.git_confirmation.clone()),
+            Some(GitConfirmation::DiscardUntracked {
+                session_id: "git-session".to_owned(),
+                path: "docs/new.md".to_owned(),
+            })
+        );
+        assert!(harness.bounds("git-confirm-action").is_some());
+        assert!(harness.click("git-confirm-action"));
+        harness.with(|app, _| assert!(app.git_loading));
+    }
+
+    #[test]
+    fn untracked_delete_refuses_a_directory_row() {
+        let mut harness = untracked_harness("docs/");
+        harness.with(|app, _| app.request_discard_untracked("docs/".to_owned()));
+        harness.with(|app, _| {
+            assert!(app.git_confirmation.is_none());
+            assert!(app
+                .git_error
+                .as_deref()
+                .is_some_and(|error| error.contains("untracked directory")));
+        });
     }
 }

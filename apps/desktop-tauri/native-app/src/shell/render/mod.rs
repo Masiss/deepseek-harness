@@ -167,6 +167,11 @@ pub(crate) fn render(
     if app.git_menu == Some(GitMenu::Sync) {
         root = root.child(git_review::sync_menu(app, &theme, cx));
     }
+    // The panel stays hidden under its own confirmation so the dialog's
+    // backdrop does not pass a click through to the panel backdrop.
+    if app.git_stash.is_some() && app.git_confirmation.is_none() {
+        root = root.child(git_review::stash_panel(app, &theme, cx));
+    }
     if let Some(prompt) = app.update_prompt.clone() {
         root = root.child(update_prompt(app, &theme, &prompt, cx));
     }
