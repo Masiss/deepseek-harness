@@ -1,16 +1,21 @@
 //! Changes review surface: file grouping, per-side stats, patch parsing, and Git bodies.
 //!
-//! The panel mirrors the Git review prototype: a Changes header, Diff and Files
-//! views, and a commit bar. Every action calls a Host verb and renders only the
-//! result the Host reports.
+//! The panel mirrors the Git review prototype: a Changes header, Diff, Files,
+//! and History views, and a commit bar. Every action calls a Host verb and
+//! renders only the result the Host reports.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use dsh_client_core::git::{GitApplyTarget, GitDiff, GitFile, GitFileSideStats, GitStatus};
-use gpui::{div, prelude::*, px, AnyElement, Context, TextAlign};
+use dsh_client_core::git::{
+    GitApplyTarget, GitCommitEntry, GitDiff, GitFile, GitFileSideStats, GitStatus,
+};
+use gpui::{
+    canvas, div, point, prelude::*, px, AnyElement, BorderStyle, Bounds, Context, Corners, Edges,
+    Hsla, PathBuilder, Pixels, TextAlign, Window,
+};
 
-use super::app::{ChangesTab, DesktopApp, GitConfirmation};
+use super::app::{ChangesTab, DesktopApp, GitCommitAction, GitConfirmation};
 use super::render::dialog_shell;
 use super::theme::Theme;
 use super::widgets;
@@ -23,6 +28,28 @@ const CHANGES_TAB_HEIGHT: f32 = 33.0;
 const REVIEW_ROW_HEIGHT: f32 = 22.0;
 /// Line-number gutter width (px).
 const GUTTER_WIDTH: f32 = 30.0;
+/// Height of one History row (px).
+const HISTORY_ROW_HEIGHT: f32 = 40.0;
+/// Height of one row's graph canvas, centred in the row (px).
+const HISTORY_GRAPH_HEIGHT: f32 = 34.0;
+/// Distance between two lane centres (px).
+const HISTORY_LANE_SPACING: f32 = 18.0;
+/// Left offset of the first lane centre (px).
+const HISTORY_GRAPH_PAD_LEFT: f32 = 8.0;
+/// Width the gutter adds after the last lane centre (px).
+const HISTORY_GRAPH_TAIL: f32 = 6.0;
+/// Graph stroke width (px).
+const HISTORY_GRAPH_STROKE: f32 = 1.5;
+/// Solid commit-dot radius (px).
+const HISTORY_DOT_RADIUS: f32 = 4.1;
+/// Outer radius of the HEAD ring (px).
+const HISTORY_HEAD_RING_RADIUS: f32 = 5.6;
+/// Radius of the filled dot inside the HEAD ring (px).
+const HISTORY_HEAD_DOT_RADIUS: f32 = 3.2;
+/// Vertical control-point offset of a merge or join curve (px).
+const HISTORY_CURVE_CONTROL: f32 = 10.0;
+/// Refs shown after a subject before the rest collapse into a count chip.
+const HISTORY_VISIBLE_REFS: usize = 4;
 /// How many recent commit subjects the commit bar offers.
 const RECENT_MESSAGE_LIMIT: usize = 5;
 
@@ -401,7 +428,11 @@ pub(super) fn changes_column(
         app.git_commit_message.clear();
     }
     let tab = app.changes_tab;
-    let commit_panel = (tab != ChangesTab::Branches).then(|| commit_bar(app, theme, cx));
+    if tab == ChangesTab::History {
+        app.ensure_git_history();
+    }
+    let commit_panel =
+        (tab != ChangesTab::Branches && tab != ChangesTab::History).then(|| commit_bar(app, theme, cx));
     div()
         .flex()
         .flex_col()
@@ -423,6 +454,7 @@ pub(super) fn changes_column(
         .child(match tab {
             ChangesTab::Branches => branches_body(app, theme, cx),
             ChangesTab::Files => files_body(app, theme, cx),
+            ChangesTab::History => history_body(app, theme, cx),
             ChangesTab::Diff => diff_body(app, theme, cx),
         })
         .children(commit_panel)
@@ -546,7 +578,7 @@ fn review_header(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopAp
         .into_any_element()
 }
 
-/// Diff and Files views; History stays out until G2.
+/// Diff, Files, and History views; Branches joins them while it is open.
 fn view_tab_row(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>) -> AnyElement {
     let tab = app.changes_tab;
     let mut row = div()
@@ -559,7 +591,14 @@ fn view_tab_row(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp
         .border_b_1()
         .border_color(theme.border)
         .child(view_tab_button(theme, "Diff", ChangesTab::Diff, tab, cx))
-        .child(view_tab_button(theme, "Files", ChangesTab::Files, tab, cx));
+        .child(view_tab_button(theme, "Files", ChangesTab::Files, tab, cx))
+        .child(view_tab_button(
+            theme,
+            "History",
+            ChangesTab::History,
+            tab,
+            cx,
+        ));
     if tab == ChangesTab::Branches {
         row = row.child(view_tab_button(
             theme,
@@ -581,21 +620,27 @@ fn view_tab_button(
     cx: &mut Context<DesktopApp>,
 ) -> AnyElement {
     let selected = current == value;
+    let selector = format!("changes-tab-{label}");
     div()
         .px(theme.sp(8.))
         .py(px(2.))
         .rounded(theme.corner())
         .id(gpui::SharedString::from(format!("changes-tab-{label}")))
+        .debug_selector(move || selector.clone())
         .cursor_pointer()
         .when(selected, |element| element.bg(theme.selection))
         .hover(|style| style.bg(theme.surface_raised))
         .text_size(theme.fs(10.))
         .text_color(if selected { theme.accent } else { theme.muted })
         .child(label.to_owned())
-        .on_click(cx.listener(move |app, _, _, cx| {
+        .on_click(cx.listener(move |app, _, window, cx| {
             app.changes_tab = value;
             if value == ChangesTab::Branches {
                 app.refresh_git_branches();
+            }
+            if value == ChangesTab::History {
+                app.refresh_git_history();
+                window.focus(&app.git_history_focus);
             }
             cx.notify();
         }))
@@ -810,6 +855,863 @@ fn branches_body(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopAp
         .into_any_element()
 }
 
+/// Colours one History graph paints with, copied out of the theme snapshot.
+#[derive(Clone, Copy)]
+struct GraphTheme {
+    /// First lane colour.
+    accent: Hsla,
+    /// Second lane colour.
+    warn: Hsla,
+    /// Third lane colour.
+    error: Hsla,
+    /// Interface scale the stroke widths and radii follow.
+    scale: f32,
+}
+
+impl GraphTheme {
+    /// Colour of one lane; the three state tokens cycle.
+    /// @param lane — lane index.
+    /// @returns the lane's colour.
+    fn lane(&self, lane: usize) -> Hsla {
+        match lane % 3 {
+            0 => self.accent,
+            1 => self.warn,
+            _ => self.error,
+        }
+    }
+}
+
+/// Lane occupancy and curve endpoints one History row paints.
+struct GraphPaint {
+    /// Lane of the commit's dot.
+    lane: usize,
+    /// Occupied lanes before the row.
+    before: Vec<bool>,
+    /// Lanes whose rail curves into the dot.
+    joins: Vec<usize>,
+    /// Lanes the merge curves reach.
+    extra: Vec<usize>,
+    /// Whether the commit has a parent, so the current lane continues below.
+    has_parents: bool,
+    /// Whether HEAD points here and the dot carries a ring.
+    head: bool,
+}
+
+/// Width of the fixed graph gutter for a lane count.
+/// @param lanes — lanes the layout produced.
+/// @returns the gutter width in unscaled pixels.
+fn graph_width(lanes: usize) -> f32 {
+    lanes.max(1) as f32 * HISTORY_LANE_SPACING + HISTORY_GRAPH_TAIL
+}
+
+/// History tab: swimlane graph rows and the selected commit's detail.
+fn history_body(app: &mut DesktopApp, theme: &Theme, cx: &mut Context<DesktopApp>) -> AnyElement {
+    let commits = app.git_history.clone();
+    let layout = layout_graph(&commits);
+    let selected = app.git_history_selected.clone();
+    let local_branches: Vec<String> = app
+        .git_branches
+        .as_ref()
+        .map(|branches| {
+            branches
+                .branches
+                .iter()
+                .map(|branch| branch.name.clone())
+                .collect()
+        })
+        .unwrap_or_default();
+    let graph_theme = GraphTheme {
+        accent: theme.accent,
+        warn: theme.warn,
+        error: theme.error,
+        scale: theme.scale,
+    };
+    let busy = app.git_loading;
+    let mut list = div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h(px(0.))
+        .id("git-history-scroll")
+        .debug_selector(|| "git-history-scroll".to_owned())
+        .track_scroll(&app.git_history_scroll)
+        .overflow_y_scroll()
+        .px(theme.sp(8.))
+        .py(theme.sp(4.));
+    let row_context = HistoryRowContext {
+        theme,
+        commits: &commits,
+        layout: &layout,
+        selected: selected.as_deref(),
+        local_branches: &local_branches,
+        graph: graph_theme,
+    };
+    for (row_index, row) in layout.rows.iter().enumerate() {
+        list = list.child(history_row(&row_context, row, row_index == 0, cx));
+    }
+    if commits.is_empty() {
+        if app.git_history_loading {
+            list = list.child(history_note(
+                theme,
+                "git-history-loading",
+                "Reading history…".to_owned(),
+                theme.muted,
+            ));
+        } else if app.git_history_error.is_none() {
+            list = list.child(if app.git_history_loaded {
+                history_empty(theme)
+            } else {
+                history_note(
+                    theme,
+                    "git-history-loading",
+                    "Connect a Session to read its history.".to_owned(),
+                    theme.muted,
+                )
+            });
+        }
+    } else if app.git_history_loading {
+        list = list.child(history_note(
+            theme,
+            "git-history-loading",
+            "Reading history…".to_owned(),
+            theme.muted,
+        ));
+    }
+    match app.git_history_footer {
+        HistoryFooter::LoadOlder { skip } => {
+            list = list.child(load_older_row(theme, skip, busy, cx));
+        }
+        HistoryFooter::Truncated => {
+            list = list.child(history_note(
+                theme,
+                "git-history-truncated",
+                "The Host capped this page at its byte limit; older commits are not listed."
+                    .to_owned(),
+                theme.warn,
+            ));
+        }
+        HistoryFooter::End => {}
+    }
+    let detail = history_detail(app, theme, &commits, selected.as_deref(), &local_branches, cx);
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .min_h(px(0.))
+        .debug_selector(|| "git-history-panel".to_owned())
+        .track_focus(&app.git_history_focus)
+        .on_key_down(cx.listener(|app, event: &gpui::KeyDownEvent, _, cx| {
+            let delta = match event.keystroke.key.as_str() {
+                "down" => 1,
+                "up" => -1,
+                _ => return,
+            };
+            app.move_git_history_selection(delta);
+            cx.notify();
+        }))
+        .children(operation_banner(app, theme, cx))
+        .children(app.git_error.as_ref().map(|error| error_line(theme, error)))
+        .children(app.git_history_error.as_ref().map(|error| {
+            history_note(
+                theme,
+                "git-history-error",
+                format!("{error} Choose History again to retry."),
+                theme.error,
+            )
+        }))
+        .child(list)
+        .children(detail)
+        .into_any_element()
+}
+
+/// One named note row inside the History list.
+/// @param selector — debug selector the harness addresses it by.
+/// @param text — message to show.
+/// @param color — token the message reads in.
+fn history_note(theme: &Theme, selector: &'static str, text: String, color: Hsla) -> AnyElement {
+    div()
+        .flex_shrink_0()
+        .px(theme.sp(6.))
+        .py(theme.sp(6.))
+        .debug_selector(move || selector.to_owned())
+        .text_size(theme.fs(10.))
+        .text_color(color)
+        .child(text)
+        .into_any_element()
+}
+
+/// Empty History list for a repository without commits.
+fn history_empty(theme: &Theme) -> AnyElement {
+    div()
+        .debug_selector(|| "git-history-empty".to_owned())
+        .child(empty_state(
+            theme,
+            "No commits",
+            "The Host reports no commit in this repository yet.",
+        ))
+        .into_any_element()
+}
+
+/// Footer row that pages to older commits.
+/// @param skip — commits to skip from HEAD for the next page.
+/// @param busy — whether a Git request already runs for this repository.
+fn load_older_row(
+    theme: &Theme,
+    skip: u32,
+    busy: bool,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
+    let mut row = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .justify_center()
+        .h(theme.sp(HISTORY_ROW_HEIGHT))
+        .flex_shrink_0()
+        .rounded(theme.corner())
+        .id("git-history-load-older")
+        .debug_selector(|| "git-history-load-older".to_owned())
+        .text_size(theme.fs(10.))
+        .child(if busy {
+            "Loading older commits…"
+        } else {
+            "Load older commits"
+        });
+    if busy {
+        row = row.opacity(0.45).text_color(theme.muted);
+    } else {
+        row = row
+            .cursor_pointer()
+            .text_color(theme.accent)
+            .hover(|style| style.bg(theme.surface_raised))
+            .on_click(cx.listener(move |app, _, _, cx| {
+                app.load_git_history_page(skip);
+                cx.notify();
+            }));
+    }
+    row.into_any_element()
+}
+
+/// Values every History row shares, so one row only adds its own layout.
+struct HistoryRowContext<'a> {
+    /// Resolved theme snapshot.
+    theme: &'a Theme,
+    /// Loaded commits the rows index into.
+    commits: &'a [GitCommitEntry],
+    /// Layout that produced the rows and the gutter width.
+    layout: &'a GraphLayout,
+    /// oid the list shows as selected.
+    selected: Option<&'a str>,
+    /// Local branch names used to classify ref chips.
+    local_branches: &'a [String],
+    /// Colours and scale the graph paints with.
+    graph: GraphTheme,
+}
+
+/// One 40px History row: graph gutter, subject with refs, author and oid.
+/// @param first — whether this is the first row, which tests address directly.
+fn history_row(
+    context: &HistoryRowContext,
+    row: &GraphRow,
+    first: bool,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
+    let theme = context.theme;
+    let commit = &context.commits[row.index];
+    let oid = commit.oid.clone();
+    let is_selected = context.selected == Some(commit.oid.as_str());
+    let refs = history_refs(&commit.refs, context.local_branches);
+    let parents = commit.parents.len();
+    let meta = if parents > 1 {
+        format!(
+            "{} · {} · {parents} parents",
+            commit.author_name, commit.author_time
+        )
+    } else {
+        format!("{} · {}", commit.author_name, commit.author_time)
+    };
+    let mut chips = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(theme.sp(4.))
+        .flex_shrink_0();
+    for (chip_index, reference) in refs.chips.iter().take(HISTORY_VISIBLE_REFS).enumerate() {
+        chips = chips.child(ref_chip(
+            theme,
+            reference,
+            format!("git-history-ref-{}-{chip_index}", row.index),
+        ));
+    }
+    if refs.chips.len() > HISTORY_VISIBLE_REFS {
+        let rest = refs
+            .chips
+            .iter()
+            .skip(HISTORY_VISIBLE_REFS)
+            .map(|reference| reference.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        chips = chips.child(
+            div()
+                .px(theme.sp(4.))
+                .rounded(px(3.))
+                .border_1()
+                .border_color(theme.border)
+                .id(gpui::SharedString::from(format!(
+                    "git-history-refs-{}-more",
+                    row.index
+                )))
+                .text_size(theme.fs(8.5))
+                .text_color(theme.muted)
+                .tooltip(widgets::HintView::tooltip(theme, rest))
+                .child(format!("+{}", refs.chips.len() - HISTORY_VISIBLE_REFS)),
+        );
+    }
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(theme.sp(6.))
+        .h(theme.sp(HISTORY_ROW_HEIGHT))
+        .flex_shrink_0()
+        .px(theme.sp(2.))
+        .rounded(theme.corner())
+        .cursor_pointer()
+        .id(gpui::SharedString::from(format!("git-history-row-{}", row.index)))
+        .hover(|style| style.bg(theme.surface_raised))
+        .when(is_selected, |element| element.bg(theme.selection))
+        .when(first, |element| {
+            element.debug_selector(|| "git-history-row-first".to_owned())
+        })
+        .when(is_selected, |element| {
+            element.debug_selector(|| "git-history-row-selected".to_owned())
+        })
+        .on_click(cx.listener(move |app, _, window, cx| {
+            app.select_git_history(oid.clone());
+            window.focus(&app.git_history_focus);
+            cx.notify();
+        }))
+        .child(history_graph(
+            theme,
+            context.layout.lanes,
+            row,
+            refs.head,
+            !commit.parents.is_empty(),
+            context.graph,
+        ))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(2.))
+                .flex_1()
+                .min_w(px(0.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(theme.sp(5.))
+                        .min_w(px(0.))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.))
+                                .truncate()
+                                .text_size(theme.fs(12.4))
+                                .text_color(theme.text)
+                                .when(refs.head, |element| {
+                                    element.font_weight(gpui::FontWeight::SEMIBOLD)
+                                })
+                                .child(commit.subject.clone()),
+                        )
+                        .child(chips),
+                )
+                .child(
+                    div()
+                        .truncate()
+                        .text_size(theme.fs(11.))
+                        .text_color(theme.muted)
+                        .child(meta),
+                ),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_size(theme.fs(9.5))
+                .text_color(theme.muted)
+                .child(short_commit(&commit.oid).to_owned()),
+        )
+        .into_any_element()
+}
+
+/// Ref chip for one decoration.
+/// @param id — element id, unique within the loaded page.
+fn ref_chip(theme: &Theme, reference: &HistoryRef, id: String) -> AnyElement {
+    let (color, border, hint) = match reference.kind {
+        RefKind::Branch => (
+            theme.accent,
+            theme.accent.opacity(0.45),
+            "Local branch",
+        ),
+        RefKind::Remote => (theme.muted, theme.border, "Remote branch"),
+        RefKind::Tag => (theme.warn, theme.warn.opacity(0.45), "Tag"),
+    };
+    div()
+        .px(theme.sp(4.))
+        .rounded(px(3.))
+        .border_1()
+        .border_color(border)
+        .id(gpui::SharedString::from(id))
+        .text_size(theme.fs(9.))
+        .text_color(color)
+        .tooltip(widgets::HintView::tooltip(theme, hint))
+        .child(reference.name.clone())
+        .into_any_element()
+}
+
+/// The graph gutter of one History row.
+fn history_graph(
+    theme: &Theme,
+    lanes: usize,
+    row: &GraphRow,
+    head: bool,
+    has_parents: bool,
+    graph_theme: GraphTheme,
+) -> AnyElement {
+    let paint = GraphPaint {
+        lane: row.lane,
+        before: row
+            .before
+            .iter()
+            .map(|waiting| waiting.is_some())
+            .collect(),
+        joins: row.joins.clone(),
+        extra: row.extra.iter().map(|(_, lane)| *lane).collect(),
+        has_parents,
+        head,
+    };
+    canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| paint_history_graph(bounds, &paint, graph_theme, window),
+    )
+    .w(theme.sp(graph_width(lanes)))
+    .h(theme.sp(HISTORY_GRAPH_HEIGHT))
+    .flex_shrink_0()
+    .into_any_element()
+}
+
+/// Paints one row's rails, merge curves, joins, and dot.
+fn paint_history_graph(
+    bounds: Bounds<Pixels>,
+    row: &GraphPaint,
+    theme: GraphTheme,
+    window: &mut Window,
+) {
+    let scale = theme.scale;
+    let lane_x = |lane: usize| {
+        bounds.origin.x
+            + px((lane as f32 * HISTORY_LANE_SPACING + HISTORY_GRAPH_PAD_LEFT) * scale)
+    };
+    let top = bounds.origin.y;
+    let bottom = bounds.origin.y + bounds.size.height;
+    let center = bounds.origin.y + bounds.size.height / 2.0;
+    let control = px(HISTORY_CURVE_CONTROL * scale);
+    for (lane, occupied) in row.before.iter().enumerate() {
+        if !occupied || lane == row.lane || row.joins.contains(&lane) {
+            continue;
+        }
+        let x = lane_x(lane);
+        paint_line(window, point(x, top), point(x, bottom), theme.lane(lane).opacity(0.7), scale);
+    }
+    if row.before.get(row.lane).copied().unwrap_or(false) {
+        let x = lane_x(row.lane);
+        paint_line(
+            window,
+            point(x, top),
+            point(x, center),
+            theme.lane(row.lane),
+            scale,
+        );
+    }
+    for join in &row.joins {
+        let from = lane_x(*join);
+        let dot = lane_x(row.lane);
+        paint_curve(
+            window,
+            point(from, top),
+            point(from, center - control),
+            point(dot, center - control),
+            point(dot, center),
+            theme.lane(*join),
+            scale,
+        );
+    }
+    let dot = lane_x(row.lane);
+    for lane in &row.extra {
+        let target = lane_x(*lane);
+        paint_curve(
+            window,
+            point(dot, center),
+            point(dot, center + control),
+            point(target, center + control),
+            point(target, bottom),
+            theme.lane(*lane),
+            scale,
+        );
+    }
+    if row.has_parents {
+        paint_line(
+            window,
+            point(dot, center),
+            point(dot, bottom),
+            theme.lane(row.lane),
+            scale,
+        );
+    }
+    let color = theme.lane(row.lane);
+    paint_dot(window, dot, center, HISTORY_DOT_RADIUS, color, scale);
+    if row.head {
+        paint_ring(window, dot, center, HISTORY_HEAD_RING_RADIUS, color, scale);
+        paint_dot(window, dot, center, HISTORY_HEAD_DOT_RADIUS, color, scale);
+    }
+}
+
+/// Paints one straight graph segment.
+fn paint_line(
+    window: &mut Window,
+    from: gpui::Point<Pixels>,
+    to: gpui::Point<Pixels>,
+    color: Hsla,
+    scale: f32,
+) {
+    let mut builder = PathBuilder::stroke(px(HISTORY_GRAPH_STROKE * scale));
+    builder.move_to(from);
+    builder.line_to(to);
+    paint_stroke(window, builder, color);
+}
+
+/// Paints one cubic curve between two lanes.
+fn paint_curve(
+    window: &mut Window,
+    start: gpui::Point<Pixels>,
+    control_a: gpui::Point<Pixels>,
+    control_b: gpui::Point<Pixels>,
+    end: gpui::Point<Pixels>,
+    color: Hsla,
+    scale: f32,
+) {
+    let mut builder = PathBuilder::stroke(px(HISTORY_GRAPH_STROKE * scale));
+    builder.move_to(start);
+    builder.cubic_bezier_to(end, control_a, control_b);
+    paint_stroke(window, builder, color);
+}
+
+/// Tessellates and paints one stroked path.
+///
+/// A tessellation failure leaves the segment unpainted rather than panicking in
+/// the paint pass; the rows stay usable without it.
+fn paint_stroke(window: &mut Window, builder: PathBuilder, color: Hsla) {
+    if let Ok(path) = builder.build() {
+        window.paint_path(path, color);
+    }
+}
+
+/// Paints one filled commit dot.
+fn paint_dot(window: &mut Window, x: Pixels, y: Pixels, radius: f32, color: Hsla, scale: f32) {
+    let diameter = px(radius * 2.0 * scale);
+    window.paint_quad(gpui::PaintQuad {
+        bounds: Bounds::new(
+            point(x - diameter / 2.0, y - diameter / 2.0),
+            gpui::size(diameter, diameter),
+        ),
+        corner_radii: Corners::all(diameter / 2.0),
+        background: color.into(),
+        border_widths: Edges::all(px(0.)),
+        border_color: color,
+        border_style: BorderStyle::Solid,
+    });
+}
+
+/// Paints the HEAD ring around one dot.
+fn paint_ring(window: &mut Window, x: Pixels, y: Pixels, radius: f32, color: Hsla, scale: f32) {
+    let diameter = px(radius * 2.0 * scale);
+    window.paint_quad(gpui::PaintQuad {
+        bounds: Bounds::new(
+            point(x - diameter / 2.0, y - diameter / 2.0),
+            gpui::size(diameter, diameter),
+        ),
+        corner_radii: Corners::all(diameter / 2.0),
+        background: Hsla::transparent_black().into(),
+        border_widths: Edges::all(px(1.3 * scale)),
+        border_color: color,
+        border_style: BorderStyle::Solid,
+    });
+}
+
+/// Commit detail: identity, parents, refs, patch, and entry actions.
+/// @param selected — oid the list selected, or `None` when nothing is selected.
+fn history_detail(
+    app: &mut DesktopApp,
+    theme: &Theme,
+    commits: &[GitCommitEntry],
+    selected: Option<&str>,
+    local_branches: &[String],
+    cx: &mut Context<DesktopApp>,
+) -> Option<AnyElement> {
+    let commit = commits
+        .iter()
+        .find(|commit| Some(commit.oid.as_str()) == selected)?;
+    let refs = history_refs(&commit.refs, local_branches);
+    let busy = app.git_loading;
+    let mut parents = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(theme.sp(4.))
+        .flex_wrap();
+    if commit.parents.is_empty() {
+        parents = parents.child(
+            div()
+                .text_size(theme.fs(9.5))
+                .text_color(theme.muted)
+                .child("Root commit"),
+        );
+    }
+    for parent in &commit.parents {
+        let known = commits.iter().any(|commit| &commit.oid == parent);
+        let mut chip = div()
+            .px(theme.sp(4.))
+            .rounded(px(3.))
+            .border_1()
+            .border_color(theme.border)
+            .text_size(theme.fs(9.))
+            .text_color(theme.muted)
+            .id(gpui::SharedString::from(format!(
+                "git-history-parent-{parent}"
+            )))
+            .child(short_commit(parent).to_owned());
+        if known {
+            let parent = parent.clone();
+            chip = chip
+                .cursor_pointer()
+                .hover(|style| style.bg(theme.surface_raised))
+                .on_click(cx.listener(move |app, _, window, cx| {
+                    app.select_git_history(parent.clone());
+                    window.focus(&app.git_history_focus);
+                    cx.notify();
+                }));
+        } else {
+            chip = chip.opacity(0.55).tooltip(widgets::HintView::tooltip(
+                theme,
+                "This parent is not in the loaded page; choose Load older to reach it.",
+            ));
+        }
+        parents = parents.child(chip);
+    }
+    let mut refs_line = Vec::new();
+    if refs.head {
+        refs_line.push("HEAD".to_owned());
+    }
+    refs_line.extend(refs.chips.iter().map(|reference| reference.name.clone()));
+    let refs_text = if refs_line.is_empty() {
+        String::new()
+    } else {
+        format!("Refs: {}", refs_line.join(", "))
+    };
+    let patch: AnyElement = match (&app.git_history_show, &app.git_history_show_error) {
+        (Some(show), _) => {
+            let mut content = div().flex().flex_col().gap(theme.sp(4.)).w_full();
+            if show.truncated {
+                content = content.child(history_note(
+                    theme,
+                    "git-history-patch-truncated",
+                    "The Host capped this patch at its byte limit.".to_owned(),
+                    theme.warn,
+                ));
+            }
+            if show.patch.trim().is_empty() {
+                content = content.child(history_note(
+                    theme,
+                    "git-history-patch-empty",
+                    "The Host returned an empty patch for this commit. A merge commit has no default patch, and an empty commit has no change."
+                        .to_owned(),
+                    theme.muted,
+                ));
+            } else {
+                content = content.child(
+                    div()
+                        .id("git-history-patch")
+                        .debug_selector(|| "git-history-patch".to_owned())
+                        .flex_shrink_0()
+                        .overflow_x_scroll()
+                        .rounded(theme.corner())
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.code_background)
+                        .p(theme.sp(6.))
+                        .font(theme.mono_font())
+                        .text_size(theme.fs(9.5))
+                        .text_color(theme.muted)
+                        .whitespace_nowrap()
+                        .child(show.patch.clone()),
+                );
+            }
+            content.into_any_element()
+        }
+        (None, Some(error)) => history_note(
+            theme,
+            "git-history-patch-error",
+            format!("{error} Select the commit again to retry."),
+            theme.error,
+        ),
+        (None, None) if app.git_history_show_loading => history_note(
+            theme,
+            "git-history-patch-loading",
+            "Reading the commit patch…".to_owned(),
+            theme.muted,
+        ),
+        (None, None) => history_note(
+            theme,
+            "git-history-patch-loading",
+            "The patch reads once a Session connects.".to_owned(),
+            theme.muted,
+        ),
+    };
+    let meta = format!(
+        "{} · {}",
+        commit.author_name, commit.author_time
+    );
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .gap(theme.sp(5.))
+            .flex_shrink_0()
+            .max_h(gpui::relative(0.46))
+            .border_t_1()
+            .border_color(theme.border)
+            .px(theme.sp(10.))
+            .py(theme.sp(8.))
+            .id("git-history-detail")
+            .debug_selector(|| "git-history-detail".to_owned())
+            .overflow_y_scroll()
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_start()
+                    .justify_between()
+                    .gap(theme.sp(8.))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(theme.sp(3.))
+                            .flex_1()
+                            .min_w(px(0.))
+                            .child(
+                                div()
+                                    .text_size(theme.fs(12.5))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(theme.text)
+                                    .child(commit.subject.clone()),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .font(theme.mono_font())
+                                    .text_size(theme.fs(9.5))
+                                    .text_color(theme.muted)
+                                    .child(commit.oid.clone()),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(theme.fs(9.5))
+                                    .text_color(theme.muted)
+                                    .child(meta),
+                            )
+                            .child(parents)
+                            .children((!refs_text.is_empty()).then(|| {
+                                div()
+                                    .truncate()
+                                    .text_size(theme.fs(9.5))
+                                    .text_color(theme.muted)
+                                    .child(refs_text.clone())
+                            })),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(theme.sp(4.))
+                            .flex_shrink_0()
+                            .child(history_action(
+                                theme,
+                                "Cherry-pick…",
+                                "git-history-cherry",
+                                !busy,
+                                GitCommitAction::CherryPick,
+                                cx,
+                            ))
+                            .child(history_action(
+                                theme,
+                                "Revert…",
+                                "git-history-revert",
+                                !busy,
+                                GitCommitAction::Revert,
+                                cx,
+                            )),
+                    ),
+            )
+            .child(patch)
+            .into_any_element(),
+    )
+}
+
+/// One commit entry action that opens its confirmation dialog.
+/// @param enabled — whether no Git request already runs for this repository.
+/// @param action — verb the confirmed dialog runs.
+fn history_action(
+    theme: &Theme,
+    label: &str,
+    selector: &'static str,
+    enabled: bool,
+    action: GitCommitAction,
+    cx: &mut Context<DesktopApp>,
+) -> AnyElement {
+    let mut button = div()
+        .px(theme.sp(6.))
+        .py(px(2.))
+        .rounded(theme.corner())
+        .border_1()
+        .border_color(theme.border)
+        .id(gpui::SharedString::from(selector))
+        .debug_selector(move || selector.to_owned())
+        .text_size(theme.fs(9.5))
+        .child(label.to_owned());
+    if enabled {
+        button = button
+            .cursor_pointer()
+            .text_color(theme.text)
+            .hover(|style| style.bg(theme.surface_raised))
+            .on_click(cx.listener(move |app, _, _, cx| {
+                app.confirm_git_history_entry(action);
+                cx.notify();
+            }));
+    } else {
+        button = button.opacity(0.45).text_color(theme.muted).tooltip(
+            widgets::HintView::tooltip(
+                theme,
+                "A Git request is already running for this repository.",
+            ),
+        );
+    }
+    button.into_any_element()
+}
+
 /// Small text action used by the Git surfaces.
 fn action_text(theme: &Theme, label: &str, id: String) -> gpui::Stateful<gpui::Div> {
     div()
@@ -918,6 +1820,228 @@ fn operation_banner(
 /// First seven characters of an object id, or the id itself when shorter.
 pub(super) fn short_commit(commit: &str) -> &str {
     &commit[..commit.len().min(7)]
+}
+
+/// Commits requested per History page.
+pub(super) const HISTORY_PAGE_LIMIT: u32 = 50;
+
+/// One commit's placement in the History swimlane graph.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GraphRow {
+    /// Index into the laid-out newest-first commit slice.
+    pub(crate) index: usize,
+    /// Lane the commit's dot occupies.
+    pub(crate) lane: usize,
+    /// Lane occupancy before this row; `None` is an empty lane.
+    pub(crate) before: Vec<Option<String>>,
+    /// Lanes that waited for this commit and now join its lane.
+    pub(crate) joins: Vec<usize>,
+    /// Additional parents and the lane each merge curve reaches.
+    pub(crate) extra: Vec<(String, usize)>,
+}
+
+/// Swimlane layout for one newest-first history page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GraphLayout {
+    /// One row per laid-out commit, in list order.
+    pub(crate) rows: Vec<GraphRow>,
+    /// Lane count the fixed gutter must fit.
+    pub(crate) lanes: usize,
+}
+
+/// Lays out a newest-first commit page as stable swimlanes.
+///
+/// A lane keeps waiting for the commit it was opened for until that commit is
+/// listed, so a branch keeps its column for the whole page. An extra parent of
+/// a merge opens its own lane and curves into it; a lane that waited for an
+/// already-listed commit joins that commit's lane instead of leaving a rail.
+/// @param commits — commits from one `git/log` page, newest first.
+/// @returns one row per commit plus the lane count the gutter must fit.
+pub(crate) fn layout_graph(commits: &[GitCommitEntry]) -> GraphLayout {
+    let mut lanes: Vec<Option<String>> = Vec::new();
+    let mut rows = Vec::with_capacity(commits.len());
+    let mut max_lanes = 1usize;
+    for (index, commit) in commits.iter().enumerate() {
+        let matching: Vec<usize> = lanes
+            .iter()
+            .enumerate()
+            .filter(|(_, waiting)| waiting.as_deref() == Some(commit.oid.as_str()))
+            .map(|(lane, _)| lane)
+            .collect();
+        let lane = match matching.first() {
+            Some(lane) => *lane,
+            None => match lanes.iter().position(Option::is_none) {
+                Some(lane) => lane,
+                None => {
+                    lanes.push(None);
+                    lanes.len() - 1
+                }
+            },
+        };
+        let before = lanes.clone();
+        let joins = matching.get(1..).map(<[usize]>::to_vec).unwrap_or_default();
+        for join in &joins {
+            lanes[*join] = None;
+        }
+        lanes[lane] = commit.parents.first().cloned();
+        let mut extra = Vec::new();
+        for parent in commit.parents.iter().skip(1) {
+            let target = match lanes.iter().position(Option::is_none) {
+                Some(target) => target,
+                None => {
+                    lanes.push(None);
+                    lanes.len() - 1
+                }
+            };
+            lanes[target] = Some(parent.clone());
+            extra.push((parent.clone(), target));
+        }
+        while lanes.last().is_some_and(Option::is_none) {
+            lanes.pop();
+        }
+        max_lanes = max_lanes.max(lane + 1).max(lanes.len());
+        for join in &joins {
+            max_lanes = max_lanes.max(join + 1);
+        }
+        rows.push(GraphRow {
+            index,
+            lane,
+            before,
+            joins,
+            extra,
+        });
+    }
+    GraphLayout {
+        rows,
+        lanes: max_lanes,
+    }
+}
+
+/// Kind of decoration a History ref chip presents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RefKind {
+    /// Local branch.
+    Branch,
+    /// Remote-tracking branch.
+    Remote,
+    /// Tag.
+    Tag,
+}
+
+/// One normalized `git/log` decoration ready for a chip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HistoryRef {
+    /// Ref as the Host reported it, including the `tag:` prefix.
+    pub(crate) name: String,
+    /// Kind the chip presents.
+    pub(crate) kind: RefKind,
+}
+
+/// Refs and HEAD flag a History row presents.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct HistoryRefs {
+    /// Whether HEAD points at this commit; the dot carries the ring instead.
+    pub(crate) head: bool,
+    /// One chip per decoration other than `HEAD`, in Host order.
+    pub(crate) chips: Vec<HistoryRef>,
+}
+
+/// Splits normalized `git/log` decorations into the HEAD ring flag and chips.
+///
+/// The Host reports `HEAD`, branch and remote names, and `tag:<name>`; it does
+/// not report which remote a name belongs to. A name that is a loaded local
+/// branch stays a branch chip, and any other slash-bearing name is presented as
+/// a remote branch.
+/// @param refs — decorations from one `git/log` commit.
+/// @param local_branches — local branch names from `git/branches`, when loaded.
+/// @returns the HEAD flag and one chip per non-HEAD decoration.
+pub(crate) fn history_refs(refs: &[String], local_branches: &[String]) -> HistoryRefs {
+    let mut parsed = HistoryRefs::default();
+    for reference in refs {
+        if reference == "HEAD" {
+            parsed.head = true;
+            continue;
+        }
+        let kind = if reference.starts_with("tag:") {
+            RefKind::Tag
+        } else if local_branches.iter().any(|branch| branch == reference) {
+            RefKind::Branch
+        } else if reference.contains('/') {
+            RefKind::Remote
+        } else {
+            RefKind::Branch
+        };
+        parsed.chips.push(HistoryRef {
+            name: reference.clone(),
+            kind,
+        });
+    }
+    parsed
+}
+
+/// What the History list shows after its loaded rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HistoryFooter {
+    /// The last page filled the limit, so older commits may exist.
+    LoadOlder {
+        /// Commits to skip from HEAD for the next page.
+        skip: u32,
+    },
+    /// The Host capped the page, so older commits are not listed.
+    Truncated,
+    /// Every commit in the repository is loaded.
+    End,
+}
+
+/// Decides the History footer from the settled page sizes.
+///
+/// A full page means the Host may hold older commits. A byte-capped page drops
+/// commits from the page it was asked for, so its skip arithmetic no longer
+/// lines up with what was listed; paging stops and the cap is shown instead of
+/// re-requesting possibly dropped commits.
+/// @param received — commits the latest page returned.
+/// @param total — commits loaded across every page.
+/// @param limit — commits requested per page.
+/// @param truncated — whether the Host dropped commits from the latest page.
+/// @returns the footer that follows the loaded rows.
+pub(crate) fn history_footer(
+    received: usize,
+    total: usize,
+    limit: u32,
+    truncated: bool,
+) -> HistoryFooter {
+    if truncated {
+        HistoryFooter::Truncated
+    } else if received == limit as usize {
+        HistoryFooter::LoadOlder {
+            skip: u32::try_from(total).unwrap_or(u32::MAX),
+        }
+    } else {
+        HistoryFooter::End
+    }
+}
+
+/// Index the History arrow keys move the selection to.
+///
+/// The first move selects the newest row, whichever arrow started it, so the
+/// detail opens on the row the user is looking at before any step is taken.
+/// @param current — selected row index, or `None` before the first selection.
+/// @param delta — rows to move; a negative value moves towards newer commits.
+/// @param len — loaded rows.
+/// @returns the next row index, or `None` when the page is empty.
+pub(crate) fn stepped_history_selection(
+    current: Option<usize>,
+    delta: i8,
+    len: usize,
+) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    let Some(current) = current else {
+        return Some(0);
+    };
+    let moved = current as isize + isize::from(delta);
+    Some(moved.clamp(0, len as isize - 1) as usize)
 }
 
 /// Changed-file list grouped into Staged, Changes, and Untracked.
@@ -2223,6 +3347,30 @@ pub(super) fn confirmation_dialog(
             ),
             "Switch branch",
         ),
+        GitConfirmation::CommitEntry {
+            commit,
+            subject,
+            action,
+            ..
+        } => {
+            let short = short_commit(commit);
+            match action {
+                GitCommitAction::Revert => (
+                    "Revert commit?".to_owned(),
+                    format!(
+                        "This asks the Host to revert {short} \"{subject}\" on the current branch. The surface reports only the result the Host returns."
+                    ),
+                    "Revert",
+                ),
+                GitCommitAction::CherryPick => (
+                    "Cherry-pick commit?".to_owned(),
+                    format!(
+                        "This asks the Host to cherry-pick {short} \"{subject}\" onto the current branch. The surface reports only the result the Host returns."
+                    ),
+                    "Cherry-pick",
+                ),
+            }
+        }
     };
     let details = body.to_owned();
     dialog_shell(theme, &title, |content| {
@@ -2287,7 +3435,7 @@ fn bulk_discard_body(files: &[GitFile]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dsh_client_core::git::{GitFileStats, GitFileSideStats};
+    use dsh_client_core::git::{GitFileSideStats, GitFileStats, GitShow};
 
     fn file(path: &str, status: &str, staged: bool, worktree: bool) -> GitFile {
         GitFile {
@@ -2653,6 +3801,299 @@ mod tests {
     fn sync_tooltip_names_the_upstream_and_both_counts() {
         assert_eq!(sync_tooltip(2, 1, Some("origin/main")), "2 ahead · 1 behind origin/main");
         assert_eq!(sync_tooltip(0, 1, None), "0 ahead · 1 behind · no upstream branch");
+    }
+
+    /// One `git/log` entry for the History tests.
+    fn history_entry(oid: &str, parents: &[&str], refs: &[&str]) -> GitCommitEntry {
+        GitCommitEntry {
+            oid: oid.to_owned(),
+            parents: parents.iter().map(|parent| (*parent).to_owned()).collect(),
+            refs: refs.iter().map(|reference| (*reference).to_owned()).collect(),
+            subject: format!("subject {oid}"),
+            author_name: "Ada".to_owned(),
+            author_email: "ada@example.com".to_owned(),
+            author_time: "2026-11-08T10:00:00+07:00".to_owned(),
+        }
+    }
+
+    /// The merge history every join and merge case lays out.
+    fn merge_history() -> Vec<GitCommitEntry> {
+        vec![
+            history_entry("m", &["a", "b"], &["HEAD", "main"]),
+            history_entry("a", &["base"], &[]),
+            history_entry("b", &["base"], &[]),
+            history_entry("base", &[], &[]),
+        ]
+    }
+
+    #[test]
+    fn graph_keeps_a_linear_history_in_one_lane() {
+        let commits = vec![
+            history_entry("c3", &["c2"], &["HEAD", "main"]),
+            history_entry("c2", &["c1"], &[]),
+            history_entry("c1", &[], &[]),
+        ];
+        let layout = layout_graph(&commits);
+        assert_eq!(layout.lanes, 1);
+        assert_eq!(layout.rows.len(), 3);
+        assert!(layout.rows.iter().all(|row| row.lane == 0));
+        assert!(layout
+            .rows
+            .iter()
+            .all(|row| row.joins.is_empty() && row.extra.is_empty()));
+        assert_eq!(layout.rows[0].before, vec![None]);
+        assert_eq!(layout.rows[1].before, vec![Some("c2".to_owned())]);
+    }
+
+    #[test]
+    fn graph_curves_an_extra_parent_into_its_own_lane() {
+        let layout = layout_graph(&merge_history());
+        assert_eq!(layout.lanes, 2);
+        assert_eq!(layout.rows[0].lane, 0);
+        assert_eq!(layout.rows[0].extra, vec![("b".to_owned(), 1)]);
+        assert_eq!(layout.rows[1].lane, 0);
+        assert_eq!(layout.rows[1].before, vec![Some("a".to_owned()), Some("b".to_owned())]);
+        assert_eq!(layout.rows[2].lane, 1);
+    }
+
+    #[test]
+    fn graph_joins_a_lane_that_waits_for_an_already_listed_commit() {
+        let layout = layout_graph(&merge_history());
+        let base = &layout.rows[3];
+        assert_eq!(base.lane, 0);
+        assert_eq!(base.joins, vec![1]);
+        assert_eq!(
+            base.before,
+            vec![Some("base".to_owned()), Some("base".to_owned())]
+        );
+        assert!(base.extra.is_empty());
+        assert_eq!(layout.lanes, 2);
+    }
+
+    #[test]
+    fn graph_gives_an_octopus_three_stable_lanes() {
+        let commits = vec![
+            history_entry("h", &["a", "b", "c"], &["HEAD"]),
+            history_entry("a", &["root"], &[]),
+            history_entry("b", &["root"], &[]),
+            history_entry("c", &["root"], &[]),
+            history_entry("root", &[], &[]),
+        ];
+        let layout = layout_graph(&commits);
+        assert_eq!(layout.lanes, 3);
+        assert_eq!(layout.rows[0].lane, 0);
+        assert_eq!(
+            layout.rows[0].extra,
+            vec![("b".to_owned(), 1), ("c".to_owned(), 2)]
+        );
+        assert_eq!(layout.rows[1].lane, 0);
+        assert_eq!(layout.rows[2].lane, 1);
+        assert_eq!(layout.rows[3].lane, 2);
+        assert_eq!(layout.rows[4].joins, vec![1, 2]);
+    }
+
+    #[test]
+    fn refs_ring_head_and_name_each_chip() {
+        let refs = vec![
+            "HEAD".to_owned(),
+            "main".to_owned(),
+            "origin/main".to_owned(),
+            "tag:v1.0".to_owned(),
+            "feat/history".to_owned(),
+        ];
+        let parsed = history_refs(&refs, &["feat/history".to_owned()]);
+        assert!(parsed.head);
+        assert_eq!(
+            parsed.chips,
+            vec![
+                HistoryRef {
+                    name: "main".to_owned(),
+                    kind: RefKind::Branch,
+                },
+                HistoryRef {
+                    name: "origin/main".to_owned(),
+                    kind: RefKind::Remote,
+                },
+                HistoryRef {
+                    name: "tag:v1.0".to_owned(),
+                    kind: RefKind::Tag,
+                },
+                HistoryRef {
+                    name: "feat/history".to_owned(),
+                    kind: RefKind::Branch,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn refs_keep_head_out_of_the_chips() {
+        let parsed = history_refs(&["HEAD".to_owned()], &[]);
+        assert!(parsed.head);
+        assert!(parsed.chips.is_empty());
+    }
+
+    #[test]
+    fn refs_treat_an_unloaded_slash_name_as_a_remote_branch() {
+        let parsed = history_refs(&["feat/history".to_owned(), "v2".to_owned()], &[]);
+        assert!(!parsed.head);
+        assert_eq!(parsed.chips[0].kind, RefKind::Remote);
+        assert_eq!(parsed.chips[1].kind, RefKind::Branch);
+    }
+
+    #[test]
+    fn history_footer_pages_only_after_a_full_page() {
+        assert_eq!(
+            history_footer(50, 50, 50, false),
+            HistoryFooter::LoadOlder { skip: 50 }
+        );
+        assert_eq!(
+            history_footer(50, 100, 50, false),
+            HistoryFooter::LoadOlder { skip: 100 }
+        );
+        assert_eq!(history_footer(12, 62, 50, false), HistoryFooter::End);
+        assert_eq!(history_footer(0, 50, 50, false), HistoryFooter::End);
+    }
+
+    #[test]
+    fn history_footer_shows_the_host_cap_instead_of_paging() {
+        assert_eq!(history_footer(50, 50, 50, true), HistoryFooter::Truncated);
+        assert_eq!(history_footer(8, 58, 50, true), HistoryFooter::Truncated);
+    }
+
+    #[test]
+    fn history_selection_clamps_and_starts_at_the_newest_row() {
+        assert_eq!(stepped_history_selection(None, 1, 3), Some(0));
+        assert_eq!(stepped_history_selection(None, -1, 3), Some(0));
+        assert_eq!(stepped_history_selection(Some(0), 1, 3), Some(1));
+        assert_eq!(stepped_history_selection(Some(2), 1, 3), Some(2));
+        assert_eq!(stepped_history_selection(Some(1), -1, 3), Some(0));
+        assert_eq!(stepped_history_selection(Some(0), -1, 3), Some(0));
+        assert_eq!(stepped_history_selection(Some(0), 1, 0), None);
+    }
+
+    /// Opens the shell on the History tab with a seeded page.
+    fn history_harness(setup: impl FnOnce(&mut DesktopApp)) -> crate::harness::Harness {
+        crate::harness::Harness::open_with(1366., 768., move |app| {
+            app.changes_tab = ChangesTab::History;
+            app.git_history = vec![
+                history_entry("c3", &["c2"], &["HEAD", "main"]),
+                history_entry("c2", &["c1"], &[]),
+                history_entry("c1", &[], &[]),
+            ];
+            app.git_history_loaded = true;
+            setup(app);
+        })
+    }
+
+    #[test]
+    fn history_tab_renders_rows_and_moves_the_selection_with_arrows() {
+        let mut harness = history_harness(|_| {});
+        assert!(harness.bounds("git-history-panel").is_some());
+        assert!(harness.bounds("git-history-row-first").is_some());
+        assert!(harness.bounds("git-history-detail").is_none());
+        assert!(harness.click("git-history-row-first"));
+        assert_eq!(
+            harness.with(|app, _| app.git_history_selected.clone()),
+            Some("c3".to_owned())
+        );
+        assert!(harness.bounds("git-history-row-selected").is_some());
+        harness.keys("down");
+        assert_eq!(
+            harness.with(|app, _| app.git_history_selected.clone()),
+            Some("c2".to_owned())
+        );
+        harness.keys("up");
+        assert_eq!(
+            harness.with(|app, _| app.git_history_selected.clone()),
+            Some("c3".to_owned())
+        );
+    }
+
+    #[test]
+    fn history_detail_renders_the_selected_commit_patch() {
+        let mut harness = history_harness(|app| {
+            app.git_history_selected = Some("c2".to_owned());
+            app.git_history_show = Some(GitShow {
+                commit: "c2".to_owned(),
+                patch: "diff --git a/a.ts b/a.ts\n+one\n".to_owned(),
+                truncated: false,
+            });
+        });
+        assert!(harness.bounds("git-history-detail").is_some());
+        assert!(harness.bounds("git-history-patch").is_some());
+        assert!(harness.bounds("git-history-patch-empty").is_none());
+        assert!(harness.bounds("git-history-cherry").is_some());
+        assert!(harness.bounds("git-history-revert").is_some());
+    }
+
+    #[test]
+    fn history_detail_names_an_empty_and_a_truncated_patch() {
+        let mut empty = history_harness(|app| {
+            app.git_history_selected = Some("c1".to_owned());
+            app.git_history_show = Some(GitShow {
+                commit: "c1".to_owned(),
+                patch: String::new(),
+                truncated: false,
+            });
+        });
+        assert!(empty.bounds("git-history-patch-empty").is_some());
+        let mut truncated = history_harness(|app| {
+            app.git_history_selected = Some("c1".to_owned());
+            app.git_history_show = Some(GitShow {
+                commit: "c1".to_owned(),
+                patch: "diff --git a/a.ts b/a.ts\n+one\n".to_owned(),
+                truncated: true,
+            });
+        });
+        assert!(truncated.bounds("git-history-patch-truncated").is_some());
+        assert!(truncated.bounds("git-history-patch").is_some());
+    }
+
+    #[test]
+    fn history_detail_names_a_failed_or_pending_patch() {
+        let mut failed = history_harness(|app| {
+            app.git_history_selected = Some("c2".to_owned());
+            app.git_history_show_error = Some("git show failed".to_owned());
+        });
+        assert!(failed.bounds("git-history-patch-error").is_some());
+        assert!(failed.bounds("git-history-patch").is_none());
+        let mut pending = history_harness(|app| {
+            app.git_history_selected = Some("c2".to_owned());
+            app.git_history_show_loading = true;
+        });
+        assert!(pending.bounds("git-history-patch-loading").is_some());
+    }
+
+    #[test]
+    fn history_list_names_an_empty_repository() {
+        let mut harness = history_harness(|app| app.git_history.clear());
+        assert!(harness.bounds("git-history-empty").is_some());
+        assert!(harness.bounds("git-history-row-first").is_none());
+    }
+
+    #[test]
+    fn history_list_names_a_failed_page() {
+        let mut harness = history_harness(|app| {
+            app.git_history.clear();
+            app.git_history_error = Some("git log failed".to_owned());
+        });
+        assert!(harness.bounds("git-history-error").is_some());
+        assert!(harness.bounds("git-history-empty").is_none());
+    }
+
+    #[test]
+    fn history_list_offers_load_older_only_for_an_uncapped_page() {
+        let mut paged = history_harness(|app| {
+            app.git_history_footer = HistoryFooter::LoadOlder { skip: 50 };
+        });
+        assert!(paged.bounds("git-history-load-older").is_some());
+        assert!(paged.bounds("git-history-truncated").is_none());
+        let mut capped = history_harness(|app| {
+            app.git_history_footer = HistoryFooter::Truncated;
+        });
+        assert!(capped.bounds("git-history-truncated").is_some());
+        assert!(capped.bounds("git-history-load-older").is_none());
     }
 
     #[test]

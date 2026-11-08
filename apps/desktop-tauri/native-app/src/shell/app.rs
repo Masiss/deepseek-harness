@@ -23,8 +23,8 @@ use dsh_client_core::{
     follow::{self, FollowFrame, FollowRequest},
     git::{
         GitApplyRequest, GitApplyResult, GitApplyTarget, GitBranches, GitCheckoutResult, GitClient,
-        GitCommitOptions, GitCommitResult, GitDiff, GitFile, GitLog, GitOperationResult,
-        GitOperationState, GitRemoteResult, GitStatus,
+        GitCommitEntry, GitCommitOptions, GitCommitResult, GitDiff, GitFile, GitLog,
+        GitOperationResult, GitOperationState, GitRemoteResult, GitShow, GitStatus,
     },
     goals::{CreateGoalRequest, EditGoalRequest, GoalRef, GoalView, GoalsClient},
     marketplace::{MarketplaceClient, MarketplaceInstallOptions},
@@ -79,10 +79,11 @@ fn auto_connect_enabled(setting: Option<&str>) -> bool {
 fn host_start_status(elapsed: std::time::Duration) -> String {
     format!("Starting Host sidecar… {}s", elapsed.as_secs())
 }
+use super::git_review::HistoryFooter;
 use super::terminal_state::{append_bounded_output, PreviewScratchDirectory, TerminalPanel};
 use super::theme::Theme;
 use super::ShellServices;
-use gpui::{App, AppContext, Context, FocusHandle, Window, WindowAppearance};
+use gpui::{point, px, App, AppContext, Context, FocusHandle, ScrollHandle, Window, WindowAppearance};
 
 enum PluginAction {
     SetPlugin { id: String, enabled: bool },
@@ -406,7 +407,15 @@ pub(crate) struct PanelDrag {
 pub(crate) enum ChangesTab {
     Diff,
     Files,
+    History,
     Branches,
+}
+
+/// History entry action a confirmation dialog asks about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GitCommitAction {
+    Revert,
+    CherryPick,
 }
 
 /// Destructive Git action whose confirmation dialog is open.
@@ -442,6 +451,13 @@ pub(crate) enum GitConfirmation {
         target: String,
         head: Option<String>,
         changed_files: Vec<GitFile>,
+    },
+    /// Revert or cherry-pick one commit listed in History.
+    CommitEntry {
+        session_id: String,
+        commit: String,
+        subject: String,
+        action: GitCommitAction,
     },
 }
 
@@ -480,6 +496,22 @@ enum GitUpdate {
     Apply(Result<GitApplyResult, Error>),
     Commit(Result<GitCommitResult, Error>),
     Log(Result<GitLog, Error>),
+    /// One `git/log` page; `skip` is the commit count the page asked to skip.
+    History {
+        skip: u32,
+        result: Result<GitLog, Error>,
+    },
+    /// One `git/show` patch; `oid` is the commit it was requested for.
+    Show {
+        oid: String,
+        result: Result<GitShow, Error>,
+    },
+    /// One revert or cherry-pick; `commit` is the oid the user confirmed.
+    CommitEntry {
+        action: GitCommitAction,
+        commit: String,
+        result: Result<GitOperationResult, Error>,
+    },
     State(Result<GitOperationState, Error>),
     StatusAndState(
         Result<GitStatus, Error>,
@@ -904,6 +936,34 @@ pub(crate) struct DesktopApp {
     pub(crate) git_log_loading: bool,
     /// Set when the recent-message list must be read on the next settle.
     git_log_pending: bool,
+    /// Commits of the History tab, newest first.
+    pub(crate) git_history: Vec<GitCommitEntry>,
+    /// Whether a `git/log` page has settled, including for an empty repository.
+    pub(crate) git_history_loaded: bool,
+    /// Paging footer for the loaded History rows.
+    pub(crate) git_history_footer: HistoryFooter,
+    /// Selected commit oid; the detail pane and the arrow keys read it.
+    pub(crate) git_history_selected: Option<String>,
+    /// Patch of the selected commit from `git/show`.
+    pub(crate) git_history_show: Option<GitShow>,
+    /// Failure of the last history page read.
+    pub(crate) git_history_error: Option<String>,
+    /// Failure of the last commit patch read.
+    pub(crate) git_history_show_error: Option<String>,
+    /// Whether a history page read is in flight.
+    pub(crate) git_history_loading: bool,
+    /// Whether the selected commit's patch is in flight.
+    pub(crate) git_history_show_loading: bool,
+    /// Page the next free worker must read, as the commits to skip.
+    git_history_pending: Option<u32>,
+    /// Commit whose patch must be read once the worker is free.
+    git_history_show_pending: Option<String>,
+    /// Newest commit the loaded page starts from; a moved HEAD reloads it.
+    git_history_head: Option<String>,
+    /// Focus the arrow keys need while History is the active tab.
+    pub(crate) git_history_focus: FocusHandle,
+    /// Scroll position the arrow keys keep the selection visible in.
+    pub(crate) git_history_scroll: ScrollHandle,
     /// Set when a successful commit continues with a push.
     git_push_pending: bool,
     /// Set when the commit input must be cleared on the next frame.
@@ -1336,6 +1396,20 @@ impl DesktopApp {
             git_log_error: None,
             git_log_loading: false,
             git_log_pending: false,
+            git_history: Vec::new(),
+            git_history_loaded: false,
+            git_history_footer: HistoryFooter::End,
+            git_history_selected: None,
+            git_history_show: None,
+            git_history_error: None,
+            git_history_show_error: None,
+            git_history_loading: false,
+            git_history_show_loading: false,
+            git_history_pending: None,
+            git_history_show_pending: None,
+            git_history_head: None,
+            git_history_focus: cx.focus_handle(),
+            git_history_scroll: ScrollHandle::default(),
             git_push_pending: false,
             git_commit_input_clear: false,
             git_state_pending: false,
@@ -2263,6 +2337,7 @@ impl DesktopApp {
         self.git_log_error = None;
         self.git_log_loading = false;
         self.git_log_pending = false;
+        self.reset_git_history();
         self.git_push_pending = false;
         self.git_commit_input_clear = false;
         self.git_state_pending = false;
@@ -2270,6 +2345,23 @@ impl DesktopApp {
         self.git_error = None;
         self.git_loading = false;
         self.git_receiver = None;
+    }
+
+    /// Drops the History page, its selection, and its scroll position.
+    fn reset_git_history(&mut self) {
+        self.git_history.clear();
+        self.git_history_loaded = false;
+        self.git_history_footer = HistoryFooter::End;
+        self.git_history_selected = None;
+        self.git_history_show = None;
+        self.git_history_error = None;
+        self.git_history_show_error = None;
+        self.git_history_loading = false;
+        self.git_history_show_loading = false;
+        self.git_history_pending = None;
+        self.git_history_show_pending = None;
+        self.git_history_head = None;
+        self.git_history_scroll.set_offset(point(px(0.), px(0.)));
     }
 
     /// Refreshes the selected Session's repository status from the Host.
@@ -2871,6 +2963,21 @@ impl DesktopApp {
                 }
                 self.checkout_git_branch_after_confirmation(target);
             }
+            GitConfirmation::CommitEntry {
+                session_id,
+                commit,
+                action,
+                ..
+            } => {
+                if self.selected_session.as_deref() != Some(session_id.as_str()) {
+                    self.git_error = Some(
+                        "The confirmed commit belongs to another Session; nothing was run."
+                            .to_owned(),
+                    );
+                    return;
+                }
+                self.run_git_commit_entry(action, session_id, commit);
+            }
         }
     }
 
@@ -2979,6 +3086,226 @@ impl DesktopApp {
         self.git_log_error = None;
     }
 
+    /// Reads the first History page while the History tab renders.
+    ///
+    /// The loaded flag keeps a settled page from being read again on every
+    /// frame; opening the tab or a moved HEAD asks for a page explicitly.
+    pub(crate) fn ensure_git_history(&mut self) {
+        if self.git_history_loaded
+            || self.git_history_loading
+            || self.git_history_pending.is_some()
+            || self.git_history_error.is_some()
+        {
+            return;
+        }
+        if self.selected_session.is_none() || self.transport.is_none() {
+            return;
+        }
+        self.refresh_git_history();
+    }
+
+    /// Loads the newest History page for the selected Session.
+    pub(crate) fn refresh_git_history(&mut self) {
+        self.request_git_history(0);
+    }
+
+    /// Loads the page the History footer points at.
+    /// @param skip — commits to skip from HEAD; the footer reports the loaded count.
+    pub(crate) fn load_git_history_page(&mut self, skip: u32) {
+        self.request_git_history(skip);
+    }
+
+    /// Reads one History page once the repository worker is free.
+    ///
+    /// A page that cannot start now is remembered as the pending page, so the
+    /// repository never runs two Git requests at once.
+    /// @param skip — commits to skip from HEAD; `0` reloads the newest page.
+    fn request_git_history(&mut self, skip: u32) {
+        let (Some(session_id), Some(transport)) =
+            (self.selected_session.clone(), self.transport.clone())
+        else {
+            self.reset_git();
+            return;
+        };
+        if self.git_receiver.is_some() {
+            self.git_history_pending = Some(skip);
+            return;
+        }
+        self.git_history_pending = None;
+        self.git_history_loading = true;
+        self.git_history_error = None;
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = GitClient::new(&transport).log(
+                session_id,
+                Some(super::git_review::HISTORY_PAGE_LIMIT),
+                (skip > 0).then_some(skip),
+            );
+            let _ = sender.send(GitUpdate::History { skip, result });
+        });
+        self.git_receiver = Some(receiver);
+        self.git_loading = true;
+    }
+
+    /// Applies one settled `git/log` page to the History tab.
+    /// @param skip — commits the page skipped from HEAD.
+    /// @param log — commits in newest-first order plus the Host byte-cap flag.
+    fn apply_git_history_page(&mut self, skip: u32, log: GitLog) {
+        let received = log.commits.len();
+        let truncated = log.truncated;
+        if skip == 0 {
+            self.git_history = log.commits;
+            self.git_history_head = self
+                .git_history
+                .first()
+                .map(|commit| commit.oid.clone());
+        } else {
+            self.git_history.extend(log.commits);
+        }
+        self.git_history_loaded = true;
+        self.git_history_footer = super::git_review::history_footer(
+            received,
+            self.git_history.len(),
+            super::git_review::HISTORY_PAGE_LIMIT,
+            truncated,
+        );
+        let keep = self
+            .git_history_selected
+            .as_deref()
+            .is_some_and(|oid| self.git_history.iter().any(|commit| commit.oid == oid));
+        if !keep {
+            self.git_history_selected = None;
+            self.git_history_show = None;
+            self.git_history_show_error = None;
+            self.git_history_show_loading = false;
+            self.git_history_show_pending = None;
+        }
+    }
+
+    /// Selects one History commit and reads its patch.
+    /// @param oid — full object id of a commit in the loaded page.
+    pub(crate) fn select_git_history(&mut self, oid: String) {
+        if self.git_history_selected.as_deref() == Some(oid.as_str()) {
+            if self.git_history_show.is_none() && !self.git_history_show_loading {
+                self.git_history_show_error = None;
+                self.request_git_history_show();
+            }
+            return;
+        }
+        self.git_history_selected = Some(oid);
+        self.git_history_show = None;
+        self.git_history_show_error = None;
+        self.request_git_history_show();
+    }
+
+    /// Moves the History selection by one row, clamped to the loaded page.
+    /// @param delta — rows to move; a negative value moves towards newer commits.
+    pub(crate) fn move_git_history_selection(&mut self, delta: i8) {
+        let current = self
+            .git_history_selected
+            .as_deref()
+            .and_then(|oid| self.git_history.iter().position(|commit| commit.oid == oid));
+        let Some(next) = super::git_review::stepped_history_selection(
+            current,
+            delta,
+            self.git_history.len(),
+        ) else {
+            return;
+        };
+        let oid = self.git_history[next].oid.clone();
+        self.git_history_scroll.scroll_to_item(next);
+        self.select_git_history(oid);
+    }
+
+    /// Reads the selected commit's patch once the repository worker is free.
+    fn request_git_history_show(&mut self) {
+        let (Some(session_id), Some(transport), Some(oid)) = (
+            self.selected_session.clone(),
+            self.transport.clone(),
+            self.git_history_selected.clone(),
+        ) else {
+            return;
+        };
+        if self
+            .git_history_show
+            .as_ref()
+            .is_some_and(|show| show.commit == oid)
+        {
+            return;
+        }
+        if self.git_receiver.is_some() {
+            self.git_history_show_pending = Some(oid);
+            return;
+        }
+        self.git_history_show_pending = None;
+        self.git_history_show_loading = true;
+        self.git_history_show_error = None;
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = GitClient::new(&transport).show(session_id, oid.clone(), None);
+            let _ = sender.send(GitUpdate::Show { oid, result });
+        });
+        self.git_receiver = Some(receiver);
+        self.git_loading = true;
+    }
+
+    /// Opens the confirmation for reverting or cherry-picking the selected commit.
+    /// @param action — revert or cherry-pick.
+    pub(crate) fn confirm_git_history_entry(&mut self, action: GitCommitAction) {
+        let (Some(session_id), Some(oid)) =
+            (self.selected_session.clone(), self.git_history_selected.clone())
+        else {
+            return;
+        };
+        let Some(commit) = self
+            .git_history
+            .iter()
+            .find(|commit| commit.oid == oid)
+        else {
+            return;
+        };
+        self.git_confirmation = Some(GitConfirmation::CommitEntry {
+            session_id,
+            commit: oid,
+            subject: commit.subject.clone(),
+            action,
+        });
+    }
+
+    /// Runs one confirmed revert or cherry-pick through the Host.
+    /// @param action — verb to run.
+    /// @param session_id — Session the confirmation named.
+    /// @param commit — full object id the user confirmed.
+    fn run_git_commit_entry(
+        &mut self,
+        action: GitCommitAction,
+        session_id: String,
+        commit: String,
+    ) {
+        let Some(transport) = self.transport.clone() else {
+            return;
+        };
+        if self.git_receiver.is_some() {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let client = GitClient::new(&transport);
+            let result = match action {
+                GitCommitAction::Revert => client.revert(session_id, commit.clone()),
+                GitCommitAction::CherryPick => client.cherry_pick(session_id, commit.clone()),
+            };
+            let _ = sender.send(GitUpdate::CommitEntry {
+                action,
+                commit,
+                result,
+            });
+        });
+        self.git_receiver = Some(receiver);
+        self.git_loading = true;
+        self.git_error = None;
+    }
+
     /// Opens a confirmation before checking out one local branch.
     pub(crate) fn checkout_git_branch(&mut self, branch: String) {
         let Some(session_id) = self.selected_session.clone() else {
@@ -3045,6 +3372,7 @@ impl DesktopApp {
                 match update {
                     GitUpdate::Status(Ok(status)) => {
                         let files = status.files.clone();
+                        let head = status.commit.clone();
                         self.git_selection
                             .retain(|path| files.iter().any(|file| &file.path == path));
                         self.git_reviewed
@@ -3057,6 +3385,14 @@ impl DesktopApp {
                         }
                         if self.git_recent_messages.is_empty() && self.git_log_error.is_none() {
                             self.git_log_pending = true;
+                        }
+                        if self.show_changes
+                            && self.changes_tab == ChangesTab::History
+                            && self.git_history_loaded
+                            && head.is_some()
+                            && head != self.git_history_head
+                        {
+                            self.refresh_git_history();
                         }
                     }
                     GitUpdate::Status(Err(error)) => {
@@ -3156,6 +3492,62 @@ impl DesktopApp {
                         self.git_log_loading = false;
                         self.git_log_error = Some(failure_text(&error));
                     }
+                    GitUpdate::History {
+                        skip,
+                        result: Ok(log),
+                    } => {
+                        self.git_history_loading = false;
+                        self.git_history_error = None;
+                        self.apply_git_history_page(skip, log);
+                    }
+                    GitUpdate::History {
+                        result: Err(error),
+                        ..
+                    } => {
+                        self.git_history_loading = false;
+                        self.git_history_error = Some(failure_text(&error));
+                    }
+                    GitUpdate::Show { oid, result } => {
+                        if self.git_history_selected.as_deref() == Some(oid.as_str()) {
+                            self.git_history_show_loading = false;
+                            match result {
+                                Ok(show) => {
+                                    self.git_history_show = Some(show);
+                                    self.git_history_show_error = None;
+                                }
+                                Err(error) => {
+                                    self.git_history_show = None;
+                                    self.git_history_show_error = Some(failure_text(&error));
+                                }
+                            }
+                        }
+                    }
+                    GitUpdate::CommitEntry {
+                        action,
+                        commit,
+                        result: Ok(result),
+                    } => {
+                        self.git_state = Some(result.state);
+                        if !result.output.is_empty() {
+                            self.git_remote_summary = Some(result.output);
+                        }
+                        self.status = format!(
+                            "{} {}",
+                            match action {
+                                GitCommitAction::Revert => "Reverted",
+                                GitCommitAction::CherryPick => "Cherry-picked",
+                            },
+                            short_object_id(&commit)
+                        );
+                        self.refresh_git();
+                        self.refresh_git_state();
+                    }
+                    GitUpdate::CommitEntry {
+                        result: Err(error),
+                        ..
+                    } => {
+                        self.git_error = Some(failure_text(&error));
+                    }
                     GitUpdate::State(Ok(state)) => {
                         self.git_state = Some(state);
                     }
@@ -3218,6 +3610,16 @@ impl DesktopApp {
                     self.git_log_pending = false;
                     self.refresh_git_log();
                 }
+                if let Some(skip) = self.git_history_pending.take() {
+                    if self.git_receiver.is_none() {
+                        self.request_git_history(skip);
+                    } else {
+                        self.git_history_pending = Some(skip);
+                    }
+                }
+                if self.git_history_show_pending.is_some() && self.git_receiver.is_none() {
+                    self.request_git_history_show();
+                }
                 true
             }
             Err(mpsc::TryRecvError::Empty) => false,
@@ -3227,6 +3629,10 @@ impl DesktopApp {
                 self.git_state_pending = false;
                 self.git_log_loading = false;
                 self.git_log_pending = false;
+                self.git_history_loading = false;
+                self.git_history_show_loading = false;
+                self.git_history_pending = None;
+                self.git_history_show_pending = None;
                 self.git_push_pending = false;
                 self.git_error = Some("Git worker stopped unexpectedly".to_owned());
                 true
@@ -3536,6 +3942,7 @@ impl DesktopApp {
             self.preview_error = None;
         }
         self.refresh_feedback();
+        self.reset_git_history();
         self.refresh_git();
         self.refresh_git_state();
         self.page_loading = true;
