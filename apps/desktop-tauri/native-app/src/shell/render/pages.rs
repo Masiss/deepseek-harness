@@ -143,12 +143,47 @@ fn line(theme: &Theme, text: impl Into<String>) -> AnyElement {
         .into_any_element()
 }
 
+/// Builds one accent-family button.
+///
+/// A pack that defines no accent families keeps its own accent, so its buttons
+/// are disabled and explain why instead of silently ignoring the preference.
+fn accent_button(
+    theme: &Theme,
+    label: &'static str,
+    id: &'static str,
+    scheme: AccentScheme,
+    selected: bool,
+    available: bool,
+    cx: &mut Context<DesktopApp>,
+) -> gpui::Stateful<gpui::Div> {
+    widgets::Button::new(theme, label)
+        .enabled(available && !selected)
+        .build()
+        .id(id)
+        .when(!available, |button| {
+            button.tooltip(widgets::HintView::tooltip(
+                theme,
+                "This theme pack defines no accent families. Choose DSH or Harness to use Accent.",
+            ))
+        })
+        .when(available, |button| {
+            button.on_click(cx.listener(move |app, _, window, cx| {
+                app.update_preferences(window, |preferences| {
+                    preferences.accent_scheme = scheme;
+                });
+                cx.notify();
+            }))
+        })
+}
+
 fn settings(
     app: &mut DesktopApp,
     theme: &Theme,
     cx: &mut Context<DesktopApp>,
 ) -> AnyElement {
-    let dark = app.ui_preferences.theme == ThemeMode::Dark;
+    // The preview follows the resolved scheme, so System mode and workspace
+    // overrides show the colours the shell is actually rendering.
+    let dark = theme.dark;
     let compact = app.ui_preferences.density == UiDensity::Compact;
     let scale = app.ui_preferences.ui_scale;
     let explorer = app.show_explorer;
@@ -171,6 +206,7 @@ fn settings(
         .unwrap_or_default();
     let settings_error = app.settings_error.clone();
     let settings_loading = app.settings_loading;
+    let theme_notice = theme.status.errors.join("; ");
 
     let mut content = body(theme)
         .child(section(theme, "Appearance"))
@@ -211,56 +247,75 @@ fn settings(
                 .flex()
                 .flex_row()
                 .items_center()
+                .flex_wrap()
+                .gap(theme.sp(6.))
+                .child(line(theme, "Pack"))
+                .children(
+                    crate::theme::pack_choices()
+                        .into_iter()
+                        .map(|(id, name)| {
+                            let selected = app.ui_preferences.theme_id == id;
+                            widgets::Button::new(theme, name)
+                                .enabled(!selected)
+                                .build()
+                                .id(gpui::SharedString::from(format!("pref-pack-{id}")))
+                                .on_click(cx.listener(move |app, _, window, cx| {
+                                    let id = id.clone();
+                                    app.update_preferences(window, |preferences| {
+                                        preferences.theme_id = id;
+                                    });
+                                    cx.notify();
+                                }))
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+        )
+        .when(!theme_notice.is_empty(), |content| {
+            content.child(line(theme, theme_notice))
+        })
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
                 .gap(theme.sp(6.))
                 .child(line(theme, "Accent"))
-                .child(
-                    widgets::Button::new(theme, "Harness")
-                        .enabled(accent != AccentScheme::Harness)
-                        .build()
-                        .id("pref-accent-harness")
-                        .on_click(cx.listener(|app, _, window, cx| {
-                            app.update_preferences(window, |preferences| {
-                                preferences.accent_scheme = AccentScheme::Harness;
-                            });
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    widgets::Button::new(theme, "Blue")
-                        .enabled(accent != AccentScheme::Blue)
-                        .build()
-                        .id("pref-accent-blue")
-                        .on_click(cx.listener(|app, _, window, cx| {
-                            app.update_preferences(window, |preferences| {
-                                preferences.accent_scheme = AccentScheme::Blue;
-                            });
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    widgets::Button::new(theme, "Teal")
-                        .enabled(accent != AccentScheme::Teal)
-                        .build()
-                        .id("pref-accent-teal")
-                        .on_click(cx.listener(|app, _, window, cx| {
-                            app.update_preferences(window, |preferences| {
-                                preferences.accent_scheme = AccentScheme::Teal;
-                            });
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    widgets::Button::new(theme, "Violet")
-                        .enabled(accent != AccentScheme::Violet)
-                        .build()
-                        .id("pref-accent-violet")
-                        .on_click(cx.listener(|app, _, window, cx| {
-                            app.update_preferences(window, |preferences| {
-                                preferences.accent_scheme = AccentScheme::Violet;
-                            });
-                            cx.notify();
-                        })),
-                ),
+                .child(accent_button(
+                    theme,
+                    "Harness",
+                    "pref-accent-harness",
+                    AccentScheme::Harness,
+                    accent == AccentScheme::Harness,
+                    theme.accent_families,
+                    cx,
+                ))
+                .child(accent_button(
+                    theme,
+                    "Blue",
+                    "pref-accent-blue",
+                    AccentScheme::Blue,
+                    accent == AccentScheme::Blue,
+                    theme.accent_families,
+                    cx,
+                ))
+                .child(accent_button(
+                    theme,
+                    "Teal",
+                    "pref-accent-teal",
+                    AccentScheme::Teal,
+                    accent == AccentScheme::Teal,
+                    theme.accent_families,
+                    cx,
+                ))
+                .child(accent_button(
+                    theme,
+                    "Violet",
+                    "pref-accent-violet",
+                    AccentScheme::Violet,
+                    accent == AccentScheme::Violet,
+                    theme.accent_families,
+                    cx,
+                )),
         )
         .child(
             div()

@@ -197,7 +197,9 @@ Settings có hai nhóm riêng: tùy chọn giao diện cục bộ của client v
 
 ### Giao diện và bố cục cục bộ
 
-Trong **Appearance**, chọn theme System/Light/Dark, UI scale từ 0.8 đến 1.5, mật độ Comfortable/Compact, góc bo, preset màu Harness/High contrast/Solarized/Custom và font giao diện hoặc font code đã cài. Custom palette chỉnh màu của theme sáng hoặc tối đang hoạt động; font không khả dụng sẽ được thay bằng font dự phòng.
+Trong **Appearance**, chọn theme System/Light/Dark, UI scale từ 0.8 đến 1.5, mật độ Comfortable/Compact, góc bo, preset màu DSH/Harness/High contrast/Solarized/Custom và font giao diện hoặc font code đã cài. Preset được chọn bằng `themeId`; bảng màu `custom` đọc từ `customTheme`. Lựa chọn Accent chỉ áp dụng cho pack có bộ accent riêng (DSH và Harness); pack khác giữ accent của chính nó nên các nút Accent bị tắt kèm chú thích. Custom palette chỉnh màu của theme sáng hoặc tối đang hoạt động; font không khả dụng sẽ được thay bằng font dự phòng.
+
+File schema 5 dùng `themePack` được chuyển khi đọc: `default` giữ bảng màu Harness cũ, còn `high-contrast`/`solarized`/`custom` giữ nguyên tên. Nếu `themeId` không tồn tại, ứng dụng hiển thị bằng bảng màu Harness, ghi lý do ngay trong Settings và không làm hỏng file tùy chọn.
 
 Trong **Layout**, chỉnh chiều rộng mặc định của popover Sessions, bật/tắt Explorer và Changes cạnh hội thoại, chỉnh chiều rộng mặc định của Explorer và Changes, và bật/tắt **Restore last Session**. Explorer chỉ dock khi cửa sổ rộng từ 1240 px, Changes từ 1180 px; hẹp hơn thì cột hội thoại được ưu tiên. Lưu Settings để áp dụng các giá trị mặc định.
 

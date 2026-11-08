@@ -34,6 +34,8 @@ mod session_list;
 mod terminal_ansi;
 #[path = "terminal_input.rs"]
 mod terminal_input;
+#[path = "theme/mod.rs"]
+mod theme;
 #[path = "transcript.rs"]
 mod transcript;
 #[path = "ui_preferences.rs"]

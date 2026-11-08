@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "id": "harness",
+  "name": "Harness",
+  "author": "DeepSeek",
+  "license": "MIT",
+  "source": "builtin",
+  "colors": {
+    "dark": {
+      "canvas": "#171A1F",
+      "chrome": "#171A1F",
+      "surface": "#22272E",
+      "surfaceDeep": "#22272E",
+      "surfaceRaised": "#2C343C",
+      "border": "#353D47",
+      "borderFaint": "#353D47",
+      "text": "#EEF1F4",
+      "textSecondary": "#929BA6",
+      "textTertiary": "#929BA6",
+      "accent": "#E95618",
+      "accentText": "#FF9B70",
+      "selection": "#3B2A23",
+      "success": "#6FCF97",
+      "danger": "#FF9B70",
+      "warning": "#E7C979"
+    },
+    "light": {
+      "canvas": "#F1F2F3",
+      "chrome": "#F1F2F3",
+      "surface": "#FFFFFF",
+      "surfaceDeep": "#FFFFFF",
+      "surfaceRaised": "#F6F6F6",
+      "border": "#E6E6E3",
+      "borderFaint": "#E6E6E3",
+      "text": "#20201F",
+      "textSecondary": "#70706B",
+      "textTertiary": "#70706B",
+      "accent": "#E95618",
+      "accentText": "#A83B10",
+      "selection": "#FFF1E9",
+      "success": "#2E7D32",
+      "danger": "#9C3916",
+      "warning": "#795B1A"
+    }
+  },
+  "accents": {
+    "blue": {
+      "dark": { "accent": "#2E6BD8", "accentText": "#2E6BD8", "selection": "#3B2A23" },
+      "light": { "accent": "#2E6BD8", "accentText": "#2E6BD8", "selection": "#FFF1E9" }
+    },
+    "teal": {
+      "dark": { "accent": "#0E9A7A", "accentText": "#0E9A7A", "selection": "#3B2A23" },
+      "light": { "accent": "#0E9A7A", "accentText": "#0E9A7A", "selection": "#FFF1E9" }
+    },
+    "violet": {
+      "dark": { "accent": "#7B5CD8", "accentText": "#7B5CD8", "selection": "#3B2A23" },
+      "light": { "accent": "#7B5CD8", "accentText": "#7B5CD8", "selection": "#FFF1E9" }
+    }
+  }
+}

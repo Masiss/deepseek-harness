@@ -1,6 +1,7 @@
 //! Client-local appearance preferences, separate from Host-owned settings.
 
 use crate::command_registry::CommandId;
+use crate::theme::{ThemeColor, DEFAULT_PACK_ID};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::error::Error as StdError;
@@ -10,9 +11,11 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const SCHEMA_VERSION: u32 = 5;
-/// First on-disk format; its fields are all still read, new ones stay defaulted.
+const SCHEMA_VERSION: u32 = 6;
+/// First on-disk format this app upgrades in place; every field is still read.
 const SCHEMA_VERSION_V1: u32 = 1;
+/// Last generation that named its colour pack with the removed `themePack` enum.
+const SCHEMA_VERSION_V5: u32 = 5;
 /// Largest composer draft persisted for one Session, in bytes.
 pub const SESSION_DRAFT_BYTES_MAX: usize = 64 * 1024;
 /// Largest number of Session drafts persisted in the preferences file.
@@ -44,6 +47,19 @@ pub enum ThemeMode {
     Dark,
 }
 
+impl ThemeMode {
+    /// Resolves the persisted mode against the desktop's current appearance.
+    ///
+    /// @param system_dark — whether the desktop reports a dark appearance.
+    /// @returns whether the dark scheme is active.
+    pub fn is_dark(self, system_dark: bool) -> bool {
+        match self {
+            Self::System => system_dark,
+            Self::Light => false,
+            Self::Dark => true,
+        }
+    }
+}
 
 /// Controls spacing between native interface elements.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,35 +85,16 @@ pub enum AccentScheme {
 }
 
 impl AccentScheme {
-    /// Accent fill for the active light/dark scheme.
-    pub fn accent(self, dark: bool) -> Rgba8 {
+    /// Name of the family in a pack's optional `accents` map.
+    ///
+    /// Harness keeps the pack's own accent, so it names no override. Packs that
+    /// predate accent families define none and keep their own accent too.
+    pub fn pack_accent_key(self) -> Option<&'static str> {
         match self {
-            Self::Harness => {
-                if dark {
-                    Rgba8::rgb(0xe9, 0x56, 0x18)
-                } else {
-                    Rgba8::rgb(0xe9, 0x56, 0x18)
-                }
-            }
-            Self::Blue => Rgba8::rgb(0x2e, 0x6b, 0xd8),
-            Self::Teal => Rgba8::rgb(0x0e, 0x9a, 0x7a),
-            Self::Violet => Rgba8::rgb(0x7b, 0x5c, 0xd8),
-        }
-    }
-
-    /// Accent text/links.
-    pub fn accent_text(self, _dark: bool) -> Rgba8 {
-        match self {
-            Self::Harness => {
-                if _dark {
-                    Rgba8::rgb(0xff, 0x9b, 0x70)
-                } else {
-                    Rgba8::rgb(0xa8, 0x3b, 0x10)
-                }
-            }
-            Self::Blue => Rgba8::rgb(0x2e, 0x6b, 0xd8),
-            Self::Teal => Rgba8::rgb(0x0e, 0x9a, 0x7a),
-            Self::Violet => Rgba8::rgb(0x7b, 0x5c, 0xd8),
+            Self::Harness => None,
+            Self::Blue => Some("blue"),
+            Self::Teal => Some("teal"),
+            Self::Violet => Some("violet"),
         }
     }
 }
@@ -110,54 +107,6 @@ pub enum KeymapPreset {
     Dsh,
     Zed,
     Vscode,
-}
-
-/// Named color pack layered over the chosen light or dark theme.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ThemePack {
-    /// The native Harness palette used by the supplied desktop design.
-    #[default]
-    Default,
-    /// Maximum text and border contrast.
-    HighContrast,
-    /// The Solarized base palette.
-    Solarized,
-    /// Colors chosen in the appearance editor.
-    Custom,
-}
-
-/// One role color as written in the preferences file.
-///
-/// Values stay strings so the JSON editor shows the same `#RRGGBB` a user would
-/// paste from a design token file; [`ThemeColor::srgb`] validates the triplet.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ThemeColor(pub String);
-
-impl ThemeColor {
-    /// Formats an sRGB triplet the way the preferences file stores it.
-    #[allow(dead_code)]
-    pub fn from_srgb(rgb: [u8; 3]) -> Self {
-        Self(format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]))
-    }
-
-    /// Reads the stored `#RRGGBB`, or `None` when the value is not a triplet.
-    pub fn srgb(&self) -> Option<[u8; 3]> {
-        let hex = self.0.strip_prefix('#')?;
-        if hex.len() != 6 || !hex.chars().all(|character| character.is_ascii_hexdigit()) {
-            return None;
-        }
-        let channel = |range: std::ops::Range<usize>| u8::from_str_radix(&hex[range], 16).ok();
-        Some([channel(0..2)?, channel(2..4)?, channel(4..6)?])
-    }
-
-    fn rgba8_or(&self, fallback: Rgba8) -> Rgba8 {
-        match self.srgb() {
-            Some([red, green, blue]) => Rgba8::rgb(red, green, blue),
-            None => fallback,
-        }
-    }
 }
 
 /// The role colors of one custom palette.
@@ -250,16 +199,6 @@ impl Default for CustomTheme {
         Self {
             dark: ThemePalette::dark_default(),
             light: ThemePalette::light_default(),
-        }
-    }
-}
-
-impl CustomTheme {
-    fn for_scheme(&self, dark: bool) -> &ThemePalette {
-        if dark {
-            &self.dark
-        } else {
-            &self.light
         }
     }
 }
@@ -503,8 +442,8 @@ fn canonical_key(name: &str) -> Option<&'static str> {
 
 /// Canonical names for the single-character keys.
 const LETTER_KEYS: [&str; 36] = [
-    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R",
-    "S", "T", "U", "V", "W", "X", "Y", "Z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S",
+    "T", "U", "V", "W", "X", "Y", "Z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
 ];
 
 /// Persisted preferences owned by the native client, not the Host.
@@ -523,10 +462,13 @@ pub struct UiPreferences {
     /// Spacing density for controls and panels.
     #[serde(default)]
     pub density: UiDensity,
-    /// Named color pack layered over the light or dark theme.
-    #[serde(default)]
-    pub theme_pack: ThemePack,
-    /// Palette used when `themePack` is `custom`.
+    /// Stable id of the colour pack selected for the application.
+    ///
+    /// Unknown ids are not a load error: resolution falls back to the Harness
+    /// pack and reports the reason, so a removed pack cannot break preferences.
+    #[serde(default = "default_theme_id")]
+    pub theme_id: String,
+    /// Palette used when `themeId` is `custom`.
     #[serde(default)]
     pub custom_theme: CustomTheme,
     /// Font families chosen for the interface and for code.
@@ -595,7 +537,7 @@ impl Default for UiPreferences {
             theme: ThemeMode::default(),
             ui_scale: default_ui_scale(),
             density: UiDensity::default(),
-            theme_pack: ThemePack::default(),
+            theme_id: default_theme_id(),
             custom_theme: CustomTheme::default(),
             fonts: FontSettings::default(),
             radius: default_radius(),
@@ -637,18 +579,12 @@ impl UiPreferences {
                 });
             }
         };
-        let mut preferences: Self =
+        let document: serde_json::Value =
             serde_json::from_slice(&bytes).map_err(|source| UiPreferencesError::Parse {
                 path: path.to_owned(),
                 source,
             })?;
-        // Version 1 files predate the custom palette, fonts, and radius; every new
-        // field defaults, so the generation upgrade keeps the stored choices.
-        if (SCHEMA_VERSION_V1..SCHEMA_VERSION).contains(&preferences.schema_version) {
-            preferences.schema_version = SCHEMA_VERSION;
-        }
-        preferences.validate()?;
-        Ok(preferences)
+        Self::from_document(document)
     }
 
     /// Validates the versioned fields before applying or saving preferences.
@@ -725,26 +661,26 @@ impl UiPreferences {
                     "each workspaceOverrides key must be a non-empty workspace id of at most 256 characters",
                 ));
             }
-            if prefs
-                .session_panel_width
-                .is_some_and(|width| !width.is_finite() || !(SESSION_PANEL_WIDTH_MIN..=SESSION_PANEL_WIDTH_MAX).contains(&width))
-            {
+            if prefs.session_panel_width.is_some_and(|width| {
+                !width.is_finite()
+                    || !(SESSION_PANEL_WIDTH_MIN..=SESSION_PANEL_WIDTH_MAX).contains(&width)
+            }) {
                 return Err(UiPreferencesError::InvalidValue(
                     "workspaceOverrides sessionPanelWidth must be from 220 to 400",
                 ));
             }
-            if prefs
-                .workspace_panel_width
-                .is_some_and(|width| !width.is_finite() || !(WORKSPACE_PANEL_WIDTH_MIN..=WORKSPACE_PANEL_WIDTH_MAX).contains(&width))
-            {
+            if prefs.workspace_panel_width.is_some_and(|width| {
+                !width.is_finite()
+                    || !(WORKSPACE_PANEL_WIDTH_MIN..=WORKSPACE_PANEL_WIDTH_MAX).contains(&width)
+            }) {
                 return Err(UiPreferencesError::InvalidValue(
                     "workspaceOverrides workspacePanelWidth must be within the Explorer panel range",
                 ));
             }
-            if prefs
-                .changes_panel_width
-                .is_some_and(|width| !width.is_finite() || !(CHANGES_PANEL_WIDTH_MIN..=CHANGES_PANEL_WIDTH_MAX).contains(&width))
-            {
+            if prefs.changes_panel_width.is_some_and(|width| {
+                !width.is_finite()
+                    || !(CHANGES_PANEL_WIDTH_MIN..=CHANGES_PANEL_WIDTH_MAX).contains(&width)
+            }) {
                 return Err(UiPreferencesError::InvalidValue(
                     "workspaceOverrides changesPanelWidth must be within the Changes panel range",
                 ));
@@ -894,10 +830,16 @@ impl UiPreferences {
     /// Parses a complete JSON preferences object and validates its values.
     #[allow(dead_code)]
     pub fn parse_json(text: &str) -> Result<Self, UiPreferencesError> {
-        let mut preferences: Self = serde_json::from_str(text).map_err(UiPreferencesError::Json)?;
-        if (SCHEMA_VERSION_V1..SCHEMA_VERSION).contains(&preferences.schema_version) {
-            preferences.schema_version = SCHEMA_VERSION;
-        }
+        let document: serde_json::Value =
+            serde_json::from_str(text).map_err(UiPreferencesError::Json)?;
+        Self::from_document(document)
+    }
+
+    /// Applies the readable generation upgrade, then deserializes and validates.
+    fn from_document(mut document: serde_json::Value) -> Result<Self, UiPreferencesError> {
+        migrate_document(&mut document)?;
+        let preferences: Self =
+            serde_json::from_value(document).map_err(UiPreferencesError::Json)?;
         preferences.validate()?;
         Ok(preferences)
     }
@@ -958,157 +900,11 @@ impl UiPreferences {
     }
 }
 
-/// One opaque 8-bit sRGB color.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Rgba8 {
-    pub(crate) r: u8,
-    pub(crate) g: u8,
-    pub(crate) b: u8,
-    pub(crate) a: u8,
-}
-
-impl Rgba8 {
-    pub(crate) const BLACK: Self = Self::rgb(0, 0, 0);
-    pub(crate) const WHITE: Self = Self::rgb(255, 255, 255);
-    pub(crate) const RED: Self = Self::rgb(255, 0, 0);
-    pub(crate) const YELLOW: Self = Self::rgb(255, 255, 0);
-    pub(crate) const GRAY: Self = Self::rgb(160, 160, 160);
-    pub(crate) const BLUE: Self = Self::rgb(0, 0, 255);
-    pub(crate) const LIGHT_BLUE: Self = Self::rgb(0xad, 0xd8, 0xe6);
-
-    /// Builds an opaque color.
-    pub(crate) const fn rgb(r: u8, g: u8, b: u8) -> Self {
-        Self { r, g, b, a: 255 }
-    }
-}
-
-/// One color pack resolved for the active light or dark scheme.
-pub(crate) struct Palette {
-    pub(crate) panel: Rgba8,
-    pub(crate) extreme: Rgba8,
-    pub(crate) text: Rgba8,
-    pub(crate) selection: Rgba8,
-    pub(crate) accent: Rgba8,
-    pub(crate) accent_text: Rgba8,
-    pub(crate) widget: Rgba8,
-    pub(crate) stroke: Rgba8,
-    pub(crate) muted: Rgba8,
-    pub(crate) warn: Rgba8,
-    pub(crate) error: Rgba8,
-}
-
-pub(crate) fn palette(
-    pack: ThemePack,
-    dark: bool,
-    custom: &CustomTheme,
-    accent: AccentScheme,
-) -> Option<Palette> {
-    match (pack, dark) {
-        (ThemePack::Default, dark) => {
-            let palette = if dark {
-                ThemePalette::dark_default()
-            } else {
-                ThemePalette::light_default()
-            };
-            Some(Palette {
-                panel: palette.background.rgba8_or(Rgba8::BLACK),
-                extreme: palette.surface.rgba8_or(Rgba8::BLACK),
-                text: palette.text.rgba8_or(Rgba8::WHITE),
-                selection: palette.selection.rgba8_or(Rgba8::BLUE),
-                accent: accent.accent(dark),
-                accent_text: accent.accent_text(dark),
-                widget: palette.surface.rgba8_or(Rgba8::BLACK),
-                stroke: palette.border.rgba8_or(Rgba8::GRAY),
-                muted: palette.muted.rgba8_or(Rgba8::GRAY),
-                warn: palette.warn.rgba8_or(Rgba8::YELLOW),
-                error: palette.error.rgba8_or(Rgba8::RED),
-            })
-        }
-        (ThemePack::Custom, dark) => {
-            let palette = custom.for_scheme(dark);
-            let fallback = if dark {
-                Rgba8::rgb(0x1b, 0x1b, 0x1b)
-            } else {
-                Rgba8::rgb(0xfa, 0xfa, 0xfa)
-            };
-            Some(Palette {
-                panel: palette.background.rgba8_or(fallback),
-                extreme: palette.surface.rgba8_or(fallback),
-                text: palette.text.rgba8_or(Rgba8::WHITE),
-                selection: palette.selection.rgba8_or(Rgba8::BLUE),
-                accent: palette.accent.rgba8_or(Rgba8::LIGHT_BLUE),
-                accent_text: palette.accent.rgba8_or(Rgba8::LIGHT_BLUE),
-                widget: palette.surface.rgba8_or(fallback),
-                stroke: palette.border.rgba8_or(Rgba8::GRAY),
-                muted: palette.muted.rgba8_or(Rgba8::GRAY),
-                warn: palette.warn.rgba8_or(Rgba8::YELLOW),
-                error: palette.error.rgba8_or(Rgba8::RED),
-            })
-        }
-        (ThemePack::HighContrast, true) => Some(Palette {
-            panel: Rgba8::BLACK,
-            extreme: Rgba8::BLACK,
-            text: Rgba8::WHITE,
-            selection: Rgba8::rgb(0xff, 0xf2, 0x00),
-            accent: Rgba8::rgb(0x00, 0xe5, 0xff),
-            accent_text: Rgba8::rgb(0x00, 0xe5, 0xff),
-            widget: Rgba8::BLACK,
-            stroke: Rgba8::WHITE,
-            muted: Rgba8::WHITE,
-            warn: Rgba8::rgb(0xff, 0xd6, 0x00),
-            error: Rgba8::rgb(0xff, 0x6b, 0x6b),
-        }),
-        (ThemePack::HighContrast, false) => Some(Palette {
-            panel: Rgba8::WHITE,
-            extreme: Rgba8::WHITE,
-            text: Rgba8::BLACK,
-            selection: Rgba8::rgb(0x00, 0x00, 0xff),
-            accent: Rgba8::rgb(0x00, 0x44, 0xaa),
-            accent_text: Rgba8::rgb(0x00, 0x44, 0xaa),
-            widget: Rgba8::WHITE,
-            stroke: Rgba8::BLACK,
-            muted: Rgba8::BLACK,
-            warn: Rgba8::rgb(0x7a, 0x4b, 0x00),
-            error: Rgba8::rgb(0xb3, 0x00, 0x00),
-        }),
-        (ThemePack::Solarized, true) => Some(Palette {
-            panel: Rgba8::rgb(0x00, 0x2b, 0x36),
-            extreme: Rgba8::rgb(0x07, 0x36, 0x42),
-            text: Rgba8::rgb(0x83, 0x94, 0x96),
-            selection: Rgba8::rgb(0x26, 0x8b, 0xd2),
-            accent: Rgba8::rgb(0x2a, 0xa1, 0x98),
-            accent_text: Rgba8::rgb(0x2a, 0xa1, 0x98),
-            widget: Rgba8::rgb(0x07, 0x36, 0x42),
-            stroke: Rgba8::rgb(0x58, 0x6e, 0x75),
-            muted: Rgba8::rgb(0x93, 0xa1, 0xa1),
-            warn: Rgba8::rgb(0xb5, 0x89, 0x00),
-            error: Rgba8::rgb(0xdc, 0x32, 0x2f),
-        }),
-        (ThemePack::Solarized, false) => Some(Palette {
-            panel: Rgba8::rgb(0xfd, 0xf6, 0xe3),
-            extreme: Rgba8::rgb(0xee, 0xe8, 0xd5),
-            text: Rgba8::rgb(0x65, 0x7b, 0x83),
-            selection: Rgba8::rgb(0x26, 0x8b, 0xd2),
-            accent: Rgba8::rgb(0x2a, 0xa1, 0x98),
-            accent_text: Rgba8::rgb(0x2a, 0xa1, 0x98),
-            widget: Rgba8::rgb(0xee, 0xe8, 0xd5),
-            stroke: Rgba8::rgb(0x93, 0xa1, 0xa1),
-            muted: Rgba8::rgb(0x65, 0x7b, 0x83),
-            warn: Rgba8::rgb(0xa1, 0x62, 0x07),
-            error: Rgba8::rgb(0xdc, 0x32, 0x2f),
-        }),
-    }
-}
-
 /// Returns the active accent fill for buttons that carry the primary action.
-
-
 
 /// Actions returned by the local preferences editor.
 
-
 /// Draft editor for client-local appearance preferences.
-
 
 /// Draws one section title with the spacing the appearance editor relies on.
 
@@ -1117,7 +913,6 @@ pub(crate) fn palette(
 /// @returns Whether the color changed this frame.
 
 /// Draws a family picker that keeps the bundled face available as the default.
-
 
 /// An on-disk error names the operation and retains its source error.
 #[derive(Debug)]
@@ -1231,6 +1026,54 @@ impl Drop for TemporaryFile {
 
 fn schema_version() -> u32 {
     SCHEMA_VERSION
+}
+
+fn default_theme_id() -> String {
+    DEFAULT_PACK_ID.to_owned()
+}
+
+/// Rewrites one parsed preferences document to the current generation.
+///
+/// v1–v5 named the colour pack with the removed `themePack` enum. `default`
+/// becomes `harness` because that is the palette those files rendered with; the
+/// other names are already stable ids. An unrecognised name is kept so theme
+/// resolution reports the unknown pack and falls back, instead of the whole
+/// preferences file failing to load.
+fn migrate_document(document: &mut serde_json::Value) -> Result<(), UiPreferencesError> {
+    let Some(object) = document.as_object_mut() else {
+        return Err(UiPreferencesError::InvalidValue(
+            "the preferences file must be a JSON object",
+        ));
+    };
+    let version = object
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64);
+    let legacy = version.is_none_or(|version| version <= u64::from(SCHEMA_VERSION_V5));
+    if legacy {
+        if let Some(pack) = object.remove("themePack") {
+            if !object.contains_key("themeId") {
+                let Some(name) = pack.as_str() else {
+                    return Err(UiPreferencesError::InvalidValue(
+                        "themePack must be a theme pack name",
+                    ));
+                };
+                let theme_id = if name == "default" { "harness" } else { name };
+                object.insert(
+                    "themeId".to_owned(),
+                    serde_json::Value::String(theme_id.to_owned()),
+                );
+            }
+        }
+    }
+    if version.is_some_and(|version| {
+        (u64::from(SCHEMA_VERSION_V1)..u64::from(SCHEMA_VERSION)).contains(&version)
+    }) {
+        object.insert(
+            "schemaVersion".to_owned(),
+            serde_json::Value::from(SCHEMA_VERSION),
+        );
+    }
+    Ok(())
 }
 
 fn default_ui_scale() -> f32 {
@@ -1365,7 +1208,7 @@ mod tests {
     #[test]
     fn rejects_unsupported_versions_invalid_values_and_unknown_fields() {
         for text in [
-            r#"{"schemaVersion":6}"#,
+            r#"{"schemaVersion":7}"#,
             r#"{"uiScale":3.0}"#,
             r#"{"sessionPanelWidth":500.0}"#,
             r#"{"workspacePanelWidth":600.0}"#,
@@ -1418,10 +1261,16 @@ mod tests {
 
         preferences.workspace_panel_width = 300.;
         preferences.reset_workspace_panel_width(None);
-        assert_eq!(preferences.workspace_panel_width, default_workspace_panel_width());
+        assert_eq!(
+            preferences.workspace_panel_width,
+            default_workspace_panel_width()
+        );
         preferences.changes_panel_width = 280.;
         preferences.reset_changes_panel_width(None);
-        assert_eq!(preferences.changes_panel_width, default_changes_panel_width());
+        assert_eq!(
+            preferences.changes_panel_width,
+            default_changes_panel_width()
+        );
     }
 
     #[test]
@@ -1437,7 +1286,10 @@ mod tests {
         );
         preferences.reset_workspace_panel_width(Some("w1"));
         assert_eq!(
-            preferences.workspace_overrides.get("w1").and_then(|prefs| prefs.theme),
+            preferences
+                .workspace_overrides
+                .get("w1")
+                .and_then(|prefs| prefs.theme),
             Some(ThemeMode::Light)
         );
     }
@@ -1496,10 +1348,9 @@ mod tests {
     #[test]
     fn rejects_oversized_session_drafts() {
         let mut preferences = UiPreferences::default();
-        preferences.session_drafts.insert(
-            "s1".to_owned(),
-            "x".repeat(SESSION_DRAFT_BYTES_MAX + 1),
-        );
+        preferences
+            .session_drafts
+            .insert("s1".to_owned(), "x".repeat(SESSION_DRAFT_BYTES_MAX + 1));
         assert!(preferences.validate().is_err());
 
         let mut preferences = UiPreferences::default();
@@ -1542,7 +1393,7 @@ mod tests {
         let loaded = UiPreferences::load(&path).unwrap();
         assert_eq!(loaded.schema_version, SCHEMA_VERSION);
         assert_eq!(loaded.theme, ThemeMode::Dark);
-        assert_eq!(loaded.theme_pack, ThemePack::Solarized);
+        assert_eq!(loaded.theme_id, "solarized");
         assert_eq!(loaded.session_panel_width, 300.0);
         assert!(loaded.show_workspace_explorer);
         assert_eq!(
@@ -1574,8 +1425,6 @@ mod tests {
     }
 
     #[test]
-
-    #[test]
     fn rejects_malformed_role_colors_radius_and_font_names() {
         let mut preferences = UiPreferences::default();
         preferences.custom_theme.dark.accent = ThemeColor("blue".to_owned());
@@ -1592,16 +1441,6 @@ mod tests {
         let mut preferences = UiPreferences::default();
         preferences.fonts.monospace = "bad\nname".to_owned();
         assert!(preferences.validate().is_err());
-    }
-
-    #[test]
-    fn parses_and_formats_role_colors() {
-        let color = ThemeColor::from_srgb([0x2f, 0x6f, 0xeb]);
-        assert_eq!(color.0, "#2F6FEB");
-        assert_eq!(color.srgb(), Some([0x2f, 0x6f, 0xeb]));
-        for text in ["2F6FEB", "#2F6F", "#2F6FEBB", "#GGGGGG"] {
-            assert_eq!(ThemeColor(text.to_owned()).srgb(), None, "{text}");
-        }
     }
 
     #[test]
@@ -1654,11 +1493,11 @@ mod tests {
     }
 
     #[test]
-    fn theme_pack_colors_survive_a_save_and_load_round_trip() {
+    fn selected_theme_id_survives_a_save_and_load_round_trip() {
         let directory = TestDirectory::new();
         let path = directory.file();
         let preferences = UiPreferences {
-            theme_pack: ThemePack::Solarized,
+            theme_id: "solarized".to_owned(),
             keybindings: Keybindings {
                 open_settings: "Cmd+Comma".to_owned(),
                 ..Keybindings::default()
@@ -1666,27 +1505,80 @@ mod tests {
             ..UiPreferences::default()
         };
         preferences.save(&path).unwrap();
-        assert_eq!(UiPreferences::load(&path).unwrap(), preferences);
+        let loaded = UiPreferences::load(&path).unwrap();
+        assert_eq!(loaded, preferences);
+        assert_eq!(loaded.theme_id, "solarized");
     }
 
     #[test]
-
-    #[test]
-    fn default_theme_uses_the_harness_dark_and_light_tokens() {
-        let custom = CustomTheme::default();
-        let dark = palette(ThemePack::Default, true, &custom, AccentScheme::default()).expect("dark Harness palette");
-        assert_eq!(dark.panel, Rgba8::rgb(0x17, 0x1a, 0x1f));
-        assert_eq!(dark.extreme, Rgba8::rgb(0x22, 0x27, 0x2e));
-        assert_eq!(dark.accent, Rgba8::rgb(0xe9, 0x56, 0x18));
-        assert_eq!(dark.accent_text, Rgba8::rgb(0xff, 0x9b, 0x70));
-
-        let light = palette(ThemePack::Default, false, &custom, AccentScheme::default()).expect("light Harness palette");
-        assert_eq!(light.panel, Rgba8::rgb(0xf1, 0xf2, 0xf3));
-        assert_eq!(light.accent, Rgba8::rgb(0xe9, 0x56, 0x18));
-        assert_eq!(light.accent_text, Rgba8::rgb(0xa8, 0x3b, 0x10));
+    fn missing_preferences_select_the_dsh_pack() {
+        let directory = TestDirectory::new();
+        let loaded = UiPreferences::load(&directory.file()).unwrap();
+        assert_eq!(loaded.theme_id, DEFAULT_PACK_ID);
+        assert_eq!(loaded.theme_id, "dsh");
     }
 
     #[test]
+    fn migrates_every_v5_pack_name_to_its_stable_id() {
+        for (pack, theme_id) in [
+            ("default", "harness"),
+            ("high-contrast", "high-contrast"),
+            ("solarized", "solarized"),
+            ("custom", "custom"),
+        ] {
+            let directory = TestDirectory::new();
+            let path = directory.file();
+            fs::write(
+                &path,
+                format!(r#"{{"schemaVersion":5,"theme":"dark","themePack":"{pack}"}}"#),
+            )
+            .unwrap();
+            let loaded = UiPreferences::load(&path).unwrap();
+            assert_eq!(loaded.schema_version, SCHEMA_VERSION);
+            assert_eq!(loaded.theme_id, theme_id, "{pack}");
+            assert_eq!(loaded.theme, ThemeMode::Dark);
+            // The removed field must not survive the next write.
+            loaded.save(&path).unwrap();
+            let saved = fs::read_to_string(&path).unwrap();
+            assert!(!saved.contains("themePack"), "{saved}");
+        }
+    }
+
+    #[test]
+    fn keeps_an_unrecognised_v5_pack_name_so_resolution_can_report_it() {
+        let directory = TestDirectory::new();
+        let path = directory.file();
+        fs::write(&path, r#"{"schemaVersion":4,"themePack":"sepia"}"#).unwrap();
+        let loaded = UiPreferences::load(&path).unwrap();
+        assert_eq!(loaded.theme_id, "sepia");
+    }
+
+    #[test]
+    fn rejects_a_non_string_v5_pack_name_and_ignores_theme_pack_in_a_v6_file() {
+        let directory = TestDirectory::new();
+        let path = directory.file();
+        fs::write(&path, r#"{"schemaVersion":5,"themePack":5}"#).unwrap();
+        assert!(UiPreferences::load(&path).is_err());
+
+        fs::write(
+            &path,
+            r#"{"schemaVersion":6,"themeId":"dsh","themePack":"solarized"}"#,
+        )
+        .unwrap();
+        // A v6 document keeps `deny_unknown_fields` semantics instead of migrating.
+        assert!(UiPreferences::load(&path).is_err());
+    }
+
+    #[test]
+    fn an_explicit_v6_theme_id_wins_over_the_legacy_field() {
+        let mut document = serde_json::json!({
+            "schemaVersion": 5,
+            "themePack": "solarized",
+            "themeId": "custom",
+        });
+        let preferences = UiPreferences::from_document(document.take()).unwrap();
+        assert_eq!(preferences.theme_id, "custom");
+    }
 
     #[test]
     fn parses_named_function_and_command_keys() {

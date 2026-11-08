@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "id": "high-contrast",
+  "name": "High contrast",
+  "author": "DeepSeek",
+  "license": "MIT",
+  "source": "builtin",
+  "colors": {
+    "dark": {
+      "canvas": "#000000",
+      "chrome": "#000000",
+      "surface": "#000000",
+      "surfaceDeep": "#000000",
+      "surfaceRaised": "#0F0F0F",
+      "border": "#FFFFFF",
+      "borderFaint": "#FFFFFF",
+      "text": "#FFFFFF",
+      "textSecondary": "#FFFFFF",
+      "textTertiary": "#FFFFFF",
+      "accent": "#00E5FF",
+      "accentText": "#00E5FF",
+      "selection": "#FFF200",
+      "success": "#00FF66",
+      "danger": "#FF6B6B",
+      "warning": "#FFD600"
+    },
+    "light": {
+      "canvas": "#FFFFFF",
+      "chrome": "#FFFFFF",
+      "surface": "#FFFFFF",
+      "surfaceDeep": "#FFFFFF",
+      "surfaceRaised": "#F5F5F5",
+      "border": "#000000",
+      "borderFaint": "#000000",
+      "text": "#000000",
+      "textSecondary": "#000000",
+      "textTertiary": "#000000",
+      "accent": "#0044AA",
+      "accentText": "#0044AA",
+      "selection": "#0000FF",
+      "success": "#006B2E",
+      "danger": "#B30000",
+      "warning": "#7A4B00"
+    }
+  }
+}

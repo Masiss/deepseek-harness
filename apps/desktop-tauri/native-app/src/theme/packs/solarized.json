@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "id": "solarized",
+  "name": "Solarized",
+  "author": "Ethan Schoonover",
+  "license": "MIT",
+  "source": "builtin",
+  "colors": {
+    "dark": {
+      "canvas": "#002B36",
+      "chrome": "#002B36",
+      "surface": "#073642",
+      "surfaceDeep": "#073642",
+      "surfaceRaised": "#0A454B",
+      "border": "#586E75",
+      "borderFaint": "#586E75",
+      "text": "#839496",
+      "textSecondary": "#93A1A1",
+      "textTertiary": "#93A1A1",
+      "accent": "#2AA198",
+      "accentText": "#2AA198",
+      "selection": "#268BD2",
+      "success": "#859900",
+      "danger": "#DC322F",
+      "warning": "#B58900"
+    },
+    "light": {
+      "canvas": "#FDF6E3",
+      "chrome": "#FDF6E3",
+      "surface": "#EEE8D5",
+      "surfaceDeep": "#EEE8D5",
+      "surfaceRaised": "#CFE4EB",
+      "border": "#93A1A1",
+      "borderFaint": "#93A1A1",
+      "text": "#657B83",
+      "textSecondary": "#657B83",
+      "textTertiary": "#657B83",
+      "accent": "#2AA198",
+      "accentText": "#2AA198",
+      "selection": "#268BD2",
+      "success": "#859900",
+      "danger": "#DC322F",
+      "warning": "#A16207"
+    }
+  }
+}

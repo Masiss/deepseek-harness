@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "id": "dsh",
+  "name": "DSH",
+  "author": "DeepSeek",
+  "license": "MIT",
+  "source": "builtin",
+  "colors": {
+    "dark": {
+      "canvas": "#0D1721",
+      "chrome": "#0D1720",
+      "surface": "#101B26",
+      "surfaceDeep": "#0C1620",
+      "surfaceRaised": "#14212D",
+      "border": "#263544",
+      "borderFaint": "#1C2A37",
+      "text": "#D8E0E9",
+      "textSecondary": "#8B9AAC",
+      "textTertiary": "#8899AA",
+      "accent": "#4A99F7",
+      "accentText": "#0B1A2A",
+      "selection": "#18324B",
+      "success": "#53D49B",
+      "danger": "#F17C80",
+      "warning": "#E9B46B"
+    },
+    "light": {
+      "canvas": "#F6F8FB",
+      "chrome": "#F4F7FB",
+      "surface": "#FFFFFF",
+      "surfaceDeep": "#F8FAFC",
+      "surfaceRaised": "#EDF3F9",
+      "border": "#D8E0E9",
+      "borderFaint": "#E3EAF2",
+      "text": "#273544",
+      "textSecondary": "#5D6B7E",
+      "textTertiary": "#607083",
+      "accent": "#257FD3",
+      "accentText": "#FFFFFF",
+      "selection": "#E1EEFB",
+      "success": "#1F7A4D",
+      "danger": "#B4232C",
+      "warning": "#8A5A00"
+    }
+  },
+  "accents": {
+    "blue": {
+      "dark": { "accent": "#4A99F7", "accentText": "#0B1A2A", "selection": "#18324B" },
+      "light": { "accent": "#257FD3", "accentText": "#FFFFFF", "selection": "#E1EEFB" }
+    },
+    "teal": {
+      "dark": { "accent": "#35C7B2", "accentText": "#05231F", "selection": "#123A36" },
+      "light": { "accent": "#0C7A6B", "accentText": "#FFFFFF", "selection": "#DFF4EF" }
+    },
+    "violet": {
+      "dark": { "accent": "#9B8CF5", "accentText": "#150F2C", "selection": "#241D42" },
+      "light": { "accent": "#6C5CE0", "accentText": "#FFFFFF", "selection": "#ECE9FD" }
+    }
+  }
+}

@@ -1,6 +1,7 @@
-//! Design tokens for the gpui shell, resolved from the persisted preferences.
+//! The per-frame theme snapshot: pack colours plus the app's own metrics.
 
-use crate::ui_preferences::{self, UiDensity, UiPreferences};
+use crate::theme::{resolve, Rgba8, ThemeRequest, ThemeStatus};
+use crate::ui_preferences::{UiDensity, UiPreferences};
 use gpui::{px, AbsoluteLength, FontFallbacks, FontStyle, FontWeight, Hsla, Pixels, SharedString};
 
 /// Resolved colors and metrics for one frame.
@@ -25,30 +26,27 @@ pub(crate) struct Theme {
     pub sans: SharedString,
     pub mono: SharedString,
     pub fallbacks: Vec<String>,
+    /// Whether the resolved pack defines accent families.
+    pub(crate) accent_families: bool,
+    /// Which pack resolved and what it had to fall back from.
+    pub(crate) status: ThemeStatus,
 }
 
 impl Theme {
-    /// Resolves a palette for the active light/dark scheme.
-    pub(crate) fn new(preferences: &UiPreferences, dark: bool) -> Self {
-        let palette = ui_preferences::palette(preferences.theme_pack, dark, &preferences.custom_theme, preferences.accent_scheme);
-        let (background, surface, code_background, text, muted, accent, accent_text, selection, border, warn, error) =
-            match palette {
-                Some(palette) => (
-                    convert(palette.panel),
-                    convert(palette.widget),
-                    convert(palette.extreme),
-                    convert(palette.text),
-                    convert(palette.muted),
-                    convert(palette.accent),
-                    convert(palette.accent_text),
-                    convert(palette.selection),
-                    convert(palette.stroke),
-                    convert(palette.warn),
-                    convert(palette.error),
-                ),
-                None => default_palette(dark),
-            };
-        let surface_raised = blend(surface, text, if dark { 0.06 } else { 0.04 });
+    /// Resolves one frame's colours from the selected pack and the scheme mode.
+    ///
+    /// @param preferences — effective preferences, including workspace overrides.
+    /// @param system_dark — whether the desktop currently reports a dark appearance.
+    /// @returns the snapshot every render call site reads.
+    pub(crate) fn new(preferences: &UiPreferences, system_dark: bool) -> Self {
+        let dark = preferences.theme.is_dark(system_dark);
+        let resolved = resolve(&ThemeRequest {
+            pack_id: &preferences.theme_id,
+            custom: &preferences.custom_theme,
+            accent: preferences.accent_scheme,
+            dark,
+        });
+        let colors = resolved.colors;
         let mut fallbacks = vec![
             "Noto Sans".to_owned(),
             "DejaVu Sans".to_owned(),
@@ -65,24 +63,26 @@ impl Theme {
         );
         Self {
             dark,
-            background,
-            surface,
-            surface_raised,
-            code_background,
-            text,
-            muted,
-            accent,
-            accent_text,
-            selection,
-            border,
-            warn,
-            error,
+            background: convert(colors.canvas),
+            surface: convert(colors.surface),
+            surface_raised: convert(colors.surface_raised),
+            code_background: convert(colors.surface_deep),
+            text: convert(colors.text),
+            muted: convert(colors.text_secondary),
+            accent: convert(colors.accent),
+            accent_text: convert(colors.accent_text),
+            selection: convert(colors.selection),
+            border: convert(colors.border),
+            warn: convert(colors.warning),
+            error: convert(colors.danger),
             radius: preferences.radius,
             scale: preferences.ui_scale,
             compact: preferences.density == UiDensity::Compact,
             sans: font_name(&preferences.fonts.proportional),
             mono: font_name(&preferences.fonts.monospace),
             fallbacks,
+            accent_families: resolved.accent_families,
+            status: resolved.status,
         }
     }
 
@@ -146,85 +146,23 @@ fn font_name(configured: &str) -> SharedString {
     }
 }
 
-#[cfg(test)]
-use crate::ui_preferences::ThemePack;
-
-fn convert(color: ui_preferences::Rgba8) -> Hsla {
-    let ui_preferences::Rgba8 { r, g, b, a } = color;
+fn convert(color: Rgba8) -> Hsla {
+    let Rgba8 { r, g, b, a } = color;
     gpui::rgba(u32::from_be_bytes([r, g, b, a])).into()
-}
-
-fn blend(base: Hsla, tint: Hsla, amount: f32) -> Hsla {
-    let mut out = base;
-    out.h = tint.h;
-    out.s = (base.s + (tint.s - base.s) * amount).clamp(0.0, 1.0);
-    out.l = (base.l + (tint.l - base.l) * amount).clamp(0.0, 1.0);
-    out
-}
-
-fn default_palette(
-    dark: bool,
-) -> (
-    Hsla,
-    Hsla,
-    Hsla,
-    Hsla,
-    Hsla,
-    Hsla,
-    Hsla,
-    Hsla,
-    Hsla,
-    Hsla,
-    Hsla,
-) {
-    if dark {
-        (
-            convert(ui_preferences::Rgba8::rgb(0x17, 0x1a, 0x1f)),
-            convert(ui_preferences::Rgba8::rgb(0x22, 0x27, 0x2e)),
-            convert(ui_preferences::Rgba8::rgb(0x12, 0x14, 0x18)),
-            convert(ui_preferences::Rgba8::rgb(0xee, 0xf1, 0xf4)),
-            convert(ui_preferences::Rgba8::rgb(0x92, 0x9b, 0xa6)),
-            convert(ui_preferences::Rgba8::rgb(0xe9, 0x56, 0x18)),
-            convert(ui_preferences::Rgba8::rgb(0xff, 0x9b, 0x70)),
-            convert(ui_preferences::Rgba8::rgb(0x3b, 0x2a, 0x23)),
-            convert(ui_preferences::Rgba8::rgb(0x35, 0x3d, 0x47)),
-            convert(ui_preferences::Rgba8::rgb(0xe7, 0xc9, 0x79)),
-            convert(ui_preferences::Rgba8::rgb(0xff, 0x9b, 0x70)),
-        )
-    } else {
-        (
-            convert(ui_preferences::Rgba8::rgb(0xf1, 0xf2, 0xf3)),
-            convert(ui_preferences::Rgba8::WHITE),
-            convert(ui_preferences::Rgba8::rgb(0xfa, 0xfa, 0xfa)),
-            convert(ui_preferences::Rgba8::rgb(0x20, 0x20, 0x1f)),
-            convert(ui_preferences::Rgba8::rgb(0x70, 0x70, 0x6b)),
-            convert(ui_preferences::Rgba8::rgb(0xe9, 0x56, 0x18)),
-            convert(ui_preferences::Rgba8::rgb(0xa8, 0x3b, 0x10)),
-            convert(ui_preferences::Rgba8::rgb(0xff, 0xf1, 0xe9)),
-            convert(ui_preferences::Rgba8::rgb(0xe6, 0xe6, 0xe3)),
-            convert(ui_preferences::Rgba8::rgb(0x79, 0x5b, 0x1a)),
-            convert(ui_preferences::Rgba8::rgb(0x9c, 0x39, 0x16)),
-        )
-    }
-}
-
-/// Default theme used by tests that do not exercise preferences.
-#[cfg(test)]
-pub(crate) fn test_theme(dark: bool) -> Theme {
-    let mut preferences = UiPreferences::default();
-    preferences.theme_pack = ThemePack::Default;
-    Theme::new(&preferences, dark)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui_preferences::{AccentScheme, ThemeMode};
 
     #[test]
     fn theme_sp_scales_layout_by_persisted_scale() {
-        let mut preferences = UiPreferences::default();
-        preferences.ui_scale = 2.0;
-        preferences.radius = 4.0;
+        let preferences = UiPreferences {
+            ui_scale: 2.0,
+            radius: 4.0,
+            ..UiPreferences::default()
+        };
         let theme = Theme::new(&preferences, false);
         assert_eq!(theme.scale, 2.0);
         assert_eq!(theme.sp(10.), px(20.));
@@ -233,8 +171,10 @@ mod tests {
 
     #[test]
     fn theme_metrics_follow_density() {
-        let mut compact = UiPreferences::default();
-        compact.density = UiDensity::Compact;
+        let compact = UiPreferences {
+            density: UiDensity::Compact,
+            ..UiPreferences::default()
+        };
         let theme = Theme::new(&compact, false);
         assert_eq!(theme.gap(), px(4.));
         assert_eq!(theme.control_height(), px(22.));
@@ -246,51 +186,217 @@ mod tests {
     }
 
     #[test]
-    fn theme_dark_tracks_persisted_scheme() {
-        assert!(test_theme(true).dark);
-        assert!(!test_theme(false).dark);
+    fn dark_tracks_the_persisted_mode_instead_of_the_desktop() {
+        for (mode, system_dark, expected) in [
+            (ThemeMode::System, true, true),
+            (ThemeMode::System, false, false),
+            (ThemeMode::Light, true, false),
+            (ThemeMode::Light, false, false),
+            (ThemeMode::Dark, true, true),
+            (ThemeMode::Dark, false, true),
+        ] {
+            let preferences = UiPreferences {
+                theme: mode,
+                ..UiPreferences::default()
+            };
+            let theme = Theme::new(&preferences, system_dark);
+            assert_eq!(
+                theme.dark, expected,
+                "{mode:?} with system_dark={system_dark}"
+            );
+        }
+    }
+
+    #[test]
+    fn harness_pack_keeps_the_palette_that_predates_theme_packs() {
+        let dark = Theme::new(
+            &UiPreferences {
+                theme_id: "harness".to_owned(),
+                theme: ThemeMode::Dark,
+                ..UiPreferences::default()
+            },
+            false,
+        );
+        assert_eq!(dark.background, convert(Rgba8::rgb(0x17, 0x1a, 0x1f)));
+        assert_eq!(dark.surface, convert(Rgba8::rgb(0x22, 0x27, 0x2e)));
+        assert_eq!(dark.surface_raised, convert(Rgba8::rgb(0x2c, 0x34, 0x3c)));
+        assert_eq!(dark.code_background, convert(Rgba8::rgb(0x22, 0x27, 0x2e)));
+        assert_eq!(dark.text, convert(Rgba8::rgb(0xee, 0xf1, 0xf4)));
+        assert_eq!(dark.muted, convert(Rgba8::rgb(0x92, 0x9b, 0xa6)));
+        assert_eq!(dark.accent, convert(Rgba8::rgb(0xe9, 0x56, 0x18)));
+        assert_eq!(dark.accent_text, convert(Rgba8::rgb(0xff, 0x9b, 0x70)));
+        assert_eq!(dark.selection, convert(Rgba8::rgb(0x3b, 0x2a, 0x23)));
+        assert_eq!(dark.border, convert(Rgba8::rgb(0x35, 0x3d, 0x47)));
+        assert_eq!(dark.warn, convert(Rgba8::rgb(0xe7, 0xc9, 0x79)));
+        assert_eq!(dark.error, convert(Rgba8::rgb(0xff, 0x9b, 0x70)));
+
+        let light = Theme::new(
+            &UiPreferences {
+                theme_id: "harness".to_owned(),
+                theme: ThemeMode::Light,
+                ..UiPreferences::default()
+            },
+            true,
+        );
+        assert_eq!(light.background, convert(Rgba8::rgb(0xf1, 0xf2, 0xf3)));
+        assert_eq!(light.surface, convert(Rgba8::rgb(0xff, 0xff, 0xff)));
+        assert_eq!(light.surface_raised, convert(Rgba8::rgb(0xf6, 0xf6, 0xf6)));
+        assert_eq!(light.accent, convert(Rgba8::rgb(0xe9, 0x56, 0x18)));
+        assert_eq!(light.accent_text, convert(Rgba8::rgb(0xa8, 0x3b, 0x10)));
+    }
+
+    #[test]
+    fn accent_families_replace_accent_and_selection_for_packs_that_define_them() {
+        let theme = Theme::new(
+            &UiPreferences {
+                theme_id: "harness".to_owned(),
+                theme: ThemeMode::Dark,
+                accent_scheme: AccentScheme::Blue,
+                ..UiPreferences::default()
+            },
+            true,
+        );
+        assert_eq!(theme.accent, convert(Rgba8::rgb(0x2e, 0x6b, 0xd8)));
+        assert_eq!(theme.selection, convert(Rgba8::rgb(0x3b, 0x2a, 0x23)));
+
+        // Packs without accent families keep their own accent.
+        let theme = Theme::new(
+            &UiPreferences {
+                theme_id: "solarized".to_owned(),
+                theme: ThemeMode::Dark,
+                accent_scheme: AccentScheme::Violet,
+                ..UiPreferences::default()
+            },
+            true,
+        );
+        assert_eq!(theme.accent, convert(Rgba8::rgb(0x2a, 0xa1, 0x98)));
+    }
+
+    #[test]
+    fn an_unknown_pack_falls_back_to_harness_with_a_reason() {
+        let theme = Theme::new(
+            &UiPreferences {
+                theme_id: "missing-pack".to_owned(),
+                ..UiPreferences::default()
+            },
+            false,
+        );
+        assert_eq!(theme.status.pack_id, "harness");
+        assert!(theme.status.trusted);
+        assert_eq!(
+            theme.status.errors,
+            [
+                "theme `missing-pack` is not installed".to_owned(),
+                "using the `harness` theme instead".to_owned(),
+            ]
+        );
+        assert_eq!(theme.background, convert(Rgba8::rgb(0xf1, 0xf2, 0xf3)));
+    }
+
+    #[test]
+    fn new_installations_resolve_the_dsh_pack() {
+        let preferences = UiPreferences::default();
+        assert_eq!(preferences.theme_id, "dsh");
+        let theme = Theme::new(&preferences, false);
+        assert_eq!(theme.status.pack_id, "dsh");
+        assert!(theme.status.errors.is_empty());
+        assert_eq!(theme.background, convert(Rgba8::rgb(0xf6, 0xf8, 0xfb)));
+        assert_eq!(theme.accent, convert(Rgba8::rgb(0x25, 0x7f, 0xd3)));
+    }
+
+    #[test]
+    fn the_custom_pack_stays_selectable_after_a_builtin_pack() {
+        let mut preferences = UiPreferences {
+            theme_id: "custom".to_owned(),
+            theme: ThemeMode::Light,
+            ..UiPreferences::default()
+        };
+        assert_eq!(Theme::new(&preferences, false).status.pack_id, "custom");
+
+        preferences.theme_id = "dsh".to_owned();
+        assert_eq!(Theme::new(&preferences, false).status.pack_id, "dsh");
+
+        preferences.theme_id = "custom".to_owned();
+        let theme = Theme::new(&preferences, false);
+        assert_eq!(theme.status.pack_id, "custom");
+        assert_eq!(theme.background, convert(Rgba8::rgb(0xf1, 0xf2, 0xf3)));
+    }
+
+    #[test]
+    fn accent_controls_follow_the_resolved_pack() {
+        for (pack_id, expected) in [
+            ("harness", true),
+            ("dsh", true),
+            ("solarized", false),
+            ("high-contrast", false),
+            ("custom", false),
+        ] {
+            let theme = Theme::new(
+                &UiPreferences {
+                    theme_id: pack_id.to_owned(),
+                    ..UiPreferences::default()
+                },
+                false,
+            );
+            assert_eq!(theme.accent_families, expected, "{pack_id}");
+        }
+        // A missing pack falls back to Harness, whose accents do work.
+        let theme = Theme::new(
+            &UiPreferences {
+                theme_id: "missing".to_owned(),
+                ..UiPreferences::default()
+            },
+            false,
+        );
+        assert!(theme.accent_families);
+    }
+
+    #[test]
+    fn the_status_note_names_the_requested_pack_and_the_fallback() {
+        let theme = Theme::new(
+            &UiPreferences {
+                theme_id: "gone".to_owned(),
+                ..UiPreferences::default()
+            },
+            false,
+        );
+        assert_eq!(
+            theme.status.errors.join("; "),
+            "theme `gone` is not installed; using the `harness` theme instead"
+        );
+    }
+
+    #[test]
+    fn a_custom_theme_keeps_the_rendering_the_custom_editor_produced() {
+        let theme = Theme::new(
+            &UiPreferences {
+                theme_id: "custom".to_owned(),
+                theme: ThemeMode::Dark,
+                accent_scheme: AccentScheme::Blue,
+                ..UiPreferences::default()
+            },
+            false,
+        );
+        // The legacy custom palette ignores the accent family preference.
+        assert_eq!(theme.accent, convert(Rgba8::rgb(0xe9, 0x56, 0x18)));
+        assert_eq!(theme.background, convert(Rgba8::rgb(0x17, 0x1a, 0x1f)));
+        assert_eq!(theme.code_background, convert(Rgba8::rgb(0x22, 0x27, 0x2e)));
+        assert_eq!(theme.status.pack_id, "custom");
     }
 }
 
 #[cfg(test)]
-mod palette_tests {
+mod convert_tests {
     use super::*;
-
-    fn sample(h: f32, s: f32, l: f32) -> Hsla {
-        Hsla { h, s, l, a: 1.0 }
-    }
-
-    #[test]
-    fn blend_keeps_the_base_saturation_at_zero_amount() {
-        let base = sample(0.1, 0.2, 0.3);
-        let tint = sample(0.9, 0.8, 0.7);
-        let out = blend(base, tint, 0.0);
-        assert_eq!(out.h, tint.h);
-        assert!((out.s - base.s).abs() < 1e-6);
-        assert!((out.l - base.l).abs() < 1e-6);
-    }
-
-    #[test]
-    fn blend_reaches_the_tint_saturation_at_full_amount() {
-        let base = sample(0.1, 0.2, 0.3);
-        let tint = sample(0.9, 0.8, 0.7);
-        let out = blend(base, tint, 1.0);
-        assert!((out.s - tint.s).abs() < 1e-6);
-        assert!((out.l - tint.l).abs() < 1e-6);
-    }
-
-    #[test]
-    fn blend_clamps_out_of_range_values() {
-        let base = sample(0.0, -0.5, 1.5);
-        let tint = sample(0.0, -1.0, 2.0);
-        let out = blend(base, tint, 1.0);
-        assert!((0.0..=1.0).contains(&out.s));
-        assert!((0.0..=1.0).contains(&out.l));
-    }
 
     #[test]
     fn convert_preserves_the_source_alpha() {
-        let color = ui_preferences::Rgba8 { r: 0x10, g: 0x20, b: 0x30, a: 0x80 };
+        let color = Rgba8 {
+            r: 0x10,
+            g: 0x20,
+            b: 0x30,
+            a: 0x80,
+        };
         let converted = convert(color);
         assert!((converted.a - (0x80 as f32 / 255.0)).abs() < 1e-6);
     }

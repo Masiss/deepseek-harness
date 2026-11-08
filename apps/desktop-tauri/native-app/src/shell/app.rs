@@ -4395,17 +4395,8 @@ impl DesktopApp {
 
     /// Recomputes the theme after the preferences changed.
     pub(crate) fn refresh_theme(&mut self, window: &Window) {
-        let mut effective = self.ui_preferences.clone();
-        if let Some(id) = self.selected_workspace.clone() {
-            if let Some(override_) = effective.workspace_overrides.get(&id).cloned() {
-                if let Some(theme) = override_.theme {
-                    effective.theme = theme;
-                }
-                if let Some(density) = override_.density {
-                    effective.density = density;
-                }
-            }
-        }
+        let effective =
+            effective_preferences(&self.ui_preferences, self.selected_workspace.as_deref());
         self.theme = Theme::new(&effective, appearance_is_dark(window.appearance()));
     }
 
@@ -6587,6 +6578,22 @@ fn has_pending_workers(app: &DesktopApp) -> bool {
 }
 
 
+/// Global preferences with the selected workspace's appearance overrides applied.
+///
+/// An unset override inherits the global value, so resolution reads one plain
+/// preferences value for the frame's scheme, density, and pack.
+fn effective_preferences(preferences: &UiPreferences, workspace: Option<&str>) -> UiPreferences {
+    let mut effective = preferences.clone();
+    let overrides = preferences.workspace_prefs(workspace);
+    if let Some(theme) = overrides.theme {
+        effective.theme = theme;
+    }
+    if let Some(density) = overrides.density {
+        effective.density = density;
+    }
+    effective
+}
+
 fn appearance_is_dark(appearance: WindowAppearance) -> bool {
     matches!(appearance, WindowAppearance::Dark | WindowAppearance::VibrantDark)
 }
@@ -7442,6 +7449,29 @@ mod tests {
         );
         assert_eq!(workspaces.iter().map(|item| item.workspace_id.as_str()).collect::<Vec<_>>(), ["w1"]);
         assert_eq!(selected, None);
+    }
+
+    #[test]
+    fn workspace_preferences_apply_theme_and_density_overrides() {
+        use crate::ui_preferences::{ThemeMode, UiDensity, WorkspacePrefs};
+
+        let mut preferences = UiPreferences::default();
+        preferences.theme = ThemeMode::Light;
+        preferences.workspace_overrides.insert(
+            "w1".to_owned(),
+            WorkspacePrefs {
+                theme: Some(ThemeMode::Dark),
+                density: Some(UiDensity::Compact),
+                ..WorkspacePrefs::default()
+            },
+        );
+        let effective = effective_preferences(&preferences, Some("w1"));
+        assert_eq!(effective.theme, ThemeMode::Dark);
+        assert_eq!(effective.density, UiDensity::Compact);
+
+        let inherited = effective_preferences(&preferences, Some("w2"));
+        assert_eq!(inherited.theme, ThemeMode::Light);
+        assert_eq!(inherited.density, UiDensity::default());
     }
 
     #[test]

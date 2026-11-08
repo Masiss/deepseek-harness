@@ -1,6 +1,6 @@
 //! Shared element helpers for the gpui shell.
 
-use gpui::{div, prelude::*, px, AnyElement, Div, IntoElement, SharedString};
+use gpui::{div, prelude::*, px, AnyElement, AnyView, App, Div, IntoElement, SharedString, Window};
 
 use super::theme::Theme;
 
@@ -113,4 +113,47 @@ pub(crate) fn section_label(theme: &Theme, text: impl Into<SharedString>) -> Any
 /// A one-pixel separator.
 pub(crate) fn separator(theme: &Theme) -> Div {
     div().w_full().h(px(1.)).bg(theme.border)
+}
+
+/// The one-line explanation a disabled control shows as its tooltip.
+pub(crate) struct HintView {
+    theme: Theme,
+    text: SharedString,
+}
+
+impl HintView {
+    /// Builds the tooltip callback for one control.
+    ///
+    /// @param theme — the frame's snapshot, cloned into the tooltip view.
+    /// @param text — the explanation shown while the control is hovered.
+    /// @returns a tooltip builder for [`gpui::InteractiveElement::tooltip`].
+    pub(crate) fn tooltip(
+        theme: &Theme,
+        text: impl Into<SharedString>,
+    ) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+        let theme = theme.clone();
+        let text = text.into();
+        move |_window, cx| {
+            cx.new(|_| Self {
+                theme: theme.clone(),
+                text: text.clone(),
+            })
+            .into()
+        }
+    }
+}
+
+impl gpui::Render for HintView {
+    fn render(&mut self, _window: &mut Window, _cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        div()
+            .px(self.theme.sp(8.))
+            .py(self.theme.sp(4.))
+            .rounded(self.theme.corner())
+            .border_1()
+            .border_color(self.theme.border)
+            .bg(self.theme.surface_raised)
+            .text_size(self.theme.fs(10.5))
+            .text_color(self.theme.muted)
+            .child(self.text.clone())
+    }
 }
