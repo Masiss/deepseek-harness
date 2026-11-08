@@ -3,6 +3,7 @@
 
 use gpui::{div, prelude::*, StatefulInteractiveElement, px, AnyElement, Context};
 
+use crate::assets::Icon;
 use crate::layout;
 use crate::transcript::RowKind;
 use crate::ui_preferences::{AccentScheme, KeymapPreset, ThemeMode, UiDensity};
@@ -967,9 +968,10 @@ fn preferences_appearance(
                 .gap(theme.sp(6.))
                 .child(line(theme, format!("Interface scale · {scale:.2}×")))
                 .child(
-                    widgets::Button::new(theme, "−")
+                    widgets::Button::icon_only(theme, Icon::Minus)
                         .build()
                         .id("pref-scale-down")
+                        .debug_selector(|| "pref-scale-down".to_owned())
                         .on_click(cx.listener(|app, _, window, cx| {
                             app.update_preferences(window, |preferences| {
                                 preferences.ui_scale =
@@ -979,9 +981,10 @@ fn preferences_appearance(
                         })),
                 )
                 .child(
-                    widgets::Button::new(theme, "＋")
+                    widgets::Button::icon_only(theme, Icon::Plus)
                         .build()
                         .id("pref-scale-up")
+                        .debug_selector(|| "pref-scale-up".to_owned())
                         .on_click(cx.listener(|app, _, window, cx| {
                             app.update_preferences(window, |preferences| {
                                 preferences.ui_scale =

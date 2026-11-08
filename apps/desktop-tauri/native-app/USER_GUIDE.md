@@ -16,10 +16,11 @@ Tên menu và nút được giữ bằng tiếng Anh như trong ứng dụng đ�
 - [Trò chuyện, model và tệp đính kèm](#trò-chuyện-model-và-tệp-đính-kèm)
 - [Phê duyệt và câu hỏi](#phê-duyệt-và-câu-hỏi)
 - [Workspace Explorer và xem tài liệu](#workspace-explorer-và-xem-tài-liệu)
+- [Changes, Git và lịch sử commit](#changes-git-và-lịch-sử-commit)
 - [Plugins, Skills và Marketplace](#plugins-skills-và-marketplace)
 - [Goals và Plan mode](#goals-và-plan-mode)
 - [Terminal, Jobs, Schedules và Deliverables](#terminal-jobs-schedules-và-deliverables)
-- [Settings và cập nhật Desktop](#settings-và-cập-nhật-desktop)
+- [Preferences và cập nhật Desktop](#preferences-và-cập-nhật-desktop)
 - [Bàn phím, khay hệ thống và thoát ứng dụng](#bàn-phím-khay-hệ-thống-và-thoát-ứng-dụng)
 - [Dữ liệu và khắc phục sự cố](#dữ-liệu-và-khắc-phục-sự-cố)
 
@@ -45,13 +46,13 @@ Xem [USER_FLOWS.md](USER_FLOWS.md) để theo dõi các nhánh từ lúc mở �
 
 ## Bố cục và điều hướng
 
-Thanh trên cùng cao 30 px dùng nút biểu tượng: menu, workspace picker (tên thư mục + mũi tên), Search và Changes; không còn tiêu đề Session ở giữa. Search mở command palette, còn workspace picker liệt kê các workspace của những Session đã biết và chuyển sang Session mới nhất của workspace đó. Không có thanh điều hướng dọc: menu chia ba nhóm — **Workspace** (New session, Toggle Explorer, Toggle Changes, Open file…, Goals), **Customize** (**Preferences…**, **Extensions**, **Skills**, **Marketplace**) và **Help** (**About DSH**, Quit).
+Thanh trên cùng cao 30 px dùng nút biểu tượng vector (menu, Search, Changes) thay cho ký tự Unicode; workspace picker gồm tên thư mục và mũi tên xuống, và không còn tiêu đề Session ở giữa. Search mở command palette, còn workspace picker liệt kê các workspace của những Session đã biết và chuyển sang Session mới nhất của workspace đó. Không có thanh điều hướng dọc: menu chia ba nhóm — **Workspace** (New session, Toggle Explorer, Toggle Changes, Show changes (diff), Open file…, Goals), **Customize** (**Preferences…**, **Extensions**, **Skills**, **Marketplace**) và **Help** (**About DSH**, Quit).
 
-Bố cục gồm ba cột: **Explorer** bên trái, cột **Agent** ở giữa với tab Agent, transcript và composer, và **Changes** bên phải với ba tab Diff/Files/History. Thanh dưới cùng cao 26 px: bên trái hiển thị branch (mở tab Branches) và số file thay đổi do Host báo, hoặc `⎇ No repository` khi workspace không phải Git; bên phải là Terminal, Problems, menu Jobs/Schedules/Deliverables/Diagnostics và chấm kết nối Host.
+Bố cục gồm ba cột: **Explorer** bên trái, cột **Agent** ở giữa với tab Agent, transcript và composer, và **Changes** bên phải với ba tab Diff/Files/History. Thanh dưới cùng cao 26 px: bên trái hiển thị biểu tượng branch kèm tên branch hiện tại (bấm để mở menu nhánh) và số file thay đổi do Host báo, hoặc **No repository** khi workspace không phải Git; bên phải là Terminal, Problems, menu Jobs/Schedules/Deliverables/Diagnostics và chấm kết nối Host, tất cả đều dùng biểu tượng vector.
 
 Explorer rộng mặc định 300 px (210–390), Changes 565 px (340–720); Explorer chỉ dock khi cửa sổ đủ rộng để cột Agent còn tối thiểu 420 px (khoảng 1293 px), Changes cần tối thiểu 1180 px. Trong Explorer, ở chiều rộng không quá 900 px, panel hiển thị lần lượt cây thư mục hoặc phần xem tệp.
 
-Kéo vách phân cách giữa Explorer hoặc Changes với cột Agent để đổi chiều rộng; chiều rộng được lưu vào preferences khi thả tay. Panel Changes đọc `git/status` và `git/diff` từ Host: header hiển thị số file và chip ahead/behind, tab **Files** nhóm **Staged / Changes / Untracked** với thống kê từng phía, chọn nhiều để stage/unstage/discard, còn tab **Diff** có công tắc Unstaged/Staged và từng hunk stage/unstage/discard qua `git/apply`. Thanh commit ở cuối panel dùng `git/commit` (kèm Amend và Sign-off khi Host cho phép). Nút **Review all** và trạng thái **Reviewed** chỉ lưu trong UI và tự đặt lại khi trạng thái Git của file đổi; mọi thao tác xoá đều hỏi xác nhận và không hiển thị kết quả trước khi Host trả lời. Tab **History** đọc `git/log` theo trang 50 commit (nút **Load older commits**) và tự vẽ graph swimlane phía client: làn giữ cột cho tới khi nhánh merge lại, merge có đường cong cho cha phụ, ref hiện thành chip và HEAD có vòng tròn. Chọn commit bằng click hoặc phím ↑/↓ để xem `git/show`; oid cha bấm được khi cha nằm trong trang đã tải, còn **Cherry-pick…** và **Revert…** hỏi xác nhận rồi mới gọi `git/cherryPick`/`git/revert`.
+Kéo vách phân cách giữa Explorer hoặc Changes với cột Agent để đổi chiều rộng; chiều rộng được lưu vào preferences khi thả tay. Cột **Changes** có ba tab Diff/Files/History và chỉ đọc dữ liệu Git từ Host; chi tiết từng tab, menu nhánh, menu đồng bộ, stash, xung đột và xoá tệp untracked nằm ở [Changes, Git và lịch sử commit](#changes-git-và-lịch-sử-commit).
 
 -----
 
@@ -125,6 +126,44 @@ Preview cần có Session được chọn và Host đang kết nối. Nội dung
 
 -----
 
+## Changes, Git và lịch sử commit
+
+Cột **Changes** đọc trạng thái Git của workspace đang chọn qua Host và chỉ hiển thị kết quả Host trả về: không có bước nào báo thành công trước khi Host xác nhận. Panel chỉ dock khi cửa sổ rộng tối thiểu 1180 px; hẹp hơn thì cột hội thoại được ưu tiên.
+
+### Diff, Files và commit
+
+Header của cột hiển thị số file thay đổi và chip ahead/behind. Nút **Review all** và trạng thái **Reviewed** chỉ lưu trong client; chúng tự đặt lại khi trạng thái Git của file đổi.
+
+- Tab **Files** nhóm các đường dẫn thành **Staged / Changes / Untracked**, có thống kê thêm/bớt từng phía và ô lọc theo đường dẫn. Bấm một dòng để xem diff của nó; tick nhiều dòng để stage, unstage hoặc discard hàng loạt. Mỗi dòng chỉ hiện **Stage**, **Unstage**, **Discard** hay **Delete** khi thao tác đó hợp lệ với trạng thái Git hiện tại.
+- Tab **Diff** có công tắc **Unstaged/Staged** và từng hunk với **Stage hunk**, **Unstage hunk** hoặc **Discard hunk** qua `git/apply`. Patch bị Host cắt bớt, tệp nhị phân, tệp untracked và tệp đang xung đột đều hiện lý do thay vì nút thao tác.
+- Thanh commit ở cuối panel gồm ô **Commit message** (kèm **Recent** để điền lại thông điệp gần đây), **Amend** và **Sign-off** khi Host cho phép, rồi **Commit** và **Commit & Push**. Mọi thao tác xoá đều mở hộp xác nhận trước khi gọi Host.
+
+### Lịch sử commit
+
+Tab **History** đọc `git/log` theo trang 50 commit và có nút **Load older commits**. Graph swimlane do client tự vẽ: làn giữ cột cho tới khi nhánh merge lại, merge có đường cong cho cha phụ, ref hiện thành chip và HEAD có vòng tròn. Chọn commit bằng click hoặc phím **↑/↓** để xem chi tiết từ `git/show`; oid cha bấm được khi cha nằm trong trang đã tải, còn **Cherry-pick…** và **Revert…** hỏi xác nhận trước khi gọi `git/cherryPick` hoặc `git/revert`.
+
+### Menu nhánh
+
+Bấm branch ở thanh dưới cùng để mở menu nhánh: danh sách nhánh cục bộ (nhánh hiện tại có dấu ●), **Checkout**, **Merge**, **Rebase**, **Cherry-pick** cho nhánh khác và **Revert tip** cho nhánh hiện tại. HEAD tách rời được nêu rõ. Khi một verb Git đang chạy, mọi dòng bị tắt kèm lý do; checkout, merge, rebase, cherry-pick và revert đều hỏi xác nhận trước khi gọi Host.
+
+### Menu đồng bộ
+
+Bấm biểu tượng sync ở thanh dưới cùng để mở menu đồng bộ: **Fetch**, **Pull (fast-forward only)**, **Push**, **Push and set upstream** (publish nhánh chưa có upstream lên remote) và **Stash…**. Menu hiển thị branch, upstream và số commit ahead/behind; kết quả hoặc lỗi của Host hiện ngay dưới các dòng lệnh. Mọi dòng bị tắt khi Host offline, chưa chọn Session hoặc một thao tác Git khác đang chạy. **Push** và **Push and set upstream** hỏi xác nhận trước khi chạy và không bao giờ force-push; **Fetch** và **Pull** gửi thẳng tới Host.
+
+### Stash
+
+**Stash…** mở panel stash: nhập message tuỳ chọn, bật **Include untracked** nếu muốn mang cả tệp chưa theo dõi, rồi chọn **Save stash**. Danh sách entry có **Apply**, **Pop** và **Drop**; mỗi thao tác hỏi xác nhận và chỉ chạy khi entry vẫn còn trong danh sách Host trả về. Host giới hạn số entry nên panel ghi rõ khi danh sách bị cắt bớt.
+
+### Xung đột
+
+Khi Host báo merge, rebase, cherry-pick hoặc revert đang mở, banner trong panel nêu tên thao tác, số xung đột còn lại và hai nút **Continue**/**Abort**. **Continue** chỉ bật khi không còn xung đột. Bấm một đường dẫn xung đột để đọc ba stage **Base** (chỉ đọc), **Ours** và **Theirs**, rồi chọn **Accept ours** hoặc **Accept theirs** sau khi xác nhận; stage bị Host cắt bớt được ghi rõ để không bị nhầm là toàn bộ tệp.
+
+### Xoá tệp untracked
+
+Dòng untracked có nút **Delete**; thao tác này mở hộp xác nhận nêu đúng đường dẫn trước khi Host xoá tệp. Client chỉ xoá tệp: một đường dẫn kết thúc bằng `/` (thư mục untracked) bị từ chối kèm lý do.
+
+-----
+
 ## Plugins, Skills và Marketplace
 
 ### Plugins
@@ -191,27 +230,35 @@ Chọn output bằng cách bấm một dòng, giữ **Shift** và bấm dòng cu
 
 -----
 
-## Settings và cập nhật Desktop
+## Preferences và cập nhật Desktop
 
-Settings có hai nhóm riêng: tùy chọn giao diện cục bộ của client và **Host settings** do Host quản lý. Thay đổi một nhóm không tự động thay đổi nhóm còn lại.
+**Preferences** mở thành lớp phủ ngay trên shell đang chạy: mở bằng **Preferences…** trong menu hoặc bằng **Ctrl+,**. Lớp phủ rộng 910 px và cao 680 px (thu theo UI scale và giới hạn cửa sổ), có thanh tiêu đề với nút **Close**, và đóng bằng **Esc** hoặc bấm ra ngoài. Shell phía sau giữ nguyên trạng thái và vẫn hiển thị hai cột hai bên. Mỗi thay đổi được ghi ngay vào tệp tùy chọn cục bộ, nên không có nút Save riêng.
 
-### Giao diện và bố cục cục bộ
+Cột điều hướng bên trái chia bảy mục: **General**, **Appearance**, **Keymap**, **Extensions**, **Skills**, **Marketplace** và **About**.
 
-Trong **Appearance**, chọn theme System/Light/Dark, UI scale từ 0.8 đến 1.5, mật độ Comfortable/Compact, góc bo, preset màu DSH/Harness/High contrast/Solarized/Custom và font giao diện hoặc font code đã cài. Preset được chọn bằng `themeId`; bảng màu `custom` đọc từ `customTheme`. Lựa chọn Accent chỉ áp dụng cho pack có bộ accent riêng (DSH và Harness); pack khác giữ accent của chính nó nên các nút Accent bị tắt kèm chú thích. Custom palette chỉnh màu của theme sáng hoặc tối đang hoạt động; font không khả dụng sẽ được thay bằng font dự phòng.
+### General
 
-File schema 5 dùng `themePack` được chuyển khi đọc: `default` giữ bảng màu Harness cũ, còn `high-contrast`/`solarized`/`custom` giữ nguyên tên. Nếu `themeId` không tồn tại, ứng dụng hiển thị bằng bảng màu Harness, ghi lý do ngay trong Settings và không làm hỏng file tùy chọn.
+**LAYOUT** bật/tắt **Workspace Explorer** và **Restore last Session**; nháp composer chưa gửi được giữ theo từng Session và lưu cùng client.
 
-Trong **Layout**, chỉnh chiều rộng mặc định của popover Sessions, bật/tắt Explorer và Changes cạnh hội thoại, chỉnh chiều rộng mặc định của Explorer và Changes, và bật/tắt **Restore last Session**. Explorer chỉ dock khi cửa sổ đủ rộng để cột Agent còn 420 px (khoảng 1293 px), Changes từ 1180 px; hẹp hơn thì cột hội thoại được ưu tiên. Lưu Settings để áp dụng các giá trị mặc định.
+**WORKSPACE APPEARANCE** đặt ngoại lệ cho workspace đang chọn: bật/tắt Explorer và mật độ riêng, kèm **Clear override**/**Clear density** để quay lại giá trị chung. Giá trị trống nghĩa là workspace đó dùng cấu hình chung.
 
-Trong **Shortcuts**, chỉnh tổ hợp phím để mở Settings, Marketplace, Goals hoặc tạo Session. Dùng dạng `Ctrl+Shift+S`; nhập `none` để tắt. Mỗi chức năng phải có tổ hợp phím khác nhau: khi lưu, client kiểm tra cả bốn phím tùy chỉnh lẫn các phím cố định của menu và command palette, và báo lỗi nếu hai chức năng trùng tổ hợp.
+**DESKTOP UPDATES** và **HOST SETTINGS** nằm ngay dưới hai nhóm trên.
 
-Trong **Advanced**, bạn có thể sửa JSON đầy đủ của tùy chọn giao diện. Chọn **Apply JSON draft** hoặc **Preview changes** để áp dụng tạm trong phiên; chọn **Save preferences** để lưu. JSON sai hoặc giá trị ngoài giới hạn không được áp dụng. **Reload file** đọc lại tệp đã lưu; **Reset to defaults** đặt và lưu giá trị mặc định.
+### Appearance
+
+**COLOR** chọn **Theme** System/Light/Dark và **Pack** giao diện (DSH, Harness, High contrast, Solarized hoặc Custom). **ACCENT** chỉ áp dụng cho pack có bộ accent riêng (DSH và Harness); pack khác giữ accent của chính nó nên các nút Accent bị tắt kèm chú thích. **DENSITY** chọn Comfortable hoặc Compact. **SCALE** đổi UI scale từ 0.8 đến 1.5 theo bước 0.05 bằng hai nút − và +.
+
+Pack giao diện là dữ liệu: một pack không đọc được sẽ hiện lý do thay vì làm hỏng giao diện, và client quay về pack Harness. File schema 5 dùng `themePack` được chuyển khi đọc: `default` giữ bảng màu Harness cũ, còn `high-contrast`/`solarized`/`custom` giữ nguyên tên.
+
+### Keymap
+
+**PRESET** chọn bộ phím DSH, Zed hoặc VS Code. Bên dưới là bốn tổ hợp phím đổi được: mở Settings, Marketplace, Goals và tạo Session. Dùng dạng `Ctrl+Shift+S`; nhập `none` để tắt. Khi lưu, client kiểm tra cả bốn phím tùy chỉnh lẫn các phím cố định của menu và command palette, và báo lỗi nếu hai chức năng trùng tổ hợp.
 
 Tùy chọn giao diện được lưu ở tệp `native-ui-preferences.json` trong thư mục cấu hình của ứng dụng. Khi `DSH_HOME` không được đặt, thư mục mặc định là `$HOME/.deepseek-harness`.
 
 ### Host settings
 
-Mở **Host settings (agent and plugin configuration)** rồi chọn **Refresh settings** để đọc namespace, schema, revision và các giá trị đã che thông tin bí mật.
+Trong **General**, mở **Host settings (agent and plugin configuration)** rồi chọn **Refresh settings** để đọc namespace, schema, revision và các giá trị đã che thông tin bí mật.
 
 Nếu Host cho phép ghi, chọn **Edit user overrides** để sửa đối tượng JSON của user overrides rồi **Save settings**. Chỉ user overrides có thể được sửa từ editor này; các giá trị bí mật được che và không thể chỉnh trong editor. **Reset to defaults** trong editor đặt bản nháp overrides thành `{}`; bạn vẫn phải chọn Save để ghi thay đổi. **Discard draft** bỏ bản nháp.
 
@@ -219,18 +266,20 @@ Nếu lần lưu bị conflict hoặc không rõ kết quả, editor giữ lại
 
 ### Cập nhật Desktop
 
-Mở mục **Desktop updates** trong Settings và chọn **Check for updates** khi Host được kết nối. Nếu Host yêu cầu xác nhận tải xuống hoặc cài đặt, đọc phiên bản và chọn **Download** hoặc **Install and restart**; chọn **Not now** để từ chối yêu cầu hiện tại. Host điều phối kiểm tra và thay thế bản chạy; ứng dụng native không tự cài một gói chưa được Host xác nhận.
+Trong **General**, mở mục **Desktop updates** và chọn **Check for updates** khi Host được kết nối. Nếu Host yêu cầu xác nhận tải xuống hoặc cài đặt, đọc phiên bản và chọn **Download** hoặc **Install and restart**; chọn **Not now** để từ chối yêu cầu hiện tại. Host điều phối kiểm tra và thay thế bản chạy; ứng dụng native không tự cài một gói chưa được Host xác nhận.
 
 -----
 
 ## Bàn phím, khay hệ thống và thoát ứng dụng
 
-- **Ctrl+Enter** gửi prompt khi composer đang focus; Enter thêm dòng mới.
+- **Ctrl+Enter** gửi prompt khi composer đang focus; Enter thêm dòng mới. Khi ô **Commit message** đang focus, **Ctrl+Enter** commit phần đã stage nếu Host cho phép.
 - **Ctrl+P** mở **Quick open** (command palette). Gõ để lọc theo tên hoặc nhóm lệnh; **↑/↓** đổi mục đang chọn, **Enter** chạy mục đó, bấm chuột cũng chạy được. Palette còn liệt kê các lệnh `/` do Host đăng ký cho Session hiện tại.
-- **Ctrl+N** tạo Session mới; **Ctrl+O** mở file; **Ctrl+Shift+E** ẩn/hiện Explorer; **Ctrl+Shift+C** ẩn/hiện Changes; **Ctrl+Shift+T** ẩn/hiện Terminal.
-- **Ctrl+,** mở/đóng Settings, **Ctrl+Shift+M** mở/đóng Marketplace, **Ctrl+Shift+G** mở/đóng Goals, **Ctrl+Shift+X** mở Extensions và **Ctrl+Shift+K** mở Skills. Chỉ bốn phím đầu nhóm này (Settings, Marketplace, Goals, New session) đổi được trong Settings; các phím còn lại cố định.
-- **Esc** đóng lớp phủ trên cùng: hộp xác nhận, thông báo cập nhật, popover Sessions, menu **☰**, Quick open, rồi hộp About — mỗi lần một lớp, không đóng hết cùng lúc.
-- Menu **☰** hiển thị tổ hợp phím hiện hành của từng lệnh, nên sau khi đổi phím trong Settings, menu và Quick open luôn khớp với bộ điều phối bàn phím.
+- **Ctrl+N** tạo Session mới; **Ctrl+O** mở file; **Ctrl+Shift+E** ẩn/hiện Explorer; **Ctrl+Shift+C** ẩn/hiện Changes (giữ tab đang đọc); **Ctrl+Shift+D** mở Changes và chuyển thẳng sang tab **Diff**; **Ctrl+Shift+T** ẩn/hiện Terminal.
+- Trong cột Changes: **Alt+↑/↓** chọn hunk trước/sau ở tab Diff (hunk đang chọn có viền màu accent). **s** stage, **u** unstage và **d** discard: ở tab Files áp dụng cho nhóm đã tick, nếu không có thì cho file đang chọn; ở tab Diff áp dụng cho hunk đang chọn. Discard vẫn mở hộp xác nhận như khi bấm nút.
+- Các phím **s**/**u**/**d** và **Alt+↑/↓** không chạy khi con trỏ đang ở ô nhập văn bản hoặc composer, và chỉ chạy khi cột Changes đang mở; riêng **Ctrl+Enter** chỉ tác dụng ở ô **Commit message**.
+- **Ctrl+,** mở/đóng **Preferences**, **Ctrl+Shift+M** mở/đóng Marketplace, **Ctrl+Shift+G** mở/đóng Goals, **Ctrl+Shift+X** mở Extensions và **Ctrl+Shift+K** mở Skills. Chỉ bốn phím đầu nhóm này (Preferences, Marketplace, Goals, New session) đổi được trong Preferences; các phím còn lại cố định.
+- **Esc** đóng lớp phủ trên cùng: hộp xác nhận, thông báo cập nhật, popover Sessions, menu chính, Quick open, rồi hộp About — mỗi lần một lớp, không đóng hết cùng lúc.
+- Menu chính hiển thị tổ hợp phím hiện hành của từng lệnh, nên sau khi đổi phím trong Preferences, menu và Quick open luôn khớp với bộ điều phối bàn phím.
 - Phím mũi tên lên/xuống điều hướng danh sách Sessions trong popover khi không nhập văn bản.
 
 Nếu bản cài đặt có khay hệ thống, đóng cửa sổ sẽ ẩn ứng dụng xuống khay thay vì thoát. Chọn **Show/Hide** để hiện/ẩn cửa sổ; chọn **Quit** để thoát hoàn toàn. Nếu khay hệ thống không khả dụng, nút đóng cửa sổ dùng hành vi đóng cửa sổ thông thường.

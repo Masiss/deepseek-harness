@@ -8,6 +8,7 @@ mod render;
 pub(crate) use app::DesktopApp as HarnessApp;
 pub(crate) use app::MAX_AGENT_TABS;
 pub(crate) use app::BottomTool;
+pub(crate) use app::ChangesTab;
 mod terminal_state;
 mod theme;
 mod text_input;
@@ -33,6 +34,7 @@ actions!(
         ToggleSettings,
         ToggleExplorer,
         ToggleChanges,
+        ShowChangesDiff,
         ToggleTerminal,
         TogglePlugins,
         ToggleSkills,
@@ -42,6 +44,12 @@ actions!(
         About,
         ShowPalette,
         Dismiss,
+        ChangesHunkPrevious,
+        ChangesHunkNext,
+        ChangesStage,
+        ChangesUnstage,
+        ChangesDiscard,
+        CommitStaged,
     ]
 );
 
@@ -93,7 +101,7 @@ pub(crate) fn run(services: ShellServices) {
 /// Preferences override the chords of the four commands the keymap editor owns;
 /// every other command keeps its registry default. Both the chord and the action
 /// come from the same [`CommandId`], so a command cannot be bound twice.
-fn bind_shortcuts(
+pub(crate) fn bind_shortcuts(
     cx: &mut App,
     preferences: &UiPreferences,
     commands: &Arc<Mutex<Vec<CommandId>>>,
@@ -121,6 +129,7 @@ fn bind_shortcuts(
     bind_command!(bindings, NewSession, NewSession);
     bind_command!(bindings, ToggleExplorer, ToggleExplorer);
     bind_command!(bindings, ToggleChanges, ToggleChanges);
+    bind_command!(bindings, ShowChangesDiff, ShowChangesDiff);
     bind_command!(bindings, ToggleTerminal, ToggleTerminal);
     bind_command!(bindings, ToggleSettings, ToggleSettings);
     bind_command!(bindings, TogglePlugins, TogglePlugins);
@@ -133,6 +142,18 @@ fn bind_shortcuts(
 
     // Escape closes the topmost overlay; the shell root handles the action.
     bindings.push(KeyBinding::new("escape", Dismiss, None));
+
+    // Changes-surface keys. They are window-wide chords so they work whether or
+    // not the panel holds focus; their handlers skip every keystroke that a text
+    // field owns, so typing a letter never runs a Git verb.
+    bindings.extend([
+        KeyBinding::new("alt-up", ChangesHunkPrevious, None),
+        KeyBinding::new("alt-down", ChangesHunkNext, None),
+        KeyBinding::new("s", ChangesStage, None),
+        KeyBinding::new("u", ChangesUnstage, None),
+        KeyBinding::new("d", ChangesDiscard, None),
+        KeyBinding::new("ctrl-enter", CommitStaged, None),
+    ]);
 
     cx.bind_keys(bindings);
 }

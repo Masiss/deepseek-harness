@@ -39,6 +39,7 @@ pub(crate) fn render(
         window.focus(&handle);
     }
     apply_preferences_focus(app, window, cx);
+    app.sync_typing_focus(window, cx);
     let theme = app.theme.clone();
     let viewport = window.viewport_size();
     let viewport_width: f32 = viewport.width.into();
@@ -2390,6 +2391,7 @@ fn explorer_footer(
                 .cursor_pointer()
                 .hover(|style| style.bg(theme.surface_raised))
                 .id("explorer-new-session")
+                .debug_selector(|| "explorer-new-session".to_owned())
                 .text_color(if connected { theme.accent } else { theme.muted })
                 .child(widgets::icon(
                     Icon::Plus,

@@ -20,6 +20,7 @@ pub struct Harness {
     app: Entity<DesktopApp>,
     visual: VisualTestContext,
     preferences: PathBuf,
+    /// Whether the shipped chord bindings are installed in the test app.
     keys_bound: bool,
 }
 
@@ -234,20 +235,54 @@ impl Harness {
     ///
     /// @param keystrokes - gpui keystroke syntax, for example `"escape"`.
     pub fn keys(&mut self, keystrokes: &str) {
-        if !self.keys_bound {
-            // The shipped app binds Escape in `shell::bind_shortcuts`; the
-            // harness installs the same binding before the first keystroke so
-            // Esc routing reaches the shell's `Dismiss` handler.
-            self.visual.update(|_, cx| {
-                cx.bind_keys(vec![gpui::KeyBinding::new(
-                    "escape",
-                    crate::shell::Dismiss,
-                    None,
-                )]);
-            });
-            self.keys_bound = true;
-        }
+        self.bind_shell_keys();
         self.visual.simulate_keystrokes(keystrokes);
+        self.visual.run_until_parked();
+    }
+
+    /// Sends one keystroke without draining background work.
+    ///
+    /// Tests that assert a Git verb just started use this: draining the executor
+    /// can let the worker's failure land first and clear the in-flight flag.
+    ///
+    /// @param keystroke - One gpui keystroke, for example `"ctrl-enter"`.
+    pub fn press(&mut self, keystroke: &str) {
+        self.bind_shell_keys();
+        let keystroke = gpui::Keystroke::parse(keystroke)
+            .unwrap_or_else(|error| panic!("{keystroke} is not a keystroke: {error}"));
+        self.visual.update(|window, cx| {
+            window.dispatch_keystroke(keystroke, cx);
+        });
+    }
+
+    /// Installs the shell's chords in the test app, once.
+    ///
+    /// The shipped window binds these in `shell::bind_shortcuts`; installing the
+    /// same set here keeps a keystroke test on the production dispatch path,
+    /// including the command queue a shortcut command lands in.
+    fn bind_shell_keys(&mut self) {
+        if self.keys_bound {
+            return;
+        }
+        let (preferences, commands) = self.with(|app, _| {
+            (app.ui_preferences.clone(), app.commands.clone())
+        });
+        self.visual.update(move |_, cx| {
+            crate::shell::bind_shortcuts(cx, &preferences, &commands);
+        });
+        self.keys_bound = true;
+    }
+
+    /// Drains queued shortcut commands, as the shell's poll loop does.
+    ///
+    /// The shipped window ticks every 40 ms; a test that presses a command chord
+    /// calls this once so the command has run before the assertion.
+    pub fn tick(&mut self) {
+        self.visual.update(|window, cx| {
+            self.app.update(cx, |app, cx| {
+                app.tick(window, cx);
+            });
+        });
         self.visual.run_until_parked();
     }
 
@@ -836,6 +871,89 @@ mod surface_tests {
             harness.with(|app, _| app.bottom_tool),
             Some(crate::shell::BottomTool::Schedules)
         );
+    }
+
+    #[test]
+    fn ctrl_shift_d_opens_changes_on_the_diff_tab_and_ctrl_shift_c_still_toggles() {
+        let mut show = Harness::open_with(1440., 900., |app| {
+            app.selected_session = Some("chrome-session".to_owned());
+            app.show_changes = false;
+            app.changes_tab = crate::shell::ChangesTab::Files;
+        });
+        show.keys("ctrl-shift-d");
+        show.tick();
+        show.with(|app, _| assert!(app.show_changes, "the column opens"));
+        assert_eq!(
+            show.with(|app, _| app.changes_tab),
+            crate::shell::ChangesTab::Diff
+        );
+
+        let mut toggle = Harness::open_with(1440., 900., |app| {
+            app.selected_session = Some("chrome-session".to_owned());
+            app.show_changes = true;
+            app.changes_tab = crate::shell::ChangesTab::History;
+        });
+        toggle.keys("ctrl-shift-c");
+        toggle.tick();
+        toggle.with(|app, _| assert!(!app.show_changes, "the panel toggles closed"));
+        assert_eq!(
+            toggle.with(|app, _| app.changes_tab),
+            crate::shell::ChangesTab::History,
+            "Toggle Changes keeps the tab the user last read"
+        );
+    }
+
+    #[test]
+    fn composer_controls_keep_their_ids_after_the_icon_migration() {
+        let mut harness = Harness::open_with(1440., 900., |app| {
+            app.selected_session = Some("chrome-session".to_owned());
+            app.model_menu_open = true;
+        });
+        for selector in [
+            "composer-attach",
+            "composer-file-picker",
+            "composer-model",
+            "composer-mode",
+            "composer-send",
+            "composer-history",
+            "composer-history-next",
+            "explorer-new-session",
+        ] {
+            assert!(harness.bounds(selector).is_some(), "{selector} renders");
+        }
+        for selector in [
+            "icon-plus",
+            "icon-at-sign",
+            "icon-chevron-down",
+            "icon-chevron-up",
+            "icon-send",
+        ] {
+            assert!(harness.bounds(selector).is_some(), "{selector} renders");
+        }
+    }
+
+    #[test]
+    fn session_and_preferences_controls_keep_their_ids_after_the_icon_migration() {
+        let mut sessions = Harness::open_with(1440., 900., |app| {
+            app.selected_session = Some("chrome-session".to_owned());
+            app.show_session_menu = true;
+        });
+        for selector in ["sessions-refresh", "sessions-new"] {
+            assert!(sessions.bounds(selector).is_some(), "{selector} renders");
+        }
+        assert!(sessions.bounds("icon-sync").is_some());
+
+        let mut preferences = Harness::open_with(1440., 900., |app| {
+            app.run_command(CommandId::ToggleSettings);
+        });
+        assert!(preferences.click("preferences-nav-Appearance"));
+        for selector in ["pref-scale-down", "pref-scale-up"] {
+            assert!(
+                preferences.bounds(selector).is_some(),
+                "{selector} renders"
+            );
+        }
+        assert!(preferences.bounds("icon-minus").is_some());
     }
 
     #[test]

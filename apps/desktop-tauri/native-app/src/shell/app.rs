@@ -222,6 +222,50 @@ fn matching_host_commands(
         .collect()
 }
 
+/// One Changes-surface keyboard action.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChangesShortcut {
+    /// Select the hunk above the focused one.
+    HunkPrevious,
+    /// Select the hunk below the focused one.
+    HunkNext,
+    /// Stage the selected file, the ticked set, or the focused hunk.
+    Stage,
+    /// Unstage the selected file, the ticked set, or the focused hunk.
+    Unstage,
+    /// Discard the selected file or focused hunk after confirmation.
+    Discard,
+}
+
+/// Registers one global handler for a Changes shortcut action.
+///
+/// The handler is global so the chord works while nothing owns the keyboard; the
+/// panel, overlay, and typing guards live in the shell method it calls. Action
+/// handlers stop propagation by default, so a keystroke the shortcut declines is
+/// released to the focused field, and typing a letter still types it.
+///
+/// @param cx — the app context the shell is built in.
+/// @param shell — the shell entity the handler updates.
+/// @param shortcut — the action the handler runs.
+fn on_changes_shortcut<A: gpui::Action>(
+    cx: &mut Context<DesktopApp>,
+    shell: gpui::WeakEntity<DesktopApp>,
+    shortcut: ChangesShortcut,
+) {
+    App::on_action(cx, move |_: &A, cx: &mut App| {
+        let Some(shell) = shell.upgrade() else {
+            return;
+        };
+        shell.update(cx, |app, cx| {
+            if app.run_changes_shortcut(shortcut) {
+                cx.notify();
+            } else {
+                cx.propagate();
+            }
+        });
+    });
+}
+
 /// One palette row step, clamped to the available rows.
 fn stepped_selection(current: usize, delta: i8, len: usize) -> usize {
     if len == 0 {
@@ -1144,6 +1188,8 @@ pub(crate) struct DesktopApp {
     pub(crate) git_selected_path: Option<String>,
     /// Whether the selected path's diff reads the staged side.
     pub(crate) git_diff_staged: bool,
+    /// Hunk the Diff tab's keyboard actions target, as a hunk index.
+    pub(crate) git_focused_hunk: Option<usize>,
     /// Latest diff for {@link git_selected_path}.
     pub(crate) git_diff: Option<GitDiff>,
     /// In-progress rebase, cherry-pick, merge, or revert and its conflicts.
@@ -1301,6 +1347,11 @@ pub(crate) struct DesktopApp {
     pub(crate) theme: Theme,
     /// Text fields owned by the shell, keyed by a stable name.
     pub(crate) inputs: std::collections::HashMap<&'static str, gpui::Entity<super::text_input::TextInput>>,
+    /// Text field that owned the keyboard when the frame was drawn.
+    ///
+    /// Changes shortcuts read it to stand down while the user is typing; the
+    /// focus change itself repaints, so the value is current when a key lands.
+    pub(crate) typing_focus: Option<&'static str>,
     /// Scroll position of the transcript pane.
     pub(crate) transcript_scroll: gpui::ScrollHandle,
     /// Set when new transcript rows should scroll into view.
@@ -1417,13 +1468,38 @@ impl DesktopApp {
         // Escape resolves to `Dismiss`; the listener is global so overlays close
         // whichever node holds focus, including a palette search field.
         let shell = cx.entity().downgrade();
+        let dismiss_shell = shell.clone();
         App::on_action(cx, move |_: &super::Dismiss, cx: &mut App| {
-            let Some(shell) = shell.upgrade() else {
+            let Some(shell) = dismiss_shell.upgrade() else {
                 return;
             };
             shell.update(cx, |app, cx| {
                 if app.dismiss_overlay() {
                     cx.notify();
+                }
+            });
+        });
+        // Changes-surface keys are window-wide chords; each handler reads the
+        // frame's typing focus, so a keystroke that belongs to a text field never
+        // runs a Git verb.
+        on_changes_shortcut::<super::ChangesHunkPrevious>(
+            cx,
+            shell.clone(),
+            ChangesShortcut::HunkPrevious,
+        );
+        on_changes_shortcut::<super::ChangesHunkNext>(cx, shell.clone(), ChangesShortcut::HunkNext);
+        on_changes_shortcut::<super::ChangesStage>(cx, shell.clone(), ChangesShortcut::Stage);
+        on_changes_shortcut::<super::ChangesUnstage>(cx, shell.clone(), ChangesShortcut::Unstage);
+        on_changes_shortcut::<super::ChangesDiscard>(cx, shell.clone(), ChangesShortcut::Discard);
+        App::on_action(cx, move |_: &super::CommitStaged, cx: &mut App| {
+            let Some(shell) = shell.upgrade() else {
+                return;
+            };
+            shell.update(cx, |app, cx| {
+                if app.commit_from_keyboard(cx) {
+                    cx.notify();
+                } else {
+                    cx.propagate();
                 }
             });
         });
@@ -1453,6 +1529,7 @@ impl DesktopApp {
                 message: None,
             },
             inputs: std::collections::HashMap::new(),
+            typing_focus: None,
             transcript_scroll: gpui::ScrollHandle::new(),
             scroll_transcript_to_bottom: true,
             model_menu_open: false,
@@ -1650,6 +1727,7 @@ impl DesktopApp {
             git_branches: None,
             git_selected_path: None,
             git_diff_staged: false,
+            git_focused_hunk: None,
             git_diff: None,
             git_state: None,
             git_conflict_view: None,
@@ -3235,7 +3313,251 @@ impl DesktopApp {
     /// content with another path's header.
     fn request_git_diff(&mut self) {
         self.git_diff = None;
+        self.git_focused_hunk = None;
         self.refresh_git_diff();
+    }
+
+    /// Records which shell text field owns the keyboard for the coming frame.
+    ///
+    /// @param window — window whose focus is read.
+    /// @param cx — app context the input entities are read through.
+    pub(crate) fn sync_typing_focus(&mut self, window: &Window, cx: &App) {
+        let typing = self
+            .inputs
+            .iter()
+            .find(|(_, input)| input.read(cx).is_focused(window))
+            .map(|(key, _)| *key);
+        self.typing_focus = typing;
+    }
+
+    /// Whether a Changes shortcut may run now.
+    ///
+    /// The column must be open, no overlay or Git confirmation may own the
+    /// screen, and no text field may be typing.
+    ///
+    /// @returns whether the shortcuts act on the Changes surface.
+    fn changes_shortcuts_available(&self) -> bool {
+        self.show_changes
+            && self.typing_focus.is_none()
+            && self.git_confirmation.is_none()
+            && self.git_stash.is_none()
+            && self.git_menu.is_none()
+            && !self.status_menu_open
+            && !self.show_session_menu
+            && !self.workspace_picker_open
+            && !self.top_menu_open
+            && !self.palette_open
+            && !self.show_about
+            && !self.show_settings
+            && self.git_conflict_view.is_none()
+            && self.update_prompt.is_none()
+    }
+
+    /// Runs one Changes shortcut, or nothing when its guards refuse it.
+    ///
+    /// @param shortcut — the action the pressed chord maps to.
+    /// @returns whether the shell state changed.
+    fn run_changes_shortcut(&mut self, shortcut: ChangesShortcut) -> bool {
+        if !self.changes_shortcuts_available() {
+            return false;
+        }
+        match shortcut {
+            ChangesShortcut::HunkPrevious => self.move_git_hunk_focus(-1),
+            ChangesShortcut::HunkNext => self.move_git_hunk_focus(1),
+            ChangesShortcut::Stage => self.stage_from_keyboard(),
+            ChangesShortcut::Unstage => self.unstage_from_keyboard(),
+            ChangesShortcut::Discard => self.discard_from_keyboard(),
+        }
+    }
+
+    /// Moves the Diff tab's hunk selection by `delta`.
+    ///
+    /// The first move selects the first hunk going down and the last going up, so
+    /// the arrows work from a fresh diff.
+    ///
+    /// @param delta — hunks to move; negative selects an earlier hunk.
+    /// @returns whether the selection moved.
+    fn move_git_hunk_focus(&mut self, delta: isize) -> bool {
+        if self.changes_tab != ChangesTab::Diff {
+            return false;
+        }
+        let count = self.git_hunk_count();
+        if count == 0 {
+            return false;
+        }
+        let next = match self.git_focused_hunk {
+            None if delta > 0 => 0,
+            None => count - 1,
+            Some(current) => {
+                let moved = current as isize + delta;
+                if moved < 0 || moved >= count as isize {
+                    return false;
+                }
+                moved as usize
+            }
+        };
+        if self.git_focused_hunk == Some(next) {
+            return false;
+        }
+        self.git_focused_hunk = Some(next);
+        true
+    }
+
+    /// Hunks in the loaded diff.
+    fn git_hunk_count(&self) -> usize {
+        self.git_diff
+            .as_ref()
+            .map(|diff| super::git_review::parse_diff(&diff.patch).hunks.len())
+            .unwrap_or(0)
+    }
+
+    /// Path, one-hunk patch, and status signature of the focused hunk.
+    ///
+    /// @returns the values `git/apply` needs, or `None` when no hunk is selected.
+    fn focused_git_hunk(&self) -> Option<(String, String, String)> {
+        let path = self.git_selected_path.clone()?;
+        let diff = self.git_diff.as_ref()?;
+        let index = self.git_focused_hunk?;
+        let patch = super::git_review::parse_diff(&diff.patch).hunk_patch(index)?;
+        let status = self
+            .git_file(&path)
+            .map(|file| file.status.clone())
+            .unwrap_or_default();
+        Some((path, patch, status))
+    }
+
+    /// `s`: stages the focused hunk, the ticked set, or the selected file.
+    fn stage_from_keyboard(&mut self) -> bool {
+        match self.changes_tab {
+            ChangesTab::Files => {
+                if !self.git_selection.is_empty() {
+                    self.stage_git_selection();
+                    return true;
+                }
+                let Some(path) = self.git_selected_path.clone() else {
+                    return false;
+                };
+                if !self.git_file(&path).is_some_and(|file| file.worktree) {
+                    return false;
+                }
+                self.stage_git_path(path);
+                true
+            }
+            ChangesTab::Diff => {
+                if self.git_diff_staged {
+                    return false;
+                }
+                let Some((path, patch, status)) = self.focused_git_hunk() else {
+                    return false;
+                };
+                self.apply_git_hunk(path, patch, GitApplyTarget::Index, false, Some(status));
+                true
+            }
+            ChangesTab::History => false,
+        }
+    }
+
+    /// `u`: unstages the focused hunk, the ticked set, or the selected file.
+    fn unstage_from_keyboard(&mut self) -> bool {
+        match self.changes_tab {
+            ChangesTab::Files => {
+                if !self.git_selection.is_empty() {
+                    self.unstage_git_selection();
+                    return true;
+                }
+                let Some(path) = self.git_selected_path.clone() else {
+                    return false;
+                };
+                if !self.git_file(&path).is_some_and(|file| file.staged) {
+                    return false;
+                }
+                self.unstage_git_path(path);
+                true
+            }
+            ChangesTab::Diff => {
+                if !self.git_diff_staged {
+                    return false;
+                }
+                let Some((path, patch, status)) = self.focused_git_hunk() else {
+                    return false;
+                };
+                self.apply_git_hunk(path, patch, GitApplyTarget::Index, true, Some(status));
+                true
+            }
+            ChangesTab::History => false,
+        }
+    }
+
+    /// `d`: discards the focused hunk, the ticked set, or the selected file.
+    ///
+    /// Every path ends in the same confirmation the panel's buttons open.
+    fn discard_from_keyboard(&mut self) -> bool {
+        match self.changes_tab {
+            ChangesTab::Files => {
+                if !self.git_selection.is_empty() {
+                    self.discard_git_selection();
+                    return true;
+                }
+                let Some(path) = self.git_selected_path.clone() else {
+                    return false;
+                };
+                let Some(file) = self.git_file(&path) else {
+                    return false;
+                };
+                if !file.worktree || git_status_cannot_discard(&file.status) {
+                    return false;
+                }
+                self.discard_git_path(path);
+                true
+            }
+            ChangesTab::Diff => {
+                if self.git_diff_staged {
+                    return false;
+                }
+                let Some((path, patch, _)) = self.focused_git_hunk() else {
+                    return false;
+                };
+                self.discard_git_hunk(path, patch);
+                true
+            }
+            ChangesTab::History => false,
+        }
+    }
+
+    /// `Ctrl+Enter` in the commit message field commits the staged set.
+    ///
+    /// The chord is the one Changes key that fires while a field is typing, so it
+    /// checks the field it belongs to instead of refusing every focused input.
+    ///
+    /// @param cx — app context the commit message field is read through.
+    /// @returns whether a commit request started.
+    pub(crate) fn commit_from_keyboard(&mut self, cx: &App) -> bool {
+        if self.typing_focus != Some("git-commit-message") {
+            return false;
+        }
+        let Some(status) = self.git_status.clone() else {
+            return false;
+        };
+        let message = self.input_text("git-commit-message", cx);
+        let summary = super::git_review::staged_summary(&status.files);
+        let in_operation = self
+            .git_state
+            .as_ref()
+            .is_some_and(|state| state.operation != "none" || !state.conflicts.is_empty());
+        if super::git_review::commit_blocker(
+            summary.files,
+            &message,
+            self.git_loading,
+            in_operation,
+        )
+        .is_some()
+        {
+            return false;
+        }
+        let amend = self.git_amend && !super::git_review::head_is_pushed(&status);
+        let sign_off = self.git_sign_off;
+        self.commit_git(message, amend, sign_off, false);
+        true
     }
 
     /// Selects one path from the Files tab and reads the group's diff side.
@@ -6839,6 +7161,10 @@ impl DesktopApp {
             }
             CommandId::ToggleChanges => {
                 self.show_changes = !self.show_changes;
+            }
+            CommandId::ShowChangesDiff => {
+                self.show_changes = true;
+                self.changes_tab = ChangesTab::Diff;
             }
             CommandId::ToggleTerminal => {
                 self.bottom_tool = if self.bottom_tool == Some(BottomTool::Terminal) {
