@@ -1,18 +1,39 @@
 # Bàn giao — lane Desktop Tauri (fork `Masiss/deepseek-harness`)
 
-Cập nhật 2026-11-07. Mục đích: session mới đọc file này là biết đang ở đâu, cái gì đã xong, cái gì nên làm tiếp và bẫy nào đã mắc.
+Cập nhật 2026-11-08. Mục đích: session mới đọc file này là biết đang ở đâu, cái gì đã xong, cái gì nên làm tiếp và bẫy nào đã mắc.
 
 > **Đọc theo mốc thời gian.** Các mục ghi ngày ≤ 2026-11-01 mô tả shell **egui** mà ngày 2026-11-06 đã bị xoá (xem mục cuối). Chúng được giữ làm lịch sử quyết định và bẫy, không phải trạng thái hiện tại.
 
-## Trạng thái hiện tại — 2026-11-07
+## Trạng thái hiện tại — 2026-11-08
 
-Khối này là nguồn sự thật cho session mới; mọi mục bên dưới là lịch sử theo ngày.
+Khối này là nguồn sự thật cho session mới; mọi mục bên dưới là lịch sử theo ngày. **Session kế tiếp sẽ lập plan hoàn thiện UI** dựa trên mục "UI completion — đầu vào cho session sau".
 
-- Nhánh `chore/web-bun-migration`, working tree sạch, local **ahead 78 commit** so với `fork/chore/web-bun-migration` (**chưa push**). HEAD là commit `docs(desktop-native): hand off the C/D/E session state`.
-- Renderer duy nhất: **gpui 0.2.2**, bin `dsh-desktop-native-app`. Shell egui, `src/ui_harness.rs`, `egui_kittest`, `legacy-egui` và snapshot PNG đã bị xoá ngày 2026-11-06.
-- Gate hiện tại: `cargo test --locked --offline --manifest-path apps/desktop-tauri/native-app/Cargo.toml` = **191 pass / 1 ignored**; `client-core` = **104 + 8 + 11 pass**. Harness UI headless là `src/harness.rs` (`debug_bounds` + baseline `tests/snapshots/shell-*.txt`); gpui 0.2.2 **không có** accessibility tree hay pixel rasterize.
-- Đã chạy trên Hyprland thật với Home cô lập: AppImage gpui `host=ready` 1,4 s / `auth=ok` 1,5 s, cửa sổ render đủ nav rail, Sessions và bottom bar. RSS cây tiến trình idle ~**290–297 MiB** (gate < 300 MiB).
-- Đã xong 07/11: C3 (`session/delete` + UI hai bước), T08 (`expectedStatus` cho discard), D3 (tab buffer Agent, tối đa 6, đóng/chuyển), D4 (một trang Preferences), D5 (`maxWorkspaceTerminals`), D7 (test composition IME tự động ở state machine + harness), **D2 diagnostics** (chỉ server LSP user đã cấu hình/cài; panel bottom dock + jump-to-line). Còn mở thật sự: production signing/published-feed swap, physical-window pointer + visual review, Marketplace rollback. EXT-04 đã có test; `request_id` giữ nguyên không auto-retry (outcome unknown).
+- **Hai worktree**:
+  - `~/deepseek-harness` — nhánh `chore/web-bun-migration`, lane chính, sạch, **ahead 81** so với fork, chưa push.
+  - `~/deepseek-harness-merge` — nhánh **`merge/upstream-0.2.2`**, đã merge-forward `upstream/master` = `dsh-v0.2.2-rc.1`, có AppImage mới. **Chưa merge ngược vào lane chính.**
+- **Nền**: Host `0.2.2-rc.1`; Node floor **>= 24.9**; Cordis 4.1.0 / Loader 1.1.0 / Include 1.1.0; pi-ai 1.3.0.
+- **Renderer duy nhất**: gpui 0.2.2, bin `dsh-desktop-native-app`; không Tauri/WebView/egui. Không có accessibility tree và không có pixel rasterize.
+- **Gate hiện tại**: `cargo test` native-app **194 pass / 1 ignored**; client-core **106 + 8 + 11**; `typecheck`, `build`, `lint`, `test:docs` 21/21, `test:expected` 144/144, `test:snapshot` 255/255 xanh. Full suite: `DSH_COVERAGE_TEST_TIMEOUT_MS=30000 bun run test` → **54.113 pass / 1 expected fail / 254 skip**, 0 fail.
+- **AppImage trial**: `DeepSeek-Harness-native-0.2.2-rc.1-x86_64.AppImage`, **90.257.912 B**, SHA-256 `224f68784a94f0e7d73ffaa39529d12b235bbf4df719b772d1dff6a2708dd520`, đã cài `~/.local/bin/deepseek-harness`. `appimage-probe.sh` và `size-gate.sh linux-x64` pass.
+- **UI status: chưa hoàn thiện.** Bản này là prototype chạy được với Host thật, không phải UI product-grade. Trong `PARITY.md` phần lớn màn hình vẫn `◐`: Sessions list/viewer, transcript projection, model picker, session management, Terminal UI, Settings UI, Plugin/Marketplace, Explorer, Document preview, Diagnostics, Goals/todo/plan, native layout, update UI, UI hardening, projection/control-stream UI.
+- **Session sau**: lập plan hoàn thiện UI; dùng AppImage đã cài để review tay từng màn hình. Chưa đụng lại release/signing.
+
+## UI completion — đầu vào cho session sau
+
+Chưa phải plan, chỉ là đầu vào để session sau chốt phạm vi.
+
+**Hiện trạng cần chấp nhận**: luồng chính đã nối Host (session, prompt, tool/approval, question, explorer, git, terminal, jobs, schedules, deliverables, settings, plugins/skills/marketplace, goals, diagnostics). Vấn đề là chất lượng UI/UX và parity, không phải thiếu backend.
+
+**Các nhóm cần rà và lập plan:**
+1. **Visual system**: typography, spacing, density, màu/contrast, icon set, corner radius, trạng thái hover/focus/disabled, nhất quán giữa các page.
+2. **Per-screen parity**: so từng màn hình native với prototype V2/Web; ghi rõ thiếu gì (control, dữ liệu, empty/loading/error, hành động).
+3. **Navigation/layout**: top bar, Explorer, Agent, Changes, bottom dock; responsive khi cửa sổ hẹp; rail/tab labels; session popover.
+4. **Interaction**: keyboard/focus/Esc, context menu, drag & drop, resize divider, double-click, IME; pointer-driven controls chưa được kiểm chứng trên compositor thật.
+5. **States**: onboarding, first-run, disconnected/retry, Host restart, empty session, long transcript, many sessions, Host offline.
+6. **Screens cần review tay trước**: Sessions, Composer, Settings, Explorer, Document preview, Marketplace/Plugins, Terminal, Diagnostics, buffer tabs.
+7. **Giới hạn đã biết**: buffer nền không giữ follow stream; diagnostics là snapshot/poll; timed `ask_user_question` chưa mount; Marketplace rollback chưa có RPC; update production chưa ký/phát hành.
+
+**Cách review gợi ý**: chạy `~/.local/bin/deepseek-harness`, chụp từng màn hình ở 1366×768 và 1920×1080, đối chiếu `DSH_UI_Handoff_v1.0/dsh-ui-prototype-v2.html`, ghi pass/fail + screenshot vào `PARITY.md` hoặc một file gap list mới.
 
 ## Native gpui port — 2026-10-31
 
