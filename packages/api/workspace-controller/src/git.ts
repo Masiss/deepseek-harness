@@ -36,6 +36,8 @@ import type {
   GitCommitValue,
   GitDiffRequest,
   GitDiffValue,
+  GitFileSideStats,
+  GitFileStats,
   GitLogRequest,
   GitLogValue,
   GitMergeRequest,
@@ -110,6 +112,13 @@ function requireSuccess(result: GitRunResult, what: string): GitRunResult {
 /** Git's own wording for a credential the Host cannot supply. */
 const AUTH_FAILURE =
   /authentication failed|could not read username|could not read password|permission denied \(publickey\)|terminal prompts disabled/i
+
+/**
+ * Global options that keep patch headers byte-identical to the repository
+ * path a caller names: git C-quotes unusual paths otherwise, so `diff --git
+ * a/<path>` could never match.
+ */
+const UNQUOTED_PATHS = ['-c', 'core.quotePath=false'] as const
 
 /** Environment every Git child sees: no terminal prompts, English diagnostics, and a non-interactive editor. */
 const GIT_ENV = {
@@ -441,29 +450,33 @@ function applyRefusal(path: string, phase: 'check' | 'apply', result: GitRunResu
 }
 
 /**
- * Attach the summed index and work-tree line totals to one changed path.
- * `git diff --numstat` omits untracked paths and reports binaries without
- * counts, so those keep no totals.
+ * Read one side's counted line totals.
+ * @param totals - parsed totals for the path, when git reported any.
+ * @returns the two counts, or undefined for a side git reports as binary.
  */
-function withTotals(
+function countedSide(totals: PathTotals | undefined): GitFileSideStats | undefined {
+  if (totals === undefined || totals.additions === null || totals.deletions === null) return undefined
+  return { additions: totals.additions, deletions: totals.deletions }
+}
+
+/**
+ * Attach the per-side line totals to one changed path.
+ * `git diff --numstat` omits untracked paths and reports binaries without
+ * counts, so those sides and paths stay without stats.
+ */
+function withStats(
   file: GitChangedFile,
   staged: Map<string, PathTotals>,
   worktree: Map<string, PathTotals>,
 ): GitChangedFile {
-  const sides: PathTotals[] = []
-  const stagedTotals = staged.get(file.path)
-  if (stagedTotals !== undefined) sides.push(stagedTotals)
-  const worktreeTotals = worktree.get(file.path)
-  if (worktreeTotals !== undefined) sides.push(worktreeTotals)
-  if (sides.length === 0) return file
-  let additions = 0
-  let deletions = 0
-  for (const side of sides) {
-    if (side.additions === null || side.deletions === null) return file
-    additions += side.additions
-    deletions += side.deletions
+  const index = countedSide(staged.get(file.path))
+  const unstaged = countedSide(worktree.get(file.path))
+  if (index === undefined && unstaged === undefined) return file
+  const stats: GitFileStats = {
+    ...(index === undefined ? {} : { index }),
+    ...(unstaged === undefined ? {} : { worktree: unstaged }),
   }
-  return { ...file, additions, deletions }
+  return { ...file, stats }
 }
 
 /**
@@ -538,7 +551,7 @@ export class GitCommands {
     const changes = await this.changeSet(root, signal)
     const staged = await this.numstat(root, ['--cached'], signal)
     const worktree = await this.numstat(root, [], signal)
-    return { ...changes, files: changes.files.map(file => withTotals(file, staged, worktree)) }
+    return { ...changes, files: changes.files.map(file => withStats(file, staged, worktree)) }
   }
 
   /**
@@ -597,12 +610,17 @@ export class GitCommands {
     if (change.status === 'untracked' && !request.staged) {
       /* v8 ignore next -- the device name follows one host platform. */
       const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null'
-      result = await this.repo(root, ['diff', '--no-color', '--no-ext-diff', '--unified=3', '--no-index', '--', nullDevice, path], signal)
+      result = await this.repo(
+        root,
+        [...UNQUOTED_PATHS, 'diff', '--no-color', '--no-ext-diff', '--unified=3', '--no-index', '--', nullDevice, path],
+        signal,
+      )
       // `--no-index` exits 1 when the files differ, which is the expected outcome here.
       if (result.exitCode !== 0 && result.exitCode !== 1) requireSuccess(result, 'git diff')
     } else {
       result = requireSuccess(
         await this.repo(root, [
+          ...UNQUOTED_PATHS,
           'diff', '--no-color', '--no-ext-diff', '--unified=3',
           ...(request.staged ? ['--cached'] : []),
           '--', path,
@@ -814,6 +832,7 @@ export class GitCommands {
     ).stdout.trim()
     const result = requireSuccess(
       await this.repo(root, [
+        ...UNQUOTED_PATHS,
         'show', '--format=', '--no-color', '--no-ext-diff', resolved, ...(path === undefined ? [] : ['--', path]),
       ], signal),
       'git show',
@@ -849,12 +868,12 @@ export class GitCommands {
    * remote name, so a repository whose remote has another name answers
    * `git/remote-failed` instead of guessing.
    * @param root - Session workspace root inside the repository.
-   * @param request - whether to publish the current branch and record its upstream.
+   * @param request - whether to publish the current branch and record its upstream; omitted keeps a plain push.
    * @param signal - caller cancellation.
    * @returns git's own progress summary.
    */
-  async push(root: string, request: GitPushRequest, signal: AbortSignal): Promise<GitRemoteValue> {
-    if (request.setUpstream !== true) return await this.remote(root, ['push'], 'push', signal)
+  async push(root: string, request: GitPushRequest | undefined, signal: AbortSignal): Promise<GitRemoteValue> {
+    if (request?.setUpstream !== true) return await this.remote(root, ['push'], 'push', signal)
     const status = await this.changeSet(root, signal)
     if (status.detached || status.branch === null) {
       throw new RemoteError('git/remote-failed', 'publishing needs a checked-out branch', { operation: 'push' })
@@ -1301,14 +1320,14 @@ export class GitController extends TypertRemoteService {
   /**
    * Push the current branch to its upstream.
    * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
-   * @param request - whether to publish the branch and record its upstream.
+   * @param request - whether to publish the branch and record its upstream; omitted keeps a plain push.
    * @param signal - caller cancellation.
    * @returns git's own summary.
    */
   @Remote('push')
   push(
     gitWorkspaceScope: GitWorkspaceScope,
-    request: GitPushRequest,
+    request: GitPushRequest | undefined,
     signal: AbortSignal,
   ): Promise<GitRemoteValue> {
     return this.commands.push(gitWorkspaceScope.workspaceRoot, request, signal)

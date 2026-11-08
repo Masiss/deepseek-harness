@@ -14,6 +14,24 @@ pub struct GitBranch {
     pub current: bool,
 }
 
+/// Line totals one side of a changed path reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitFileSideStats {
+    pub additions: u64,
+    pub deletions: u64,
+}
+
+/// Line totals one changed path reports for the sides that carry counts.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitFileStats {
+    /// Index against HEAD; absent when that side reports no counts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<GitFileSideStats>,
+    /// Work tree against the index; absent when that side reports no counts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<GitFileSideStats>,
+}
+
 /// One changed path from `git/status`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,12 +45,9 @@ pub struct GitFile {
     /// Source path of a renamed or copied change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub orig_path: Option<String>,
-    /// Lines added against HEAD; absent for untracked and binary changes.
+    /// Per-side line totals; absent for untracked, ignored, and binary changes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub additions: Option<u64>,
-    /// Lines deleted against HEAD; absent for untracked and binary changes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub deletions: Option<u64>,
+    pub stats: Option<GitFileStats>,
 }
 
 /// Result of `git/status`.
@@ -537,7 +552,7 @@ mod tests {
     }
 
     #[test]
-    fn deserializes_status_details_and_totals() {
+    fn deserializes_status_details_and_per_side_stats() {
         let status: GitStatus = serde_json::from_value(serde_json::json!({
             "branch": "main",
             "commit": "abc",
@@ -552,8 +567,17 @@ mod tests {
                     "staged": true,
                     "worktree": false,
                     "origPath": "src/old.ts",
-                    "additions": 4,
-                    "deletions": 1,
+                    "stats": {"index": {"additions": 2, "deletions": 0}},
+                },
+                {
+                    "path": "src/both.ts",
+                    "status": "modified",
+                    "staged": true,
+                    "worktree": true,
+                    "stats": {
+                        "index": {"additions": 4, "deletions": 1},
+                        "worktree": {"additions": 1, "deletions": 1},
+                    },
                 },
                 {"path": "src/loose.ts", "status": "untracked", "staged": false, "worktree": true},
             ],
@@ -562,10 +586,17 @@ mod tests {
         assert_eq!(status.upstream.as_deref(), Some("origin/main"));
         assert_eq!((status.ahead, status.behind), (2, 3));
         assert_eq!(status.files[0].orig_path.as_deref(), Some("src/old.ts"));
-        assert_eq!(status.files[0].additions, Some(4));
-        assert_eq!(status.files[0].deletions, Some(1));
-        assert!(status.files[1].orig_path.is_none());
-        assert!(status.files[1].additions.is_none());
+        assert_eq!(
+            status.files[0].stats,
+            Some(GitFileStats {
+                index: Some(GitFileSideStats { additions: 2, deletions: 0 }),
+                worktree: None,
+            })
+        );
+        let both = status.files[1].stats.as_ref().unwrap();
+        assert_eq!(both.worktree, Some(GitFileSideStats { additions: 1, deletions: 1 }));
+        assert!(status.files[2].orig_path.is_none());
+        assert!(status.files[2].stats.is_none());
     }
 
     #[test]
@@ -578,6 +609,7 @@ mod tests {
         assert!(status.upstream.is_none());
         assert_eq!((status.ahead, status.behind), (0, 0));
         assert!(status.files[0].orig_path.is_none());
+        assert!(status.files[0].stats.is_none());
     }
 
     #[test]

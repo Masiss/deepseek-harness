@@ -351,11 +351,11 @@ Host service backing the generated `ctx.remote.git` namespace.
 /**
  * Push the current branch to its upstream.
  * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
- * @param request - whether to publish the branch and record its upstream.
+ * @param request - whether to publish the branch and record its upstream; omitted keeps a plain push.
  * @param signal - caller cancellation.
  * @returns git's own summary.
  */
-@Remote('push') push( gitWorkspaceScope: GitWorkspaceScope, request: GitPushRequest, signal: AbortSignal, ): Promise<GitRemoteValue>
+@Remote('push') push( gitWorkspaceScope: GitWorkspaceScope, request: GitPushRequest | undefined, signal: AbortSignal, ): Promise<GitRemoteValue>
 
 /**
  * Read the repository's multi-step operation and conflicts.

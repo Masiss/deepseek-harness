@@ -154,7 +154,13 @@ describe('GitCommands', () => {
     git(root, 'add', 'staged.ts')
     const status = await new GitCommands(RUNNER).status(root, signal())
     expect(status.files).toEqual(expect.arrayContaining([
-      { path: 'staged.ts', status: 'added', staged: true, worktree: false, additions: 1, deletions: 0 },
+      {
+        path: 'staged.ts',
+        status: 'added',
+        staged: true,
+        worktree: false,
+        stats: { index: { additions: 1, deletions: 0 } },
+      },
       { path: 'loose.ts', status: 'untracked', staged: false, worktree: true },
     ]))
   })
@@ -510,6 +516,8 @@ describe('GitController Session scope', () => {
       await expect(controller.fetch(scope, signal())).resolves.toMatchObject({ operation: 'fetch' })
       await expect(controller.pull(scope, signal())).resolves.toMatchObject({ operation: 'pull' })
       await expect(controller.push(scope, {}, signal())).resolves.toMatchObject({ operation: 'push' })
+      // The wire field is optional, so an absent request reaches the verb as undefined.
+      await expect(controller.push(scope, undefined, signal())).resolves.toMatchObject({ operation: 'push' })
       await expect(rejected(controller.continueOperation(scope, signal())))
         .resolves.toMatchObject({ code: 'git/operation-refused' })
       await expect(rejected(controller.abortOperation(scope, signal())))
@@ -591,6 +599,38 @@ describe('GitCommands diff and index verbs', () => {
     await expect(commands.apply(root, { path: 'a.txt', patch, target: 'worktree', reverse: true }, signal()))
       .resolves.toEqual({ path: 'a.txt', operation: 'discard' })
     await expect(readFile(join(root, 'a.txt'), 'utf8')).resolves.toBe('one\n')
+  })
+
+  it('asks git for unquoted paths so a patch header names the caller path', async () => {
+    const calls: string[][] = []
+    const run: GitRunner = async (args) => {
+      calls.push([...args])
+      return args[0] === 'status'
+        ? { stdout: '1 .M N... 100644 100644 100644 aaa bbb a.txt\0', stderr: '', exitCode: 0 }
+        : { stdout: '', stderr: '', exitCode: 0 }
+    }
+    await new GitCommands(run).diff('/repo', { path: 'a.txt', staged: false }, signal())
+    expect(calls[1]).toEqual([
+      '-c', 'core.quotePath=false', 'diff', '--no-color', '--no-ext-diff', '--unified=3', '--', 'a.txt',
+    ])
+  })
+
+  it('applies a patch for a non-ASCII path and refuses it under another path', async () => {
+    const name = 'é.txt'
+    await writeFile(join(root, name), 'one\n')
+    git(root, 'add', name)
+    git(root, 'commit', '-m', 'unicode')
+    await writeFile(join(root, name), 'two\n')
+    const commands = new GitCommands(RUNNER)
+    const patch = (await commands.diff(root, { path: name, staged: false }, signal())).patch
+    expect(patch.startsWith(`diff --git a/${name} b/${name}`)).toBe(true)
+
+    await expect(commands.apply(root, { path: name, patch, target: 'index' }, signal()))
+      .resolves.toEqual({ path: name, operation: 'stage' })
+    await expect(commands.apply(root, { path: name, patch, target: 'index', reverse: true }, signal()))
+      .resolves.toEqual({ path: name, operation: 'unstage' })
+    await expect(commands.apply(root, { path: 'a.txt', patch, target: 'index' }, signal()))
+      .rejects.toMatchObject({ code: 'git/apply-refused' })
   })
 
   it('refuses a patch that no longer applies and leaves the index untouched', async () => {
@@ -680,7 +720,7 @@ describe('GitCommands diff and index verbs', () => {
 })
 
 describe('GitCommands status details', () => {
-  it('reports upstream divergence, rename sources, and summed line totals', async () => {
+  it('reports upstream divergence, rename sources, and per-side line totals', async () => {
     const calls: string[][] = []
     const run: GitRunner = async (args) => {
       calls.push([...args])
@@ -700,21 +740,44 @@ describe('GitCommands status details', () => {
           exitCode: 0,
         }
       }
-      if (args.includes('--cached')) return { stdout: '0\t0\t\0old.ts\0new.ts\0', stderr: '', exitCode: 0 }
+      if (args.includes('--cached')) return { stdout: '2\t0\tboth.ts\0', stderr: '', exitCode: 0 }
       return { stdout: '4\t1\tplain.ts\0', stderr: '', exitCode: 0 }
     }
 
     const status = await new GitCommands(run).status('/repo', signal())
     expect(status).toMatchObject({ branch: 'main', upstream: 'origin/main', ahead: 2, behind: 3 })
     expect(status.files).toEqual([
-      { path: 'new.ts', status: 'renamed', staged: true, worktree: false, origPath: 'old.ts', additions: 0, deletions: 0 },
-      { path: 'plain.ts', status: 'modified', staged: false, worktree: true, additions: 4, deletions: 1 },
+      { path: 'new.ts', status: 'renamed', staged: true, worktree: false, origPath: 'old.ts' },
+      {
+        path: 'plain.ts',
+        status: 'modified',
+        staged: false,
+        worktree: true,
+        stats: { worktree: { additions: 4, deletions: 1 } },
+      },
     ])
     expect(calls[1]).toContain('--cached')
     expect(calls[2]).not.toContain('--cached')
+
+    // One path can carry an index and a work-tree change at once, which keeps both sides.
+    const both: GitRunner = async (args) => {
+      if (args[0] === 'status') {
+        return { stdout: '1 MM N... 100644 100644 100644 aaa bbb both.ts\0', stderr: '', exitCode: 0 }
+      }
+      return args.includes('--cached')
+        ? { stdout: '2\t0\tboth.ts\0', stderr: '', exitCode: 0 }
+        : { stdout: '1\t1\tboth.ts\0', stderr: '', exitCode: 0 }
+    }
+    expect((await new GitCommands(both).status('/repo', signal())).files[0]).toEqual({
+      path: 'both.ts',
+      status: 'modified',
+      staged: true,
+      worktree: true,
+      stats: { index: { additions: 2, deletions: 0 }, worktree: { additions: 1, deletions: 1 } },
+    })
   })
 
-  it('omits totals for a binary change and maps a failed numstat to git/command-failed', async () => {
+  it('omits the side a binary change reports and maps a failed numstat to git/command-failed', async () => {
     const binary: GitRunner = async args => args[0] === 'status'
       ? { stdout: '1 .M N... 100644 100644 100644 aaa bbb image.png\0', stderr: '', exitCode: 0 }
       : { stdout: '-\t-\timage.png\0', stderr: '', exitCode: 0 }
@@ -930,6 +993,21 @@ describe('GitCommands publish', () => {
     expect(pushed[0]).toEqual(['push', '--set-upstream', 'origin', 'main'])
   })
 
+  it('pushes without publishing when the request is omitted', async () => {
+    const pushed: string[][] = []
+    const networkRun: GitRunner = async (args) => {
+      pushed.push([...args])
+      return { stdout: '', stderr: 'up to date', exitCode: 0 }
+    }
+    const local = vi.fn<GitRunner>()
+    const commands = new GitCommands(local, 1024, networkRun, 1024)
+    await expect(commands.push('/repo', undefined, signal()))
+      .resolves.toEqual({ operation: 'push', summary: 'up to date', truncated: false })
+    expect(pushed).toEqual([['push']])
+    // A plain push reads no status and no remote list.
+    expect(local).not.toHaveBeenCalled()
+  })
+
   it('refuses to publish a detached HEAD', async () => {
     const run = vi.fn<GitRunner>()
     const commands = new GitCommands(localRunner('# branch.head (detached)\0', 'origin\n'), 1024, run, 1024)
@@ -1015,9 +1093,9 @@ describe('GitCommands show', () => {
     await expect(commands.show('/repo', { commit: 'abc1234', path: 'a.ts' }, signal()))
       .resolves.toEqual({ commit: OID, patch: 'diff --git a/a.ts b/a.ts\n', truncated: false })
     expect(calls[0]).toEqual(['rev-parse', '--verify', 'abc1234^{commit}'])
-    expect(calls[1]).toEqual(['show', '--format=', '--no-color', '--no-ext-diff', OID, '--', 'a.ts'])
+    expect(calls[1]).toEqual(['-c', 'core.quotePath=false', 'show', '--format=', '--no-color', '--no-ext-diff', OID, '--', 'a.ts'])
     await commands.show('/repo', { commit: OID }, signal())
-    expect(calls[3]).toEqual(['show', '--format=', '--no-color', '--no-ext-diff', OID])
+    expect(calls[3]).toEqual(['-c', 'core.quotePath=false', 'show', '--format=', '--no-color', '--no-ext-diff', OID])
   })
 
   it('flags a patch past the configured byte cap', async () => {

@@ -1666,9 +1666,9 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         returns: 'the resolved object id and its capped patch.',
       },
       {
-        signature: '@Remote(\'push\') push( gitWorkspaceScope: GitWorkspaceScope, request: GitPushRequest, signal: AbortSignal, ): Promise<GitRemoteValue>',
+        signature: '@Remote(\'push\') push( gitWorkspaceScope: GitWorkspaceScope, request: GitPushRequest | undefined, signal: AbortSignal, ): Promise<GitRemoteValue>',
         description: 'Push the current branch to its upstream.',
-        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'whether to publish the branch and record its upstream.' }, { name: 'signal', description: 'caller cancellation.' }],
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'whether to publish the branch and record its upstream; omitted keeps a plain push.' }, { name: 'signal', description: 'caller cancellation.' }],
         returns: 'git\'s own summary.',
       },
       {
@@ -6875,7 +6875,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'GitChangedFile',
-    declaration: 'export interface GitChangedFile {\n    readonly path: string;\n    readonly status: GitChangeStatus;\n    readonly staged: boolean;\n    readonly worktree: boolean;\n    readonly origPath?: string;\n    readonly additions?: number;\n    readonly deletions?: number;\n}',
+    declaration: 'export interface GitChangedFile {\n    readonly path: string;\n    readonly status: GitChangeStatus;\n    readonly staged: boolean;\n    readonly worktree: boolean;\n    readonly origPath?: string;\n    readonly stats?: GitFileStats;\n}',
   },
   {
     name: 'GitChangeStatus',
@@ -6912,6 +6912,14 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GitDiffValue',
     declaration: 'export interface GitDiffValue {\n    readonly path: string;\n    readonly staged: boolean;\n    readonly patch: string;\n    readonly truncated: boolean;\n    readonly untracked: boolean;\n}',
+  },
+  {
+    name: 'GitFileSideStats',
+    declaration: 'export interface GitFileSideStats {\n    readonly additions: number;\n    readonly deletions: number;\n}',
+  },
+  {
+    name: 'GitFileStats',
+    declaration: 'export interface GitFileStats {\n    readonly index?: GitFileSideStats;\n    readonly worktree?: GitFileSideStats;\n}',
   },
   {
     name: 'GitLogRequest',

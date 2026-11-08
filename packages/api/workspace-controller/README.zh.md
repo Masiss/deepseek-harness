@@ -53,15 +53,15 @@ Documents 查询占用注册表变更队列，因此其他 Workspace 变更（�
 
 每个动词都作用于 Session 工作区根目录所在的仓库。Session 标识以 `gitWorkspaceScopeId` 传输，通过 `gitWorkspaceScope` Typert lookup 从实时或已存储的 Session header 解析；header 没有 cwd 时回退到 sandbox policy 根目录。该 lookup 把 Session 注册为访问控制资源。
 
-`git/status` 解析 `git status --porcelain=v2 -b -z`，返回当前分支、HEAD 提交、detached 标记、upstream 引用、ahead 与 behind 计数，以及带封闭变更类型、staged/worktree 两侧、重命名或复制来源路径、新增与删除行数的变更路径。没有 upstream 的分支返回 `upstream: null`、ahead 与 behind 均为 0。行数由 `git diff --numstat -z` 的索引侧与工作树侧相加；未跟踪、被忽略和二进制变更不返回行数。`git/branches` 通过 `git for-each-ref` 列出本地分支。`git/checkout` 只接受已存在的本地分支名，并把 git 自身的拒绝（包括 dirty 工作树）作为 `git/checkout-refused` 返回，不自行改写文件。
+`git/status` 解析 `git status --porcelain=v2 -b -z`，返回当前分支、HEAD 提交、detached 标记、upstream 引用、ahead 与 behind 计数，以及带封闭变更类型、staged/worktree 两侧、重命名或复制来源路径和按侧行数的变更路径。没有 upstream 的分支返回 `upstream: null`、ahead 与 behind 均为 0。行数来自两次 `git diff --numstat -z`（索引与 HEAD、工作树与索引），每个路径分别返回 `stats.index` 与 `stats.worktree`，因此既暂存又再次修改的路径保留两侧计数；git 未给出计数的侧会缺失，两侧都没有计数的路径不返回 `stats`。`git/branches` 通过 `git for-each-ref` 列出本地分支。`git/checkout` 只接受已存在的本地分支名，并把 git 自身的拒绝（包括 dirty 工作树）作为 `git/checkout-refused` 返回，不自行改写文件。
 
 `git/diff` 读取单个变更路径的统一补丁：默认比较工作树与索引，`staged: true` 时比较索引与 HEAD；未跟踪路径通过 `git diff --no-index` 读取并标记。超过 `gitMaxDiffBytes` 的补丁会被截断并标记，而不是静默缩短。`git/stage`、`git/unstage` 和 `git/discard` 只接受当前变更且位于仓库内的相对路径：stage 执行 `git add`，unstage 执行 `git restore --staged`，discard 对已跟踪的 modified、deleted 或 typechange 路径执行 `git restore --worktree`。`git/commit` 拒绝空消息，并用该消息提交已暂存索引；`amend` 替换当前提交，未出生（unborn）的 HEAD 返回 `git/commit-refused`，`signOff` 追加提交者的 `Signed-off-by` 尾注。
 
-`git/apply` 把一个统一补丁应用到索引（`target: "index"`）或工作树（`target: "worktree"`），`reverse: true` 时反向应用，从而在无需交互式 `git add -p` 的情况下暂存、取消暂存或丢弃一个 hunk。请求携带路径、补丁、目标侧、可选方向和与其他整路径动词相同的 `expectedStatus` 防护。Host 先校验仓库内相对路径、非空且在 `gitMaxDiffBytes` 内的补丁，以及 `diff --git`、`---`、`+++` 头部只指向该路径且不是重命名的补丁；然后先执行 `git apply --check` 再执行 `git apply`，索引侧附加 `--cached`，反向时附加 `-R`。check 或 apply 被拒绝返回 `git/apply-refused` 并带上 git 的 stderr；状态已过期或变更类型不支持返回 `git/path-refused`。由于无 shell 运行器不向子进程标准输入写入，git 从临时目录中一个私有 0600 文件读取补丁，该动词在任何结果下都会删除该目录。结果的 `operation` 在三种对应结果下为 `stage`、`unstage`、`discard`，正向应用到工作树时为 `apply`。
+`git/apply` 把一个统一补丁应用到索引（`target: "index"`）或工作树（`target: "worktree"`），`reverse: true` 时反向应用，从而在无需交互式 `git add -p` 的情况下暂存、取消暂存或丢弃一个 hunk。请求携带路径、补丁、目标侧、可选方向和与其他整路径动词相同的 `expectedStatus` 防护。Host 先校验仓库内相对路径、非空且在 `gitMaxDiffBytes` 内的补丁，以及 `diff --git`、`---`、`+++` 头部只指向该路径且不是重命名的补丁；然后先执行 `git apply --check` 再执行 `git apply`，索引侧附加 `--cached`，反向时附加 `-R`。`git/diff` 和 `git/show` 以 `-c core.quotePath=false` 运行，因此补丁头部逐字节写出路径（包括非 ASCII 路径），而不是 git 的 C 风格引号形式。check 或 apply 被拒绝返回 `git/apply-refused` 并带上 git 的 stderr；状态已过期或变更类型不支持返回 `git/path-refused`。由于无 shell 运行器不向子进程标准输入写入，git 从临时目录中一个私有 0600 文件读取补丁，该动词在任何结果下都会删除该目录。结果的 `operation` 在三种对应结果下为 `stage`、`unstage`、`discard`，正向应用到工作树时为 `apply`。
 
-`git/log` 返回由新到旧的提交：`oid`、`parents`、`refs`、`subject`、作者名、作者邮箱和 ISO 8601 作者时间；它只调用一次以 NUL 和记录分隔符分隔的 `git log`，并把 `%D` 装饰规范化为 `HEAD`、分支名、远端分支和 `tag:<name>`。`limit` 默认 50、上限 200，`skip` 默认 0；超过 `gitMaxOutputBytes` 的页面会丢弃最旧条目并标记 `truncated`。`git/show` 用 `git show --format=` 读取单个提交的补丁，可限定到单个路径，按 `gitMaxDiffBytes` 截断并标记；它返回解析后的完整对象 id。格式错误的 `limit`、`skip` 或 commit id 返回 `gateway/bad-request`。
+`git/log` 返回由新到旧的提交：`oid`、`parents`、`refs`、`subject`、作者名、作者邮箱和 ISO 8601 作者时间；它只调用一次以 NUL 和记录分隔符分隔的 `git log`，并把 `%D` 装饰规范化为 `HEAD`、分支名、远端分支和 `tag:<name>`。`limit` 默认 50、上限 200，`skip` 默认 0；超过 `gitMaxOutputBytes` 的页面会丢弃最旧条目并标记 `truncated`。`git/show` 用 `git show --format=` 读取单个提交的补丁，可限定到单个路径，按 `gitMaxDiffBytes` 截断并标记；它返回解析后的完整对象 id，对 merge 提交返回空补丁（合并 diff 不在本版范围内）。格式错误的 `limit`、`skip` 或 commit id 返回 `gateway/bad-request`。
 
-`git/fetch` 执行 `git fetch --all --prune`，`git/pull` 执行 `git pull --ff-only`，`git/push` 执行不带 force 的 `git push`。`setUpstream: true` 时，push 以 `git push --set-upstream origin <branch>` 发布当前分支并记录 upstream；发布要求存在已检出的分支和名为 `origin` 的远端仓库，否则返回 `git/remote-failed`。它们使用 Host 自身的 git credential helper 和 SSH agent；子进程不启用终端提示，因此 Host 无法提供的凭据会以 `git/remote-auth` 失败，而不是挂起。历史被拒绝或分叉返回 `git/remote-diverged`，分支没有 upstream 返回 `git/remote-no-upstream`，其他失败返回 `git/remote-failed`；摘要为 git 自身文本，受 `gitMaxOutputBytes` 限制。
+`git/fetch` 执行 `git fetch --all --prune`，`git/pull` 执行 `git pull --ff-only`，`git/push` 执行不带 force 的 `git push`。`setUpstream: true` 时，push 以 `git push --set-upstream origin <branch>` 发布当前分支并记录 upstream；发布要求存在已检出的分支和名为 `origin` 的远端仓库，否则返回 `git/remote-failed`。缺失 `request` 字段即为普通 push，不发送选项的调用方不会进入发布路径。它们使用 Host 自身的 git credential helper 和 SSH agent；子进程不启用终端提示，因此 Host 无法提供的凭据会以 `git/remote-auth` 失败，而不是挂起。历史被拒绝或分叉返回 `git/remote-diverged`，分支没有 upstream 返回 `git/remote-no-upstream`，其他失败返回 `git/remote-failed`；摘要为 git 自身文本，受 `gitMaxOutputBytes` 限制。
 
 `git/state` 返回进行中的 merge、rebase、cherry-pick 或 revert 及未合并路径。`git/merge` 把一个已存在的本地分支并入当前分支，`git/rebase` 把当前分支重放到该分支上，`git/cherryPick` 应用一个 commit id，`git/revert` 撤销一个 commit。它们都返回结果状态，因此冲突保持可见而不是变成错误。`git/continueOperation` 与 `git/abortOperation` 推进或回退进行中的 merge、rebase、cherry-pick 或 revert；编辑冲突文件并暂存仍由调用方完成。
 
@@ -85,7 +85,8 @@ Documents 查询占用注册表变更队列，因此其他 Workspace 变更（�
 - Git 动词执行 Host 的 `git` 可执行文件；没有它的 Host 返回 `git/unavailable`。远端动词依赖 Host 账户的 git credential helper 和 SSH agent；本包不保存凭据，也绝不强制 push。
 - 交互式 rebase 和自动冲突解决不在范围内：调用方编辑冲突文件、暂存后继续。
 - `git/discard` 永不删除未跟踪文件，也不解决冲突；这类请求返回 `git/path-refused`。
-- `git/apply` 拒绝指向第二个路径、重命名文件或用引号包裹路径的补丁，因此 hunk 操作覆盖 git 按字面打印路径的变更。
+- `git/apply` 拒绝指向第二个路径或重命名的补丁，也拒绝未跟踪和冲突路径；这类请求返回 `git/apply-refused` 或 `git/path-refused`。
+- `git/show` 对 merge 提交不返回补丁；合并 diff 不在评审界面的范围内。
 - `follow()` 在重连后替换完整投影，不提供持久 cursor 或增量追赶协议。
 - 进程内删除标记只会在 Client 模型生命周期内阻止延迟数据复活已移除的 Workspace。
 

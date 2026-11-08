@@ -224,6 +224,22 @@ export type GitChangeStatus =
   | 'ignored'
   | 'conflict'
 
+/** Line totals one side of a changed path reports. */
+export interface GitFileSideStats {
+  /** Lines the side adds. */
+  readonly additions: number
+  /** Lines the side deletes. */
+  readonly deletions: number
+}
+
+/** Line totals one changed path reports for the sides that carry counts. */
+export interface GitFileStats {
+  /** Index against HEAD, absent when that side reports no counts. */
+  readonly index?: GitFileSideStats
+  /** Work tree against the index, absent when that side reports no counts. */
+  readonly worktree?: GitFileSideStats
+}
+
 /** One changed path relative to the repository root. */
 export interface GitChangedFile {
   /** Path relative to the repository root, `/`-separated. */
@@ -239,12 +255,10 @@ export interface GitChangedFile {
    */
   readonly origPath?: string
   /**
-   * Lines the path adds against HEAD, summing its index and work-tree sides;
-   * absent for an untracked path, an ignored path, or a binary change.
+   * Line totals per side, absent for an untracked or ignored path, for a
+   * binary change on both sides, and for a side whose counts git omits.
    */
-  readonly additions?: number
-  /** Lines the path deletes against HEAD, absent under the same rules as {@link additions}. */
-  readonly deletions?: number
+  readonly stats?: GitFileStats
 }
 
 /** Working-tree state of the Session's repository. */

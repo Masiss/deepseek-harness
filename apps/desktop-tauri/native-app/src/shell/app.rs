@@ -7876,8 +7876,7 @@ mod tests {
                 staged: false,
                 worktree: true,
                 orig_path: None,
-                additions: None,
-                deletions: None,
+                stats: None,
             }],
         };
         assert!(discard_confirmation_is_fresh(
