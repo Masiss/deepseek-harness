@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
-use gpui::{point, px, size, AppContext, Bounds, Entity, Modifiers, Pixels, TestAppContext, VisualTestContext};
+use gpui::{point, px, size, AppContext, Bounds, Entity, Modifiers, Pixels, TestAppContext, VisualTestContext, Window};
 
 use crate::command_registry::CommandId;
 use crate::shell::HarnessApp as DesktopApp;
@@ -59,11 +59,15 @@ impl Harness {
     /// Builds the harness with or without the Host launch.
     fn build(width: f32, height: f32, spawn_host: bool) -> Self {
         let _ = (width, height);
-        let preferences = std::env::temp_dir().join(format!(
-            "dsh-gpui-harness-{}-{:?}.json",
+        let preferences_dir = std::env::temp_dir().join(format!(
+            "dsh-gpui-harness-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
+        std::fs::create_dir_all(&preferences_dir)
+            .expect("an isolated harness preferences directory");
+        let preferences = preferences_dir.join("native-ui-preferences.json");
+        let themes = preferences_dir.join("themes");
         let services = ShellServices {
             quitting: Arc::new(AtomicBool::new(false)),
             show_requested: Arc::new(AtomicBool::new(false)),
@@ -71,6 +75,7 @@ impl Harness {
             hidden: Arc::new(AtomicBool::new(false)),
             tray_available: false,
             ui_preferences_path: preferences.clone(),
+            ui_themes_path: themes,
             spawn_host,
             commands: Arc::new(Mutex::new(Vec::<CommandId>::new())),
         };
@@ -159,6 +164,18 @@ impl Harness {
         update: impl FnOnce(&mut DesktopApp, &mut gpui::Context<DesktopApp>) -> R,
     ) -> R {
         self.app.update(&mut self.visual, update)
+    }
+
+    /// Updates the shell with the test window available to its actions.
+    ///
+    /// @param update - Closure receiving the shell, window, and context.
+    /// @returns Whatever the closure returns.
+    pub fn with_window<R>(
+        &mut self,
+        update: impl FnOnce(&mut DesktopApp, &mut Window, &mut gpui::Context<DesktopApp>) -> R,
+    ) -> R {
+        self.visual
+            .update(|window, cx| self.app.update(cx, |app, cx| update(app, window, cx)))
     }
 
     /// Machine-readable rectangle report for the selectors that rendered.

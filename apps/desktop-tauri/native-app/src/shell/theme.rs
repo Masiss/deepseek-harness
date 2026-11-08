@@ -1,6 +1,6 @@
 //! The per-frame theme snapshot: pack colours plus the app's own metrics.
 
-use crate::theme::{resolve, Rgba8, ThemeRequest, ThemeStatus};
+use crate::theme::{resolve, Rgba8, ThemeCatalog, ThemeRequest, ThemeStatus};
 use crate::ui_preferences::{UiDensity, UiPreferences};
 use gpui::{px, AbsoluteLength, FontFallbacks, FontStyle, FontWeight, Hsla, Pixels, SharedString};
 
@@ -39,11 +39,28 @@ impl Theme {
     /// @param preferences — effective preferences, including workspace overrides.
     /// @param system_dark — whether the desktop currently reports a dark appearance.
     /// @returns the snapshot every render call site reads.
+    #[cfg(test)]
     pub(crate) fn new(preferences: &UiPreferences, system_dark: bool) -> Self {
+        let catalog = ThemeCatalog::builtins();
+        Self::new_with_catalog(preferences, system_dark, &catalog)
+    }
+
+    /// Resolves one frame's colours from an installed-pack catalogue.
+    ///
+    /// @param preferences — effective preferences, including workspace overrides.
+    /// @param system_dark — whether the desktop currently reports a dark appearance.
+    /// @param catalog — built-in and user packs discovered for this client.
+    /// @returns the snapshot every render call site reads.
+    pub(crate) fn new_with_catalog(
+        preferences: &UiPreferences,
+        system_dark: bool,
+        catalog: &ThemeCatalog,
+    ) -> Self {
         let dark = preferences.theme.is_dark(system_dark);
         let resolved = resolve(&ThemeRequest {
             pack_id: &preferences.theme_id,
             custom: &preferences.custom_theme,
+            catalog,
             accent: preferences.accent_scheme,
             dark,
         });

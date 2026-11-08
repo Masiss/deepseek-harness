@@ -61,6 +61,8 @@ pub(crate) struct ShellServices {
     pub hidden: Arc<AtomicBool>,
     pub tray_available: bool,
     pub ui_preferences_path: PathBuf,
+    /// Directory holding installed user theme packs.
+    pub ui_themes_path: PathBuf,
     /// Whether to start the Desktop Host; tests bring their own transport.
     pub spawn_host: bool,
     /// Commands dispatched by window shortcuts, drained by the poll loop.

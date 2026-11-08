@@ -556,14 +556,26 @@ impl Default for UiPreferences {
     }
 }
 
+/// Resolves the client data directory shared by preferences and theme packs.
+fn dsh_home() -> PathBuf {
+    std::env::var_os("DSH_HOME")
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|path| path.join(".deepseek-harness")))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 impl UiPreferences {
     /// Returns the per-user file used for native appearance preferences.
     pub fn config_path() -> PathBuf {
-        let home = std::env::var_os("DSH_HOME")
-            .map(PathBuf::from)
-            .or_else(|| dirs::home_dir().map(|path| path.join(".deepseek-harness")))
-            .unwrap_or_else(|| PathBuf::from("."));
-        home.join("native-ui-preferences.json")
+        dsh_home().join("native-ui-preferences.json")
+    }
+
+    /// Returns the directory user theme packs are installed in.
+    ///
+    /// Resolution follows the same `DSH_HOME` and home-directory rule as
+    /// [`Self::config_path`], so both files live in one client data directory.
+    pub fn themes_path() -> PathBuf {
+        dsh_home().join("themes")
     }
 
     /// Loads and validates a preferences file, using defaults only when it is absent.
