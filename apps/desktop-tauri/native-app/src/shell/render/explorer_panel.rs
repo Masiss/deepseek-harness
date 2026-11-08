@@ -23,40 +23,13 @@ pub(crate) fn tree_and_preview(
         app.selected_session.as_deref(),
         single_pane,
     );
-    let mut column = div()
-        .flex()
-        .flex_col()
-        .size_full()
-        .min_h(px(0.))
-        .child(header(theme, transport.is_some(), cx))
-        .child(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(theme.sp(4.))
-                .px(theme.sp(10.))
-                .pb(theme.sp(6.))
-                .child(
-                    div()
-                        .text_size(theme.fs(10.))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child("Read only"),
-                )
-                .child(
-                    div()
-                        .text_size(theme.fs(10.))
-                        .text_color(theme.muted)
-                        .child("· scoped to this Session’s workspace"),
-                ),
-        )
-        .child(widgets::separator(theme));
+    let mut column = div().flex().flex_col().size_full().min_h(px(0.));
 
     if app.explorer.session().is_none() {
         return column
             .child(padded_note(
                 theme,
-                "Select a Session to browse its workspace.",
+                "Select a Session to browse its workspace (read only).",
             ))
             .into_any_element();
     }
@@ -82,13 +55,40 @@ pub(crate) fn tree_and_preview(
     let filter = app.text_field("explorer-query", "Filter files", false, cx);
     column = column.child(
         div()
-            .px(theme.sp(10.))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(theme.sp(4.))
+            .px(theme.sp(8.))
+            .pt(theme.sp(8.))
             .pb(theme.sp(4.))
-            .child(crate::shell::text_input::text_input_element(
-                &filter,
-                theme,
-                theme.sp(160.),
-            )),
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .child(crate::shell::text_input::text_input_element(
+                        &filter,
+                        theme,
+                        theme.control_height() - px(2.),
+                    )),
+            )
+            .child(
+                widgets::Button::new(theme, "↻")
+                    .enabled(transport.is_some())
+                    .build()
+                    .id("explorer-refresh")
+                    .debug_selector(|| "explorer-refresh".to_owned())
+                    .tooltip(widgets::HintView::tooltip(
+                        theme,
+                        "Read only · scoped to this Session’s workspace",
+                    ))
+                    .on_click(cx.listener(|app, _, _, cx| {
+                        if let Some(transport) = app.transport.clone() {
+                            app.explorer.refresh_root(&transport);
+                        }
+                        cx.notify();
+                    })),
+            ),
     );
     let mut tree = div()
         .flex()
@@ -205,36 +205,6 @@ pub(crate) fn fullscreen(
                         .min_w(px(0.))
                         .min_h(px(0.))
                         .child(preview(app, theme, app.transport.is_some(), cx))
-                })),
-        )
-        .into_any_element()
-}
-
-fn header(theme: &Theme, connected: bool, cx: &mut Context<DesktopApp>) -> AnyElement {
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .justify_between()
-        .px(theme.sp(10.))
-        .pt(theme.sp(10.))
-        .pb(theme.sp(4.))
-        .child(
-            div()
-                .text_size(theme.fs(13.))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .child("Workspace Explorer"),
-        )
-        .child(
-            widgets::Button::new(theme, "↻")
-                .enabled(connected)
-                .build()
-                .id("explorer-refresh")
-                .on_click(cx.listener(|app, _, _, cx| {
-                    if let Some(transport) = app.transport.clone() {
-                        app.explorer.refresh_root(&transport);
-                    }
-                    cx.notify();
                 })),
         )
         .into_any_element()
