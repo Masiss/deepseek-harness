@@ -34,8 +34,11 @@ import type {
   GitCommitEntry,
   GitCommitRequest,
   GitCommitValue,
+  GitConflictStage,
+  GitConflictValue,
   GitDiffRequest,
   GitDiffValue,
+  GitDiscardUntrackedValue,
   GitFileSideStats,
   GitFileStats,
   GitLogRequest,
@@ -50,9 +53,15 @@ import type {
   GitRebaseRequest,
   GitRemoteOperation,
   GitRemoteValue,
+  GitResolveRequest,
+  GitResolveValue,
   GitRevertRequest,
   GitShowRequest,
   GitShowValue,
+  GitStashAction,
+  GitStashEntry,
+  GitStashRequest,
+  GitStashValue,
   GitStatusValue,
   GitWorkspaceScope,
 } from './types.ts'
@@ -416,6 +425,65 @@ export function parseGitLog(output: string): GitCommitEntry[] {
     })
   }
   return commits
+}
+
+/** One `git stash list` record: entry ref, commit id, ISO 8601 save time, and subject. */
+const STASH_FORMAT = ['%gd', '%H', '%cI', '%s'].join('%x00') + '%x1e'
+
+/** Largest stash message this verb records, in UTF-8 bytes. */
+const STASH_MESSAGE_MAX_BYTES = 1024
+
+/**
+ * Parse the records `STASH_FORMAT` produces, newest first.
+ * @param output - complete stdout of the stash list command.
+ * @returns one entry per record, numbered by the `stash@{index}` ref git reports.
+ * @throws Error when a record is truncated or its ref is not a stash entry, which indicates incomplete output.
+ */
+export function parseGitStashList(output: string): GitStashEntry[] {
+  const entries: GitStashEntry[] = []
+  for (const raw of output.split(LOG_RECORD_SEPARATOR)) {
+    const record = raw.replace(/^\n/, '')
+    if (record.trim().length === 0) continue
+    const [ref, oid, time, message] = record.split(LOG_FIELD_SEPARATOR)
+    if (ref === undefined || oid === undefined || time === undefined || message === undefined) {
+      throw new Error(`truncated git stash record: ${record}`)
+    }
+    const index = /^stash@\{(\d+)\}$/.exec(ref)?.[1]
+    if (index === undefined || !/^[0-9a-f]{40,64}$/i.test(oid)) {
+      throw new Error(`malformed git stash record: ${record}`)
+    }
+    entries.push({ index: Number(index), oid, message, time })
+  }
+  return entries
+}
+
+/**
+ * Parse the stage numbers `git ls-files -u -z` records for one path.
+ * @param output - complete NUL-separated stdout of the unmerged listing.
+ * @returns the stages present, in git's order; empty when no record names the path.
+ */
+function unmergedStages(output: string): number[] {
+  const stages: number[] = []
+  for (const record of output.split('\0')) {
+    if (record.length === 0) continue
+    // `<mode> <object id> <stage>\t<path>`
+    stages.push(Number(record.slice(record.lastIndexOf(' ') + 1, record.indexOf('\t'))))
+  }
+  return stages
+}
+
+/** Map one nonzero `git stash` exit to the refusal its caller can act on. */
+function stashRefusal(action: GitStashAction, result: GitRunResult): RemoteError {
+  return new RemoteError(
+    'git/stash-refused',
+    `git stash ${action} failed: ${result.stderr.trim() || `exit ${result.exitCode}`}`,
+    { action },
+  )
+}
+
+/* v8 ignore next 3 -- closed-union backstop after generated Remote validation */
+function assertNever(value: never): never {
+  throw new Error(`unreachable git stash action: ${JSON.stringify(value)}`)
 }
 
 /**
@@ -1021,6 +1089,166 @@ export class GitCommands {
     }
   }
 
+  /**
+   * List, save, apply, pop, or drop one stash entry.
+   *
+   * `save` runs `git stash push`, adding `-u` for untracked files but never
+   * ignored ones; the remaining actions address `stash@{index}`. Entries and
+   * the summary are capped at the configured byte limit and the result says
+   * when it truncated.
+   * @param root - Session workspace root inside the repository.
+   * @param request - action, and the message, untracked flag, or entry number that action reads.
+   * @param signal - caller cancellation.
+   * @returns the listed entries, or git's own summary of the mutation.
+   */
+  async stash(root: string, request: GitStashRequest, signal: AbortSignal): Promise<GitStashValue> {
+    switch (request.action) {
+      case 'list': {
+        const result = requireSuccess(
+          await this.repo(root, ['stash', 'list', `--format=${STASH_FORMAT}`], signal),
+          'git stash list',
+        )
+        const entries: GitStashEntry[] = []
+        let bytes = 0
+        for (const entry of parseGitStashList(result.stdout)) {
+          const size = Buffer.byteLength(JSON.stringify(entry), 'utf8')
+          if (bytes + size > this.maxOutputBytes) return { action: 'list', entries, summary: '', truncated: true }
+          bytes += size
+          entries.push(entry)
+        }
+        return { action: 'list', entries, summary: '', truncated: false }
+      }
+      case 'save': {
+        const message = request.message?.trim() ?? ''
+        if (request.message !== undefined) {
+          if (message.length === 0) {
+            throw new RemoteError('git/stash-refused', 'stash message is blank', { action: 'save' })
+          }
+          const bytes = Buffer.byteLength(message, 'utf8')
+          if (bytes > STASH_MESSAGE_MAX_BYTES) {
+            throw new RemoteError(
+              'git/stash-refused',
+              `stash message exceeds ${STASH_MESSAGE_MAX_BYTES} bytes`,
+              { action: 'save' },
+            )
+          }
+        }
+        const result = await this.repo(root, [
+          'stash', 'push',
+          ...(message.length === 0 ? [] : ['-m', message]),
+          ...(request.includeUntracked === true ? ['-u'] : []),
+        ], signal)
+        if (result.exitCode !== 0) throw stashRefusal('save', result)
+        const summary = truncateUtf8(result.stdout.trim() || result.stderr.trim(), this.maxOutputBytes)
+        return { action: 'save', entries: [], summary: summary.text, truncated: summary.truncated }
+      }
+      case 'apply':
+      case 'pop':
+      case 'drop': {
+        const index = request.index ?? 0
+        if (!Number.isSafeInteger(index) || index < 0) {
+          throw new RemoteError('gateway/bad-request', 'stash index must be a non-negative safe integer', {})
+        }
+        const result = await this.repo(root, ['stash', request.action, `stash@{${index}}`], signal)
+        if (result.exitCode !== 0) throw stashRefusal(request.action, result)
+        const summary = truncateUtf8(result.stdout.trim() || result.stderr.trim(), this.maxOutputBytes)
+        return { action: request.action, entries: [], summary: summary.text, truncated: summary.truncated }
+      }
+      /* v8 ignore next -- closed stash-action union, already validated by the generated Remote codec. */
+      default:
+        return assertNever(request.action)
+    }
+  }
+
+  /**
+   * Read one unmerged path's merge base and both sides from the index stages.
+   * @param root - Session workspace root inside the repository.
+   * @param request - unmerged path.
+   * @param signal - caller cancellation.
+   * @returns each stage's text, null for a stage the index does not hold.
+   */
+  async conflict(root: string, request: GitPathRequest, signal: AbortSignal): Promise<GitConflictValue> {
+    const path = repoPath(request.path)
+    const stages = await this.conflictStages(root, path, signal)
+    if (stages.length === 0) {
+      throw new RemoteError('git/path-refused', `"${path}" is not an unmerged path`, { path })
+    }
+    const truncated: GitConflictStage[] = []
+    const side = async (stage: GitConflictStage, number: number): Promise<string | null> => {
+      if (!stages.includes(number)) return null
+      const result = requireSuccess(await this.repo(root, ['show', `:${number}:${path}`], signal), `git show :${number}:`)
+      const text = truncateUtf8(result.stdout, this.maxDiffBytes)
+      if (text.truncated) truncated.push(stage)
+      return text.text
+    }
+    const base = await side('base', 1)
+    const ours = await side('ours', 2)
+    const theirs = await side('theirs', 3)
+    return { path, base, ours, theirs, truncated }
+  }
+
+  /**
+   * Keep one side of an unmerged path and stage the result.
+   * @param root - Session workspace root inside the repository.
+   * @param request - unmerged path and the side to keep.
+   * @param signal - caller cancellation.
+   * @returns the settled path and side.
+   */
+  async resolve(root: string, request: GitResolveRequest, signal: AbortSignal): Promise<GitResolveValue> {
+    const path = repoPath(request.path)
+    const stages = await this.conflictStages(root, path, signal)
+    if (stages.length === 0) {
+      throw new RemoteError('git/path-refused', `"${path}" is not an unmerged path`, { path })
+    }
+    const stage = request.side === 'ours' ? 2 : 3
+    if (!stages.includes(stage)) {
+      throw new RemoteError('git/path-refused', `"${path}" has no ${request.side} side`, { path })
+    }
+    const flag = request.side === 'ours' ? '--ours' : '--theirs'
+    requireSuccess(await this.repo(root, ['checkout', flag, '--', path], signal), `git checkout ${flag}`)
+    requireSuccess(await this.repo(root, ['add', '--', path], signal), 'git add')
+    return { path, side: request.side }
+  }
+
+  /**
+   * Delete one untracked file.
+   *
+   * `git clean -f` never removes ignored content, and the verb passes no `-d` so
+   * an untracked directory stays; a path git collapsed into `dir/` is refused
+   * because deleting it would remove the directory too.
+   * @param root - Session workspace root inside the repository.
+   * @param request - path with an untracked change and its stale-review guard.
+   * @param signal - caller cancellation.
+   * @returns the deleted path.
+   */
+  async discardUntracked(
+    root: string,
+    request: GitPathRequest,
+    signal: AbortSignal,
+  ): Promise<GitDiscardUntrackedValue> {
+    if (request.path.endsWith('/')) {
+      throw new RemoteError(
+        'git/path-refused',
+        `"${request.path}" is an untracked directory, not a file`,
+        { path: request.path },
+      )
+    }
+    const path = repoPath(request.path)
+    const change = await this.changeOf(root, path, signal)
+    if (request.expectedStatus !== undefined && change.status !== request.expectedStatus) {
+      throw new RemoteError(
+        'git/path-refused',
+        `"${path}" changed from ${request.expectedStatus} to ${change.status} since review`,
+        { path },
+      )
+    }
+    if (change.status !== 'untracked') {
+      throw new RemoteError('git/path-refused', `"${path}" is not an untracked path`, { path })
+    }
+    requireSuccess(await this.repo(root, ['clean', '-f', '--', path], signal), 'git clean')
+    return { path }
+  }
+
   private async remote(
     root: string,
     args: readonly string[],
@@ -1049,6 +1277,15 @@ export class GitCommands {
       throw new RemoteError('git/path-refused', `"${path}" is not a currently changed path`, { path })
     }
     return change
+  }
+
+  /** Stage numbers the index holds for one path; empty when it is not unmerged. */
+  private async conflictStages(root: string, path: string, signal: AbortSignal): Promise<number[]> {
+    const result = requireSuccess(
+      await this.repo(root, ['ls-files', '-u', '-z', '--', path], signal),
+      'git ls-files',
+    )
+    return unmergedStages(result.stdout)
   }
 
   private async changeSet(root: string, signal: AbortSignal): Promise<GitStatusValue> {
@@ -1428,5 +1665,69 @@ export class GitController extends TypertRemoteService {
   @Remote('abortOperation')
   abortOperation(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitOperationValue> {
     return this.commands.abortOperation(gitWorkspaceScope.workspaceRoot, signal)
+  }
+
+  /**
+   * List, save, apply, pop, or drop one stash entry.
+   * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+   * @param request - action, and the message, untracked flag, or entry number that action reads.
+   * @param signal - caller cancellation.
+   * @returns the listed entries, or git's own summary of the mutation.
+   */
+  @Remote('stash')
+  stash(
+    gitWorkspaceScope: GitWorkspaceScope,
+    request: GitStashRequest,
+    signal: AbortSignal,
+  ): Promise<GitStashValue> {
+    return this.commands.stash(gitWorkspaceScope.workspaceRoot, request, signal)
+  }
+
+  /**
+   * Read one unmerged path's merge base and both sides.
+   * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+   * @param request - unmerged path.
+   * @param signal - caller cancellation.
+   * @returns each index stage's text, null for a stage the index does not hold.
+   */
+  @Remote('conflict')
+  conflict(
+    gitWorkspaceScope: GitWorkspaceScope,
+    request: GitPathRequest,
+    signal: AbortSignal,
+  ): Promise<GitConflictValue> {
+    return this.commands.conflict(gitWorkspaceScope.workspaceRoot, request, signal)
+  }
+
+  /**
+   * Keep one side of an unmerged path and stage the result.
+   * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+   * @param request - unmerged path and the side to keep.
+   * @param signal - caller cancellation.
+   * @returns the settled path and side.
+   */
+  @Remote('resolve')
+  resolve(
+    gitWorkspaceScope: GitWorkspaceScope,
+    request: GitResolveRequest,
+    signal: AbortSignal,
+  ): Promise<GitResolveValue> {
+    return this.commands.resolve(gitWorkspaceScope.workspaceRoot, request, signal)
+  }
+
+  /**
+   * Delete one untracked file.
+   * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+   * @param request - path with an untracked change and its stale-review guard.
+   * @param signal - caller cancellation.
+   * @returns the deleted path.
+   */
+  @Remote('discardUntracked')
+  discardUntracked(
+    gitWorkspaceScope: GitWorkspaceScope,
+    request: GitPathRequest,
+    signal: AbortSignal,
+  ): Promise<GitDiscardUntrackedValue> {
+    return this.commands.discardUntracked(gitWorkspaceScope.workspaceRoot, request, signal)
   }
 }

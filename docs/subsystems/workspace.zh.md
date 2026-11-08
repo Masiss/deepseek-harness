@@ -416,6 +416,42 @@ Host service backing the generated `ctx.remote.git` namespace.
  * @returns the restored operation state.
  */
 @Remote('abortOperation') abortOperation(gitWorkspaceScope: GitWorkspaceScope, signal: AbortSignal): Promise<GitOperationValue>
+
+/**
+ * List, save, apply, pop, or drop one stash entry.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param request - action, and the message, untracked flag, or entry number that action reads.
+ * @param signal - caller cancellation.
+ * @returns the listed entries, or git's own summary of the mutation.
+ */
+@Remote('stash') stash( gitWorkspaceScope: GitWorkspaceScope, request: GitStashRequest, signal: AbortSignal, ): Promise<GitStashValue>
+
+/**
+ * Read one unmerged path's merge base and both sides.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param request - unmerged path.
+ * @param signal - caller cancellation.
+ * @returns each index stage's text, null for a stage the index does not hold.
+ */
+@Remote('conflict') conflict( gitWorkspaceScope: GitWorkspaceScope, request: GitPathRequest, signal: AbortSignal, ): Promise<GitConflictValue>
+
+/**
+ * Keep one side of an unmerged path and stage the result.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param request - unmerged path and the side to keep.
+ * @param signal - caller cancellation.
+ * @returns the settled path and side.
+ */
+@Remote('resolve') resolve( gitWorkspaceScope: GitWorkspaceScope, request: GitResolveRequest, signal: AbortSignal, ): Promise<GitResolveValue>
+
+/**
+ * Delete one untracked file.
+ * @param gitWorkspaceScope - header-derived workspace root for the Session identity on the wire.
+ * @param request - path with an untracked change and its stale-review guard.
+ * @param signal - caller cancellation.
+ * @returns the deleted path.
+ */
+@Remote('discardUntracked') discardUntracked( gitWorkspaceScope: GitWorkspaceScope, request: GitPathRequest, signal: AbortSignal, ): Promise<GitDiscardUntrackedValue>
 ```
 
 Source: [`packages/api/workspace-controller/src/git.ts`](../../packages/api/workspace-controller/src/git.ts)

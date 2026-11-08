@@ -65,7 +65,11 @@ Documents 查询占用注册表变更队列，因此其他 Workspace 变更（�
 
 `git/state` 返回进行中的 merge、rebase、cherry-pick 或 revert 及未合并路径。`git/merge` 把一个已存在的本地分支并入当前分支，`git/rebase` 把当前分支重放到该分支上，`git/cherryPick` 应用一个 commit id，`git/revert` 撤销一个 commit。它们都返回结果状态，因此冲突保持可见而不是变成错误。`git/continueOperation` 与 `git/abortOperation` 推进或回退进行中的 merge、rebase、cherry-pick 或 revert；编辑冲突文件并暂存仍由调用方完成。
 
-每个动词都在调用方 signal 以及 `gitTimeoutMs` 或 `gitNetworkTimeoutMs` 约束下以无 shell 方式运行 `git`。不在仓库内的目录返回 `git/not-repository`；缺少可执行文件返回 `git/unavailable`；路径在仓库外或不适用于该动词返回 `git/path-refused`；其他非零退出返回 `git/command-failed`，消息中带有 git 的 stderr；被拒绝的提交返回 `git/commit-refused`；被拒绝的补丁返回 `git/apply-refused` 并带上 git 自身的诊断；被拒绝的 merge、rebase、cherry-pick、revert、continue 或 abort 返回 `git/operation-refused`。
+`git/conflict` 读取单个未合并路径的三个索引阶段：`git ls-files -u` 列出实际存在的阶段，每个存在的阶段再用 `git show :<stage>:<path>` 读取，因此结果携带 `base`、`ours` 和 `theirs`（阶段 1、2、3），索引没有的阶段为 `null`（delete/modify 冲突只有两个），被 `gitMaxDiffBytes` 截断的侧列入结果。不是未合并状态的路径返回 `git/path-refused`。`git/resolve` 用 `git checkout --ours|--theirs -- <path>` 保留一侧，再用 `git add` 暂存；路径在仓库外、不在未合并状态、或索引没有所请求的一侧都返回 `git/path-refused`。`git/discardUntracked` 用 `git clean -f -- <path>` 删除一个未跟踪文件：它从不触碰被忽略的内容，也不传 `-d`，因此不删除目录；git 报告为未跟踪目录的路径返回 `git/path-refused`，已跟踪路径和过期的 `expectedStatus` 同样如此。
+
+`git/stash` 执行五种动作之一。`list` 把 `git stash list` 读成由新到旧的条目——条目编号、提交 id、ISO 8601 保存时间与 subject——超过 `gitMaxOutputBytes` 的列表丢弃最旧条目并标记 `truncated`。`save` 执行 `git stash push`，记录 `message`，`includeUntracked` 时追加 `-u` 而绝不追加 `-a`，因此被忽略的文件保留；空消息或超过 1024 字节的消息返回 `git/stash-refused`。`apply`、`pop` 和 `drop` 作用于 `stash@{index}`，`index` 默认 0，负数或小数返回 `gateway/bad-request`，git 没有的条目返回 `git/stash-refused` 并带上 git 的 stderr。每个结果都回显 `action`，携带列出的 `entries` 或受 `gitMaxOutputBytes` 限制的 git 自身 `summary`，并报告 `truncated`。
+
+每个动词都在调用方 signal 以及 `gitTimeoutMs` 或 `gitNetworkTimeoutMs` 约束下以无 shell 方式运行 `git`。不在仓库内的目录返回 `git/not-repository`；缺少可执行文件返回 `git/unavailable`；路径在仓库外、未变更、该动词需要的未合并状态缺失或其他不适用情形返回 `git/path-refused`；其他非零退出返回 `git/command-failed`，消息中带有 git 的 stderr；被拒绝的提交返回 `git/commit-refused`；被拒绝的补丁返回 `git/apply-refused` 并带上 git 自身的诊断；被拒绝的 merge、rebase、cherry-pick、revert、continue 或 abort 返回 `git/operation-refused`；被拒绝的 stash 动作返回 `git/stash-refused` 并带上 git 自身的诊断。
 
 -----
 
@@ -83,8 +87,8 @@ Documents 查询占用注册表变更队列，因此其他 Workspace 变更（�
 <a id="known-limitations-and-deferred-work"></a>
 
 - Git 动词执行 Host 的 `git` 可执行文件；没有它的 Host 返回 `git/unavailable`。远端动词依赖 Host 账户的 git credential helper 和 SSH agent；本包不保存凭据，也绝不强制 push。
-- 交互式 rebase 和自动冲突解决不在范围内：调用方编辑冲突文件、暂存后继续。
-- `git/discard` 永不删除未跟踪文件，也不解决冲突；这类请求返回 `git/path-refused`。
+- 交互式 rebase 不在范围内；冲突解决按路径、按侧进行：`git/resolve` 保留 ours 或 theirs，而逐 hunk 合并仍需调用方编辑文件并暂存。
+- `git/discard` 永不删除未跟踪文件，也不解决冲突；这类请求返回 `git/path-refused`。`git/discardUntracked` 只删除未跟踪文件——不删除目录、被忽略的文件或已跟踪路径。
 - `git/apply` 拒绝指向第二个路径或重命名的补丁，也拒绝未跟踪和冲突路径；这类请求返回 `git/apply-refused` 或 `git/path-refused`。
 - `git/show` 对 merge 提交不返回补丁；合并 diff 不在评审界面的范围内。
 - `follow()` 在重连后替换完整投影，不提供持久 cursor 或增量追赶协议。

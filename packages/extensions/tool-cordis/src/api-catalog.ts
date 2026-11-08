@@ -1713,6 +1713,30 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'signal', description: 'caller cancellation.' }],
         returns: 'the restored operation state.',
       },
+      {
+        signature: '@Remote(\'stash\') stash( gitWorkspaceScope: GitWorkspaceScope, request: GitStashRequest, signal: AbortSignal, ): Promise<GitStashValue>',
+        description: 'List, save, apply, pop, or drop one stash entry.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'action, and the message, untracked flag, or entry number that action reads.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the listed entries, or git\'s own summary of the mutation.',
+      },
+      {
+        signature: '@Remote(\'conflict\') conflict( gitWorkspaceScope: GitWorkspaceScope, request: GitPathRequest, signal: AbortSignal, ): Promise<GitConflictValue>',
+        description: 'Read one unmerged path\'s merge base and both sides.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'unmerged path.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'each index stage\'s text, null for a stage the index does not hold.',
+      },
+      {
+        signature: '@Remote(\'resolve\') resolve( gitWorkspaceScope: GitWorkspaceScope, request: GitResolveRequest, signal: AbortSignal, ): Promise<GitResolveValue>',
+        description: 'Keep one side of an unmerged path and stage the result.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'unmerged path and the side to keep.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the settled path and side.',
+      },
+      {
+        signature: '@Remote(\'discardUntracked\') discardUntracked( gitWorkspaceScope: GitWorkspaceScope, request: GitPathRequest, signal: AbortSignal, ): Promise<GitDiscardUntrackedValue>',
+        description: 'Delete one untracked file.',
+        parameters: [{ name: 'gitWorkspaceScope', description: 'header-derived workspace root for the Session identity on the wire.' }, { name: 'request', description: 'path with an untracked change and its stale-review guard.' }, { name: 'signal', description: 'caller cancellation.' }],
+        returns: 'the deleted path.',
+      },
     ],
   },
   {
@@ -6906,12 +6930,24 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GitCommitValue {\n    readonly commit: string;\n}',
   },
   {
+    name: 'GitConflictStage',
+    declaration: 'export type GitConflictStage = \'base\' | \'ours\' | \'theirs\';',
+  },
+  {
+    name: 'GitConflictValue',
+    declaration: 'export interface GitConflictValue {\n    readonly path: string;\n    readonly base: string | null;\n    readonly ours: string | null;\n    readonly theirs: string | null;\n    readonly truncated: readonly GitConflictStage[];\n}',
+  },
+  {
     name: 'GitDiffRequest',
     declaration: 'export interface GitDiffRequest extends GitPathRequest {\n    readonly staged: boolean;\n}',
   },
   {
     name: 'GitDiffValue',
     declaration: 'export interface GitDiffValue {\n    readonly path: string;\n    readonly staged: boolean;\n    readonly patch: string;\n    readonly truncated: boolean;\n    readonly untracked: boolean;\n}',
+  },
+  {
+    name: 'GitDiscardUntrackedValue',
+    declaration: 'export interface GitDiscardUntrackedValue {\n    readonly path: string;\n}',
   },
   {
     name: 'GitFileSideStats',
@@ -6970,6 +7006,18 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface GitRemoteValue {\n    readonly operation: GitRemoteOperation;\n    readonly summary: string;\n    readonly truncated: boolean;\n}',
   },
   {
+    name: 'GitResolveRequest',
+    declaration: 'export interface GitResolveRequest {\n    readonly path: string;\n    readonly side: GitResolveSide;\n}',
+  },
+  {
+    name: 'GitResolveSide',
+    declaration: 'export type GitResolveSide = Exclude<GitConflictStage, \'base\'>;',
+  },
+  {
+    name: 'GitResolveValue',
+    declaration: 'export interface GitResolveValue {\n    readonly path: string;\n    readonly side: GitResolveSide;\n}',
+  },
+  {
     name: 'GitRevertRequest',
     declaration: 'export interface GitRevertRequest {\n    readonly commit: string;\n}',
   },
@@ -6980,6 +7028,22 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'GitShowValue',
     declaration: 'export interface GitShowValue {\n    readonly commit: string;\n    readonly patch: string;\n    readonly truncated: boolean;\n}',
+  },
+  {
+    name: 'GitStashAction',
+    declaration: 'export type GitStashAction = \'list\' | \'save\' | \'apply\' | \'pop\' | \'drop\';',
+  },
+  {
+    name: 'GitStashEntry',
+    declaration: 'export interface GitStashEntry {\n    readonly index: number;\n    readonly oid: string;\n    readonly message: string;\n    readonly time: string;\n}',
+  },
+  {
+    name: 'GitStashRequest',
+    declaration: 'export interface GitStashRequest {\n    readonly action: GitStashAction;\n    readonly message?: string;\n    readonly includeUntracked?: boolean;\n    readonly index?: number;\n}',
+  },
+  {
+    name: 'GitStashValue',
+    declaration: 'export interface GitStashValue {\n    readonly action: GitStashAction;\n    readonly entries: readonly GitStashEntry[];\n    readonly summary: string;\n    readonly truncated: boolean;\n}',
   },
   {
     name: 'GitStatusValue',
