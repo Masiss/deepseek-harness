@@ -168,6 +168,14 @@ pub struct SessionControlBaseline {
     pub projections: BTreeMap<String, SessionProjectionBaseline>,
 }
 
+/// One projection key changed by a committed event.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionProjectionChange {
+    pub key: String,
+    pub val: Value,
+}
+
 /// One `session/control` frame.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase", rename_all_fields = "camelCase")]
@@ -177,9 +185,8 @@ pub enum SessionControlFrame {
     },
     Projection {
         session_id: String,
-        key: String,
-        value: Value,
         seq: i64,
+        changes: Vec<SessionProjectionChange>,
     },
 }
 
@@ -438,7 +445,8 @@ mod tests {
             send(
                 &mut socket,
                 serde_json::json!({"type":"item","streamId":open["streamId"],"value":{
-                    "type":"projection","sessionId":"s1","key":"title","value":"Hello","seq":9
+                    "type":"projection","sessionId":"s1","seq":9,
+                    "changes":[{"key":"title","val":"Hello"},{"key":"workingDirectory","val":null}]
                 }}),
             );
             send(
@@ -456,9 +464,17 @@ mod tests {
             stream.next().unwrap().unwrap(),
             SessionControlFrame::Projection {
                 session_id: "s1".into(),
-                key: "title".into(),
-                value: serde_json::json!("Hello"),
-                seq: 9
+                seq: 9,
+                changes: vec![
+                    SessionProjectionChange {
+                        key: "title".into(),
+                        val: serde_json::json!("Hello"),
+                    },
+                    SessionProjectionChange {
+                        key: "workingDirectory".into(),
+                        val: serde_json::Value::Null,
+                    },
+                ],
             }
         );
         worker.join().unwrap();

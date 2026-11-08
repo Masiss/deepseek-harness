@@ -36,6 +36,7 @@ export type Mode =
   | 'hygiene'
   | 'doc-sync'
   | 'doc-quick'
+  | 'i18n'
 
 type GateResultStatus = 'passed' | 'failed' | 'skipped'
 type GateState = 'pending' | 'running' | GateResultStatus
@@ -95,6 +96,9 @@ type ResultObserver = (result: GateResult) => void
 
 /** Worker cap of the documentation and hygiene aggregates, locally and in CI, whose leaves each build a full ts.Program. */
 const PROGRAM_MODE_CAP = 8
+
+/** CI pins this minor in .github/workflows/ci.yml; its compatibility leg owns the built CLI smoke. */
+export const BUILD_BACKED_NODE_COMPAT_VERSION = '24.9'
 
 const root = resolve(import.meta.dirname, '..')
 if (import.meta.main) {
@@ -167,11 +171,12 @@ function parseMode(raw: string | undefined): Mode {
     case 'check-all':
     case 'hygiene':
     case 'doc-sync':
+    case 'i18n':
     case 'doc-quick':
       return raw
     default:
       throw new Error(
-        `run-gates: expected mode ci-primary | ci-linux-primary | ci-static | ci-lint-contracts-ready | ci-coverage | ci-unit | ci-bench | ci-snapshot | ci-artifacts | ci-consumers | ci-windows-blocking | ci-windows-complete | ci-windows-observational-ready | node-compat | check-all | hygiene | doc-sync | doc-quick, got ${JSON.stringify(raw)}.`,
+        `run-gates: expected mode ci-primary | ci-linux-primary | ci-static | ci-lint-contracts-ready | ci-coverage | ci-unit | ci-bench | ci-snapshot | ci-artifacts | ci-consumers | ci-windows-blocking | ci-windows-complete | ci-windows-observational-ready | node-compat | check-all | hygiene | doc-sync | doc-quick | i18n, got ${JSON.stringify(raw)}.`,
       )
   }
 }
@@ -275,6 +280,17 @@ function ciBuildGate(id = 'build', options: Partial<Gate> = {}): Gate {
   })
 }
 
+/**
+ * Emit the artifacts every artifact consumer reads, without the aggregate
+ * test and script type checks that the master lanes own.
+ */
+function ciArtifactBuildGate(id = 'build', options: Partial<Gate> = {}): Gate {
+  return bunScript(id, 'build:artifacts', {
+    ...options,
+    env: { ...options.env, [CLIENT_BUILD_PROFILE_SELECTOR]: 'official' },
+  })
+}
+
 function bunExec(id: string, args: string[], options: Partial<Gate> = {}): Gate {
   return {
     id,
@@ -361,6 +377,8 @@ export function gatesForMode(selected: Mode): Gate[] {
       return docSyncLeafGates()
     case 'doc-quick':
       return docQuickLeafGates()
+    case 'i18n':
+      return i18nGates(true)
   }
 }
 
@@ -383,12 +401,21 @@ function ciSharedStaticGates(): Gate[] {
   ]
 }
 
+function i18nGates(includeDictionaries: boolean): Gate[] {
+  return [
+    bunScript('installer-locales', 'verify-installer-locales', { label: 'Windows installer locales' }),
+    bunScript('locale-metadata', 'verify-locale-metadata', { label: 'plugin locale metadata' }),
+    ...includeDictionaries ? [bunExec('locale-dictionaries', ['vitest', 'run', 'scripts/locale-dictionary-parity.spec.ts', 'scripts/shipped-locales.spec.ts', 'packages/client/locale/tests/apply.client.spec.ts'], { label: 'locale dictionaries' })] : [],
+  ]
+}
+
 function sharedHygieneGates(): Gate[] {
   return [
     bunScript('optional-dependency-imports', 'verify-optional-dependency-imports', {
       label: 'optional dependency imports',
     }),
     bunScript('client-packages', 'verify-client-packages', { label: 'client packages' }),
+    ...i18nGates(false),
     bunScript('client-ui-i18n', 'verify-client-ui-i18n', { label: 'client UI i18n' }),
     bunScript('client-route-resolution', 'verify-client-route-resolution', { label: 'client route resolution' }),
     bunScript('no-bare-dispatcher', 'verify-no-bare-dispatcher', { label: 'proxy-aware dispatchers' }),
@@ -430,7 +457,7 @@ function nodeCompatGates(): Gate[] {
   const typecheck = flagEnabled('DSH_NODE_COMPAT_SKIP_TYPECHECK')
     ? []
     : [bunScript('typecheck', 'typecheck')]
-  if (runningNodeMajor() !== 22) {
+  if (!process.versions.node.startsWith(`${BUILD_BACKED_NODE_COMPAT_VERSION}.`)) {
     return [...typecheck, ...nodeCompatSmokeGates()]
   }
   return [
@@ -453,6 +480,7 @@ function nodeCompatSmokeGates(options: { cliSmoke?: boolean } = {}): Gate[] {
       'packages/session/session-persistence-jsonl/tests/zstd.compat.spec.ts',
       'apps/cli/tests/source-launch.compat.spec.ts',
       'scripts/vitest-environment.compat.spec.ts',
+      'scripts/command-entrypoints.compat.spec.ts',
       'packages/boot/app-boot/tests/profile-resolution.spec.ts',
       'packages/boot/app-boot/tests/profile-resolution-service.spec.ts',
       'packages/boot/app-boot/tests/profile-resolution-worker-bootstrap.spec.ts',
@@ -474,15 +502,6 @@ function nodeCompatSmokeGates(options: { cliSmoke?: boolean } = {}): Gate[] {
     )
   }
   return gates
-}
-
-/** Active Node major used to select version-specific compatibility checks. */
-function runningNodeMajor(): number {
-  const major = Number.parseInt(process.versions.node.split('.')[0] ?? '', 10)
-  if (!Number.isSafeInteger(major)) {
-    throw new Error(`run-gates: cannot parse Node version ${JSON.stringify(process.versions.node)}.`)
-  }
-  return major
 }
 
 function ciStaticGates(options: { ownsBuild: boolean }): Gate[] {
@@ -523,7 +542,6 @@ function ciConsumerGates(): Gate[] {
   // writer starts; `after` preserves the web diagnostic even if a reader fails.
   const buildArtifactReaders = [
     'publint',
-    'lint-and-duplication',
     'snapshot',
     'expected-output',
     'doc-typecheck',
@@ -531,16 +549,12 @@ function ciConsumerGates(): Gate[] {
     'built-bin-smoke',
   ]
   return [
-    ciBuildGate(),
+    ciArtifactBuildGate(),
     bunScript('node-compat', 'check:node-compat', {
       label: 'Node compatibility',
       env: { [CLIENT_BUILD_PROFILE_SELECTOR]: 'official' },
     }),
     bunScript('publint', 'publint', { needs: builtTree }),
-    bunScript('lint-and-duplication', 'check:ci:lint:contracts-ready', {
-      label: 'lint and duplication',
-      needs: builtTree,
-    }),
     snapshotGate(builtTree),
     expectedOutputGate(builtTree),
     webSnapshotGate(builtTree, buildArtifactReaders),
@@ -824,7 +838,11 @@ function docSyncLeafGates(options: {
       : [bunScript('doc-typecheck', options.docTypecheckScript ?? 'doc-typecheck', docTypecheckOptions)],
     bunScript('docs-site-build', options.docsBuildScript ?? 'docs:build', { label: 'documentation build' }),
     bunScript('doc-graphs', 'verify-doc-graphs', { label: 'doc graphs' }),
-    bunScript('cli-help', 'verify-cli-help', { label: 'CLI help reference' }),
+    bunScript('cli-help', 'verify-cli-help', {
+      label: 'CLI help reference',
+      // Other gate workers already run beside this leaf; direct help generation keeps its own worker budget.
+      env: { DSH_CLI_HELP_CONCURRENCY: process.env.DSH_CLI_HELP_CONCURRENCY || '1' },
+    }),
     bunScript('markdown-links', 'verify-md-links', { label: 'markdown links', quick: true }),
     bunScript('type-equivalence', 'verify-type-equiv', { label: 'type equivalence', quick: true }),
     bunScript('cordis-catalog', 'verify-cordis-catalog', { label: 'cordis catalog' }),
@@ -870,6 +888,7 @@ function docSyncLeafGates(options: {
       'website/tests/mermaid-viewer.spec.ts',
       'website/tests/image-viewer.spec.ts',
       'website/tests/code-groups.spec.ts',
+      'website/tests/table-filter.spec.ts',
       'website/tests/page-markdown-actions.spec.ts', 'website/tests/raw-markdown.spec.ts',
     ], {
       label: 'documentation site checks',
@@ -904,7 +923,7 @@ function builtBinSmokeGate(needs: string[] = ['build']): Gate {
     'packages/subagent/subagent-codex/tests/loader-composition.e2e.ts',
     'packages/subagent/subagent-claude-code/tests/loader-composition.e2e.ts',
     'packages/api/remotes/tests/built-lib.e2e.ts',
-    'packages/experimental/agent-team/tests/built-lib.e2e.ts',
+    'packages/team/agent-team/tests/built-lib.e2e.ts',
     // Built execution consumers: the only automated proof that package-name
     // imports reach their lib/ entrypoints under plain Node. The e2e lane runs
     // unbuilt, so these files self-skip there.

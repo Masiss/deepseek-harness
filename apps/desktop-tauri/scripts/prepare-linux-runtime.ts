@@ -43,7 +43,7 @@ import {
 import { DESKTOP_HOST_PROTOCOL_VERSION } from '../../desktop/src/host-protocol.ts'
 import { createPluginProfile, createRuntimeProjectMetadata } from '../../desktop/src/project-manager.ts'
 import { parseDesktopRelease } from '../../desktop/src/release.ts'
-import { resolveDesktopTargetBuildPaths } from '../../desktop/scripts/desktop-build-paths.mjs'
+import { desktopTargetPlatform, resolveDesktopTargetBuildPaths } from '../../desktop/scripts/desktop-build-paths.mjs'
 import { prepareDesktopPackageSet } from '../../desktop/scripts/prepare-package-set.ts'
 import { prepareRuntimePatches, verifyRuntimePatches } from '../../desktop/scripts/prepare-runtime-patches.ts'
 import { desktopRuntimeFileExclusion } from '../../desktop/scripts/runtime-file-policy.ts'
@@ -196,7 +196,7 @@ async function main(): Promise<void> {
   }
 
   // 1. Select and copy the local tarball closure that supplies dsh itself.
-  prepareDesktopPackageSet([paths.packedDsh, paths.packedVendor, paths.packedLandlock], paths.packageSet)
+  prepareDesktopPackageSet([paths.packedDsh, paths.packedVendor, paths.packedLandlock], paths.packageSet, desktopTargetPlatform(name))
 
   // 2. Resolve the runtime project against the local tarballs only.
   const staging = join(paths.dshPnpm, 'staging')

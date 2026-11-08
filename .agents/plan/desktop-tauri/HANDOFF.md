@@ -1,24 +1,43 @@
 # Bàn giao — lane Desktop Tauri (fork `Masiss/deepseek-harness`)
 
-Cập nhật 2026-11-07. Mục đích: session mới đọc file này là biết đang ở đâu, cái gì đã xong, cái gì nên làm tiếp và bẫy nào đã mắc.
+Cập nhật 2026-11-08. Mục đích: session mới đọc file này là biết đang ở đâu, cái gì đã xong, cái gì nên làm tiếp và bẫy nào đã mắc.
 
 ## Định hướng 2026-11-08 — UI completion (đọc trước)
 
-Công việc mới nhất nằm ở worktree **`~/deepseek-harness-merge`**, nhánh **`merge/upstream-0.2.2`** (đã merge upstream `dsh-v0.2.2-rc.1`). Ở đó có handoff đầy đủ, AppImage trial đã cài tại `~/.local/bin/deepseek-harness`, full test suite xanh, và mục **"UI completion — đầu vào cho session sau"**.
+Bản mới nhất đã được **merge vào lane chính** (`chore/web-bun-migration`): Host `dsh-v0.2.2-rc.1`, gpui native, AppImage trial đã cài tại `~/.local/bin/deepseek-harness`. Worktree `~/deepseek-harness-merge` và branch `merge/upstream-0.2.2` đã được dọn sau khi merge; AppImage gốc giữ ở `~/.cache/dsh-artifacts/`.
 
-Nhánh này (`chore/web-bun-migration`) mới là lane chính trước merge; **chưa nhận** `merge/upstream-0.2.2`. Session sau lập plan hoàn thiện UI trên nhánh merge rồi mới quyết định merge ngược.
+Session sau lập plan **hoàn thiện UI** dựa trên mục "UI completion — đầu vào cho session sau" bên dưới.
 
 > **Đọc theo mốc thời gian.** Các mục ghi ngày ≤ 2026-11-01 mô tả shell **egui** mà ngày 2026-11-06 đã bị xoá (xem mục cuối). Chúng được giữ làm lịch sử quyết định và bẫy, không phải trạng thái hiện tại.
 
-## Trạng thái hiện tại — 2026-11-07
+## Trạng thái hiện tại — 2026-11-08
 
-Khối này là nguồn sự thật cho session mới; mọi mục bên dưới là lịch sử theo ngày.
+Khối này là nguồn sự thật cho session mới; mọi mục bên dưới là lịch sử theo ngày. **Session kế tiếp sẽ lập plan hoàn thiện UI** dựa trên mục "UI completion — đầu vào cho session sau".
 
-- Nhánh `chore/web-bun-migration`, working tree sạch, local **ahead 78 commit** so với `fork/chore/web-bun-migration` (**chưa push**). HEAD là commit `docs(desktop-native): hand off the C/D/E session state`.
-- Renderer duy nhất: **gpui 0.2.2**, bin `dsh-desktop-native-app`. Shell egui, `src/ui_harness.rs`, `egui_kittest`, `legacy-egui` và snapshot PNG đã bị xoá ngày 2026-11-06.
-- Gate hiện tại: `cargo test --locked --offline --manifest-path apps/desktop-tauri/native-app/Cargo.toml` = **191 pass / 1 ignored**; `client-core` = **104 + 8 + 11 pass**. Harness UI headless là `src/harness.rs` (`debug_bounds` + baseline `tests/snapshots/shell-*.txt`); gpui 0.2.2 **không có** accessibility tree hay pixel rasterize.
-- Đã chạy trên Hyprland thật với Home cô lập: AppImage gpui `host=ready` 1,4 s / `auth=ok` 1,5 s, cửa sổ render đủ nav rail, Sessions và bottom bar. RSS cây tiến trình idle ~**290–297 MiB** (gate < 300 MiB).
-- Đã xong 07/11: C3 (`session/delete` + UI hai bước), T08 (`expectedStatus` cho discard), D3 (tab buffer Agent, tối đa 6, đóng/chuyển), D4 (một trang Preferences), D5 (`maxWorkspaceTerminals`), D7 (test composition IME tự động ở state machine + harness), **D2 diagnostics** (chỉ server LSP user đã cấu hình/cài; panel bottom dock + jump-to-line). Còn mở thật sự: production signing/published-feed swap, physical-window pointer + visual review, Marketplace rollback. EXT-04 đã có test; `request_id` giữ nguyên không auto-retry (outcome unknown).
+- **Worktree**: `~/deepseek-harness` — nhánh `chore/web-bun-migration`, lane chính, đã nhận merge upstream `dsh-v0.2.2-rc.1`; chưa push. Worktree/branch merge cũ đã xoá; AppImage gốc giữ ở `~/.cache/dsh-artifacts/`.
+- **Nền**: Host `0.2.2-rc.1`; Node floor **>= 24.9**; Cordis 4.1.0 / Loader 1.1.0 / Include 1.1.0; pi-ai 1.3.0.
+- **Renderer duy nhất**: gpui 0.2.2, bin `dsh-desktop-native-app`; không Tauri/WebView/egui. Không có accessibility tree và không có pixel rasterize.
+- **Gate hiện tại**: `cargo test` native-app **194 pass / 1 ignored**; client-core **106 + 8 + 11**; `typecheck`, `build`, `lint`, `test:docs` 21/21, `test:expected` 144/144, `test:snapshot` 255/255 xanh. Full suite: `DSH_COVERAGE_TEST_TIMEOUT_MS=30000 bun run test` → **54.113 pass / 1 expected fail / 254 skip**, 0 fail.
+- **AppImage trial**: `DeepSeek-Harness-native-0.2.2-rc.1-x86_64.AppImage`, **90.257.912 B**, SHA-256 `224f68784a94f0e7d73ffaa39529d12b235bbf4df719b772d1dff6a2708dd520`, đã cài `~/.local/bin/deepseek-harness`. `appimage-probe.sh` và `size-gate.sh linux-x64` pass.
+- **UI status: chưa hoàn thiện.** Bản này là prototype chạy được với Host thật, không phải UI product-grade. Trong `PARITY.md` phần lớn màn hình vẫn `◐`: Sessions list/viewer, transcript projection, model picker, session management, Terminal UI, Settings UI, Plugin/Marketplace, Explorer, Document preview, Diagnostics, Goals/todo/plan, native layout, update UI, UI hardening, projection/control-stream UI.
+- **Session sau**: lập plan hoàn thiện UI; dùng AppImage đã cài để review tay từng màn hình. Chưa đụng lại release/signing.
+
+## UI completion — đầu vào cho session sau
+
+Chưa phải plan, chỉ là đầu vào để session sau chốt phạm vi.
+
+**Hiện trạng cần chấp nhận**: luồng chính đã nối Host (session, prompt, tool/approval, question, explorer, git, terminal, jobs, schedules, deliverables, settings, plugins/skills/marketplace, goals, diagnostics). Vấn đề là chất lượng UI/UX và parity, không phải thiếu backend.
+
+**Các nhóm cần rà và lập plan:**
+1. **Visual system**: typography, spacing, density, màu/contrast, icon set, corner radius, trạng thái hover/focus/disabled, nhất quán giữa các page.
+2. **Per-screen parity**: so từng màn hình native với prototype V2/Web; ghi rõ thiếu gì (control, dữ liệu, empty/loading/error, hành động).
+3. **Navigation/layout**: top bar, Explorer, Agent, Changes, bottom dock; responsive khi cửa sổ hẹp; rail/tab labels; session popover.
+4. **Interaction**: keyboard/focus/Esc, context menu, drag & drop, resize divider, double-click, IME; pointer-driven controls chưa được kiểm chứng trên compositor thật.
+5. **States**: onboarding, first-run, disconnected/retry, Host restart, empty session, long transcript, many sessions, Host offline.
+6. **Screens cần review tay trước**: Sessions, Composer, Settings, Explorer, Document preview, Marketplace/Plugins, Terminal, Diagnostics, buffer tabs.
+7. **Giới hạn đã biết**: buffer nền không giữ follow stream; diagnostics là snapshot/poll; timed `ask_user_question` chưa mount; Marketplace rollback chưa có RPC; update production chưa ký/phát hành.
+
+**Cách review gợi ý**: chạy `~/.local/bin/deepseek-harness`, chụp từng màn hình ở 1366×768 và 1920×1080, đối chiếu `DSH_UI_Handoff_v1.0/dsh-ui-prototype-v2.html`, ghi pass/fail + screenshot vào `PARITY.md` hoặc một file gap list mới.
 
 ## Native gpui port — 2026-10-31
 
@@ -532,3 +551,38 @@ Trạng thái nhánh: `chore/web-bun-migration`, **chưa push**, working tree s�
 - **Docs**: thêm khối "Trạng thái hiện tại" đầu `HANDOFF.md`, sửa §7b sang harness gpui, đánh dấu các mục lịch sử.
 - Gate đã chạy: `bun run typecheck` 5/5; `bun run lint` pass (1 warning có sẵn); `bun run test:docs` pass sau khi bỏ commit hash khỏi HANDOFF; `cargo test` native-app 188/1, client-core **104 + 8 + 11**; JSONL contract 190; git.host 79; plugin-manager 108.
 - Chưa làm: release/signing, physical-window pointer/visual review, Marketplace rollback.
+
+## Merge upstream `dsh-v0.2.2-rc.1` — 2026-11-08
+
+Worktree `/home/masis/deepseek-harness-merge`, nhánh **`merge/upstream-0.2.2`**, merge commit trên nền `upstream/master`. Đã merge vào `chore/web-bun-migration` ngày 2026-11-08; worktree/branch merge đã dọn.
+
+- **Nền mới**: upstream `0.2.2-rc.1`; Node floor **>= 24.9**; Cordis 4.1.0 / Loader 1.1.0 / Include 1.1.0; pi-ai 1.3.0. Đã khôi phục `patchedDependencies` cho các patch pnpm-only (oar, lexical, mdast, micromark) để Bun áp patch giống pnpm.
+- **Rust client**: `session/control` projection frame đổi sang `{seq, changes:[{key,val}]}`; `session/follow` bỏ `fromSeq` (Host 0.2.2 luôn mở ở log end) — native dùng snapshot + page và **reset transcript** khi phát hiện gap so với cache.
+- **Host shared packages**: C3/D2/D5/T08 được giữ trên API mới. `fs` bỏ `rename/remove`, dùng `patchText/moveFile/deleteFile`; `workspace-files` rename/delete được port sang `moveFile`/`deleteFile` (destination-exists map sang `FS_NOT_OBSERVED` → `workspace-file/already-exists`). LSP diagnostics giữ nguyên vì upstream không đổi.
+- **Liveshare**: bảng endpoint classification bổ sung các endpoint fork-only (`session/delete`, `diagnostics`, `diagnose`, `skills/setDisabled`, toàn bộ `git/*`, `workspaceFiles/{write,rename,delete,search,searchPaths}`) để policy Host và Client face khớp.
+- **Docs/tooling**: `AGENTS.md` tăng ceiling 2080 → 2140 (merge mang thêm rule upstream); regenerate `gen-cordis-catalog` cho LSP/session types; cập nhật test Bun cho `ci-workflow`, `compile-referenced-projects`, `desktop-build-paths`; `flock-entry` và test license-bundle resolve `pnpm` từ PATH thay vì `npm_execpath`.
+- **Gate đã chạy**: `bun run typecheck` 5/5; `bun run build` 10/10; `bun run lint`; `bun run test:docs` 21/21; `test:expected` 144/144; `test:snapshot` 255/255; targeted suites (session/persistence, api/session-controller, workspace-files, fs, lsp, terminal, liveshare) **4226 pass**; `cargo test` client-core 106+8+11, native-app 194/1.
+- **Full suite**: `DSH_COVERAGE_TEST_TIMEOUT_MS=30000 bun run test` → **54.113 pass / 1 expected fail / 254 skip**, 2.626 file. Fork chạy toàn bộ 54k test trên một host nên 5 s mặc định không đủ; env này là cơ chế sẵn có cho shared host. Đã sửa các lỗi thật: fixture `gh` dùng `exec sleep`, timeout riêng cho `forgePanel removed worktrees`, `pack.spec` tắt pnpm `verify-deps-before-run`, `partial-landlock` chấp nhận exit 1 hoặc 127, và nới CPU/wall budget của test wide-completion Python (vẫn chỉ assert O(depth), không phải speed).
+- **Chưa làm**: physical-window review sau merge; chưa quyết định native update channel `stable` (upstream đổi `latest` → `stable`); chưa rebase/merge branch này vào lane chính.
+
+## Local AppImage build from the merge branch — 2026-11-08
+
+Build bản thử nghiệm từ worktree `/home/masis/deepseek-harness-merge` (nhánh `merge/upstream-0.2.2`, Host `0.2.2-rc.1`):
+
+```sh
+cd ~/deepseek-harness-merge
+# Tận dụng primary runtime + Office component đã có ở lane chính để khỏi tải lại
+mkdir -p apps/desktop/.desktop-build/targets/linux-x64
+cp -a ../deepseek-harness/apps/desktop/.desktop-build/targets/linux-x64/{runtime,components} apps/desktop/.desktop-build/targets/linux-x64/
+bash apps/desktop-tauri/scripts/pack-linux.sh linux-x64
+bunx tsx apps/desktop-tauri/scripts/prepare-linux-runtime.ts linux-x64
+DSH_DESKTOP_SHELL=native bash apps/desktop-tauri/scripts/pack-appimage.sh linux-x64
+```
+
+Output dự kiến: `apps/desktop/.desktop-build/targets/linux-x64/appimage/DeepSeek-Harness-native-0.2.2-rc.1-x86_64.AppImage`. Sau khi build xong phải chạy `appimage-probe.sh` + `size-gate.sh linux-x64`, xác minh SHA-256 rồi mới cài nguyên tử vào `~/.local/bin/deepseek-harness` (không publish, không tag).
+
+Kết quả 2026-11-08: `DeepSeek-Harness-native-0.2.2-rc.1-x86_64.AppImage` **90.257.912 B**, SHA-256 `224f68784a94f0e7d73ffaa39529d12b235bbf4df719b772d1dff6a2708dd520`. `appimage-probe.sh` pass (`RESULT host=OK`, `bridge_status=idle`, `seeded_in_home=1`), `size-gate.sh linux-x64` pass (image 90.257.912 / 110.100.480; installed tree 309.971.655 / 419.430.400). Đã cài nguyên tử vào `~/.local/bin/deepseek-harness` (mode 0755).
+
+Bẫy build: cargo target của worktree merge làm đầy `/` (11 MB còn lại) ⇒ xoá `native-app/target` + `client-core/target` và symlink `native-app/target` sang target đã build ở lane chính để tái dùng dependency. Không commit bất kỳ thay đổi nào trong lúc `build:official`/`release:pack` chạy, vì `DSH_CLIENT_COMMIT_HASH` phải khớp HEAD.
+
+Lưu ý: build này là **local trial**, không phải release-qualified; update production vẫn chưa ký/phát hành.

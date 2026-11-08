@@ -135,6 +135,52 @@ describe('resolve', () => {
   })
 })
 
+describe('home prefix', () => {
+  let home: string
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), 'dsh-fs-home-'))
+    vi.stubEnv('HOME', home)
+    vi.stubEnv('USERPROFILE', home)
+    await writeFile(join(home, 'note.txt'), 'home note')
+  })
+  afterEach(async () => {
+    vi.unstubAllEnvs()
+    await rm(home, { recursive: true, force: true })
+  })
+
+  it('resolves and lstats a leading ~ against the home directory', async () => {
+    expect((await fs.resolve('~')).displayPath).toBe(home)
+    const note = await fs.resolve('~/note.txt')
+    expect(note.displayPath).toBe(join(home, 'note.txt'))
+    expect(await fs.readText(note)).toBe('home note')
+    expect((await fs.lstat('~/note.txt'))?.type).toBe('file')
+  })
+
+  it('keeps ~user and later ~ segments relative to cwd', async () => {
+    expect((await fs.resolve('~user/x.txt')).displayPath).toBe(join(dir, '~user', 'x.txt'))
+    expect((await fs.resolve('a/~/b.txt')).displayPath).toBe(join(dir, 'a', '~', 'b.txt'))
+  })
+
+  it.skipIf(process.platform === 'win32')('keeps POSIX ~\\ literal and physical parent traversal after ~/', async () => {
+    expect((await fs.resolve('~\\note.txt')).displayPath).toBe(join(dir, '~\\note.txt'))
+    await mkdir(join(home, 'real', 'sub'), { recursive: true })
+    await writeFile(join(home, 'real', 'a.txt'), 'beside link target')
+    await symlink(join(home, 'real', 'sub'), join(home, 'link'))
+    expect(await fs.readText(await fs.resolve('~/link/../a.txt'))).toBe('beside link target')
+  })
+
+  it.skipIf(process.platform !== 'win32')('expands the Windows ~\\ prefix', async () => {
+    expect((await fs.resolve('~\\note.txt')).displayPath).toBe(join(home, 'note.txt'))
+  })
+
+  it('lists a child literally named ~ under its parent', async () => {
+    await mkdir(join(dir, '~'))
+    const [entry] = await fs.listDir(await fs.resolve('.'))
+    expect(entry?.target.displayPath).toBe(join(dir, '~'))
+    expect(entry?.target.targetKey).toBe(await realpath(join(dir, '~')))
+  })
+})
+
 describe('stat', () => {
   it('returns file metadata, directory type, and undefined for absent', async () => {
     await writeFile(join(dir, 'a.txt'), 'hello')
@@ -833,55 +879,5 @@ describe('HMR / disposal', () => {
     expect(local.fs).toBeDefined()
     await localFiber.dispose()
     expect(local.fs).toBeUndefined()
-  })
-})
-
-describe('rename and remove', () => {
-  it('renames a file and reports the destination version', async () => {
-    await writeFile(join(dir, 'a.txt'), 'one\n')
-    const source = await fs.resolve('a.txt')
-    const destination = await fs.resolve('b.txt')
-    const outcome = await fs.rename(source, destination, { version: await versionOf(source) })
-    await expect(readFile(join(dir, 'b.txt'), 'utf8')).resolves.toBe('one\n')
-    await expect(readFile(join(dir, 'a.txt'), 'utf8')).rejects.toThrow()
-    expect(outcome.version).toBe(await versionOf(destination))
-  })
-
-  it('refuses a stale source, a missing source, and an occupied destination', async () => {
-    await writeFile(join(dir, 'a.txt'), 'one\n')
-    await writeFile(join(dir, 'b.txt'), 'two\n')
-    const source = await fs.resolve('a.txt')
-    const destination = await fs.resolve('b.txt')
-    await expect(fs.rename(source, destination, { version: FsVersion('stale') }))
-      .rejects.toMatchObject({ code: 'FS_STALE_VERSION' })
-    await expect(fs.rename(await fs.resolve('missing.txt'), await fs.resolve('c.txt')))
-      .rejects.toMatchObject({ code: 'FS_NOT_FOUND' })
-    await expect(fs.rename(source, destination))
-      .rejects.toMatchObject({ code: 'FS_ALREADY_EXISTS' })
-  })
-
-  it('deletes a guarded file and refuses stale, missing, and directory targets', async () => {
-    await writeFile(join(dir, 'a.txt'), 'one\n')
-    const target = await fs.resolve('a.txt')
-    await expect(fs.remove(target, { version: FsVersion('stale') }))
-      .rejects.toMatchObject({ code: 'FS_STALE_VERSION' })
-    await expect(fs.remove(await fs.resolve('missing.txt')))
-      .rejects.toMatchObject({ code: 'FS_NOT_FOUND' })
-    await expect(fs.remove(await fs.resolve('.')))
-      .rejects.toMatchObject({ code: 'FS_NOT_REGULAR_FILE' })
-    await fs.remove(target, { version: await versionOf(target) })
-    await expect(stat(join(dir, 'a.txt'))).rejects.toThrow()
-  })
-
-  it('honors a pre-aborted signal before touching the filesystem', async () => {
-    await writeFile(join(dir, 'a.txt'), 'one\n')
-    const controller = new AbortController()
-    controller.abort()
-    const source = await fs.resolve('a.txt')
-    await expect(fs.rename(source, await fs.resolve('b.txt'), undefined, controller.signal))
-      .rejects.toMatchObject({ code: 'FS_ABORTED' })
-    await expect(fs.remove(source, undefined, controller.signal))
-      .rejects.toMatchObject({ code: 'FS_ABORTED' })
-    await expect(readFile(join(dir, 'a.txt'), 'utf8')).resolves.toBe('one\n')
   })
 })

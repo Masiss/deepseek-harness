@@ -389,20 +389,40 @@ export class WorkspaceFiles extends TypertRemoteService {
     const { workspaceRoot } = workspaceFileScope
     const source = await this.ctx.fs.resolve(path, { cwd: workspaceRoot, signal })
     const target = await this.ctx.fs.resolve(destination, { cwd: workspaceRoot, signal })
+    // A move reports a missing or changed source as FS_STALE_VERSION, so probe
+    // first to keep the distinct not-found answer for an absent source.
+    const sourceInfo = await this.ctx.fs.stat(source, signal)
+    if (sourceInfo === undefined) {
+      throw new RemoteError('workspace-file/not-found', `no entry at "${path}"`, { path })
+    }
     const outcome = await this.mutation(
       path,
-      () => this.ctx.fs.rename(
+      () => this.ctx.fs.moveFile(
         source,
         target,
-        expectedVersion === undefined ? undefined : { version: expectedVersion as FsVersion },
+        {
+          ...(expectedVersion === undefined ? {} : { expectedSource: { version: expectedVersion as FsVersion } }),
+          expectedDestination: { kind: 'createIfAbsent' },
+        },
         signal,
       ),
+      destination,
     )
+    // The move publishes the destination before removing the source. A retained
+    // source is a partial failure, not a rename: report it instead of returning
+    // a success that leaves two copies of the file.
+    if (!outcome.sourceDeleted) {
+      throw new RemoteError(
+        'gateway/internal',
+        `"${path}" was published to "${destination}" but its source could not be removed: ${outcome.sourceFailure.message}`,
+        {},
+      )
+    }
     return {
       previousPath: path,
       path: destination,
       absolutePath: this.ctx.fs.processPath(target),
-      version: outcome.version,
+      version: outcome.destination.version,
     }
   }
 
@@ -427,9 +447,14 @@ export class WorkspaceFiles extends TypertRemoteService {
     const { workspaceRoot } = workspaceFileScope
     const target = await this.ctx.fs.resolve(path, { cwd: workspaceRoot, signal })
     const absolutePath = this.ctx.fs.processPath(target)
+    // deleteFile reports a missing target as FS_STALE_VERSION (the same answer
+    // as a changed one), so probe first to keep the distinct not-found answer.
+    if (await this.ctx.fs.stat(target, signal) === undefined) {
+      throw new RemoteError('workspace-file/not-found', `no entry at "${path}"`, { path })
+    }
     await this.mutation(
       path,
-      () => this.ctx.fs.remove(
+      () => this.ctx.fs.deleteFile(
         target,
         expectedVersion === undefined ? undefined : { version: expectedVersion as FsVersion },
         signal,
@@ -440,11 +465,12 @@ export class WorkspaceFiles extends TypertRemoteService {
 
   /**
    * Translate the backend's mutation codes into this namespace's vocabulary.
-   * @param path - caller-supplied path named in the error detail.
+   * @param path - caller-supplied source path named in stale and same-target errors.
    * @param run - the backend mutation to await.
+   * @param existsPath - caller-supplied path named by an already-exists refusal; defaults to `path`.
    * @returns the backend result.
    */
-  private async mutation<T>(path: string, run: () => Promise<T>): Promise<T> {
+  private async mutation<T>(path: string, run: () => Promise<T>, existsPath = path): Promise<T> {
     try {
       return await run()
     } catch (error: unknown) {
@@ -452,12 +478,14 @@ export class WorkspaceFiles extends TypertRemoteService {
         switch (error.code) {
           case 'FS_STALE_VERSION':
             throw new RemoteError('workspace-file/stale-version', `"${path}" changed since it was read`, { path })
-          case 'FS_ALREADY_EXISTS':
-            throw new RemoteError('workspace-file/already-exists', `"${path}" already exists`, { path })
+          case 'FS_NOT_OBSERVED':
+            throw new RemoteError('workspace-file/already-exists', `"${existsPath}" already exists`, { path: existsPath })
           case 'FS_NOT_FOUND':
             throw new RemoteError('workspace-file/not-found', `"${path}" does not exist`, { path })
           case 'FS_NOT_REGULAR_FILE':
             throw new RemoteError('workspace-file/not-regular-file', `"${path}" is not a file`, { path, kind: 'directory' })
+          case 'FS_SAME_TARGET':
+            throw new RemoteError('gateway/bad-request', `"${path}" and its destination resolve to the same file`, {})
           default:
             break
         }

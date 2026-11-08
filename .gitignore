@@ -41,6 +41,7 @@ apps/web/dist/
 .artifacts/
 .dsh-build/
 .dsh-report/
+.ui-review/
 .playwright-mcp/
 .orig
 .worktrees/
@@ -52,3 +53,5 @@ native/system/test/bin/
 # Built Rust PTY provider (see apps/desktop-tauri/scripts/build-native-pty.sh)
 native/dsh-native/target/
 apps/desktop-host/native/dsh-native.node
+# Generated company-signed CUA release record.
+/packages/experimental/cua-macos/cua-helper.json

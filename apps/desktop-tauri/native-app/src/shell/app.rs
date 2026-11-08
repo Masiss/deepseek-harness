@@ -2772,7 +2772,6 @@ impl DesktopApp {
             return;
         };
         let (sender, receiver) = mpsc::channel();
-        let from_seq = (self.transcript.last_seq() >= 0).then_some(self.transcript.last_seq());
         std::thread::spawn(move || {
             let result = (|| {
                 let mut stream = follow::follow(
@@ -2783,7 +2782,6 @@ impl DesktopApp {
                             session_id: session_id.clone(),
                         },
                         max_messages: Some(1),
-                        from_seq,
                         turn_window: None,
                         assistant_stream: false,
                     },
@@ -3465,7 +3463,6 @@ impl DesktopApp {
         self.record_prompt_history(&text);
         self.refresh_sessions_quietly();
         let (sender, receiver) = mpsc::channel();
-        let from_seq = (self.transcript.last_seq() >= 0).then_some(self.transcript.last_seq());
         std::thread::spawn(move || {
             let chat = ChatClient::new(&transport);
             let mut content = vec![PromptContentPart::Text { text }];
@@ -3491,7 +3488,6 @@ impl DesktopApp {
                     session_id,
                 },
                 max_messages: Some(200),
-                from_seq,
                 turn_window: None,
                 assistant_stream: true,
             };
@@ -5551,7 +5547,7 @@ impl DesktopApp {
             match receiver.try_recv() {
                 Ok(Ok((through_seq, page, live))) => {
                     self.page_through_seq = Some(through_seq);
-                    self.transcript.apply_snapshot(&live);
+                    let cached_last = self.transcript.last_seq();
                     self.scroll_transcript_to_bottom = true;
                     let before_seq = self.page_before_seq.take();
                     let oldest_incoming = page.records.first().map(|record| record.event.seq);
@@ -5569,6 +5565,22 @@ impl DesktopApp {
                             dsh_client_core::follow::SessionWireEvent::from(&record.event)
                         })
                         .collect();
+                    // A Host 0.2.2 follow opening always starts at the log end,
+                    // so a cached transcript can leave a gap when the Session
+                    // advanced while inactive. Reset instead of merging across it.
+                    if cached_last >= 0 {
+                        let oldest_history = history.iter().map(|event| event.seq).min();
+                        let oldest_live = live.iter().map(|frame| frame.event.seq).min();
+                        let oldest = match (oldest_history, oldest_live) {
+                            (Some(left), Some(right)) => Some(left.min(right)),
+                            (Some(value), None) | (None, Some(value)) => Some(value),
+                            (None, None) => None,
+                        };
+                        if oldest.is_some_and(|seq| seq > cached_last + 1) {
+                            self.transcript.reset();
+                        }
+                    }
+                    self.transcript.apply_snapshot(&live);
                     for event in &history {
                         self.record_deliverables(event);
                     }
@@ -7055,7 +7067,6 @@ fn probe_snapshot(mux: &RemoteStreamMux, session: &str) -> Option<follow::Snapsh
             session_id: session.to_owned(),
         },
         max_messages: Some(200),
-        from_seq: None,
         turn_window: None,
         assistant_stream: false,
     };

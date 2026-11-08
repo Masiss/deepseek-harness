@@ -9,8 +9,8 @@
   en: 5207d17725c07a27
   zh: 258884c4300ac63a
 /development-guide/setup-tutorial/prerequisites:
-  en: e9ba89082bf07abb
-  zh: 65adf11e66ea8cea
+  en: 88ca69af2f6d1a46
+  zh: bf2429c5c5964817
 /development-guide/setup-tutorial/windows-and-wsl-2:
   en: e86be579be6f1813
   zh: 14f6a220337d0861
@@ -21,17 +21,17 @@
   en: 3221d1076554001f
   zh: 29f166be6a5c04d9
 /development-guide/contributor-reference/typescript-project-layout:
-  en: 3fa4916621ade218
-  zh: 884690286ef8dd81
+  en: bb06885424221809
+  zh: 77755b43e962b483
 /development-guide/contributor-reference/environment-variables:
   en: dba2c72ee6ffa930
   zh: b65c27fbb9129ec8
 /development-guide/contributor-reference/git-integrations:
-  en: 6cd705983169c1d4
-  zh: eeb08c572dee03a9
+  en: ca42a3869743942a
+  zh: dab7c9a31bf33276
 /development-guide/contributor-reference/ci-gates:
-  en: dec060551e6a964a
-  zh: 401b85806d4ea134
+  en: 0928bb55465bc546
+  zh: 42eedbd27b9488c4
 /development-guide/contributor-reference/daily-commands:
   en: c71578c3abad9379
   zh: 6201a1cb039a6e03
@@ -45,5 +45,5 @@
   en: 85b38f78d87fc88f
   zh: 00d5eb625e7dfb61
 /development-guide/contributor-reference/documenting-types-verbatim-ts-type-equiv:
-  en: 27ede2e907129c80
-  zh: 9d05724bbd70eb43
+  en: 1a93a58099b7f51a
+  zh: 70dff8ee479769e5

@@ -33,14 +33,9 @@ function run(command: string, args: string[], cwd: string, timeout: number): str
 }
 
 function runPnpm(args: string[], cwd: string, timeout: number): string {
-  const entrypoint = process.env.npm_execpath
-  if (entrypoint === undefined || entrypoint === '') {
-    if (process.platform === 'win32') throw new Error('npm_execpath is required to run pnpm on Windows')
-    return run('pnpm', args, cwd, timeout)
-  }
-  return /\.[cm]?js$/iu.test(entrypoint)
-    ? run(process.execPath, [entrypoint, ...args], cwd, timeout)
-    : run(entrypoint, args, cwd, timeout)
+  // Resolve pnpm from PATH: the test runner may set npm_execpath to npm, whose
+  // `pack --json` returns an array rather than pnpm's object.
+  return run(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', args, cwd, timeout)
 }
 
 describe('published document preview licenses', () => {

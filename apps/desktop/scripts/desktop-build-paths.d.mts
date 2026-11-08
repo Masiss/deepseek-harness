@@ -1,6 +1,6 @@
 import type { DesktopAutoUpdateTarget } from './desktop-auto-update-environment.mjs'
 
-/** Mutable target directories plus the shared immutable download cache. */
+/** Mutable target directories plus shared download and package caches. */
 export interface DesktopTargetBuildPaths {
   readonly root: string
   readonly artifacts: string
@@ -15,6 +15,7 @@ export interface DesktopTargetBuildPaths {
   readonly packedVendor: string
   readonly packedLandlock: string
   readonly downloads: string
+  readonly pnpmStore: string
 }
 
 /**
@@ -33,9 +34,10 @@ export function resolveDesktopBuildTarget(
 /**
  * Return the mutable preparation and artifact directories owned by one release target.
  * @param target - Supported Desktop target name.
- * @returns Target paths plus the shared immutable download cache.
+ * @param environment - Packaging environment with an optional absolute cache directory.
+ * @returns Target paths plus shared download and package caches.
  */
-export function desktopTargetBuildPaths(target: DesktopAutoUpdateTarget): DesktopTargetBuildPaths
+export function desktopTargetBuildPaths(target: DesktopAutoUpdateTarget | 'linux-x64' | 'linux-arm64', environment?: NodeJS.ProcessEnv): DesktopTargetBuildPaths
 
 /**
  * Return the platform and architecture of the payload one release target prepares.
@@ -43,8 +45,8 @@ export function desktopTargetBuildPaths(target: DesktopAutoUpdateTarget): Deskto
  * @param target - Supported Desktop target name.
  * @returns Platform and architecture of the prepared payload.
  */
-export function desktopTargetPlatform(target: DesktopAutoUpdateTarget): {
-  readonly platform: 'darwin' | 'win32'
+export function desktopTargetPlatform(target: DesktopAutoUpdateTarget | 'linux-x64' | 'linux-arm64'): {
+  readonly platform: 'darwin' | 'win32' | 'linux'
   readonly arch: 'arm64' | 'x64'
 }
 

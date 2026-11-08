@@ -183,8 +183,11 @@ describe('partial Landlock runner-failure classification', () => {
       expect((backgroundError as { path?: unknown }).path).toBeUndefined()
       expect(backgroundError).not.toBeInstanceOf(SandboxUnavailableError)
     } else {
+      // Linux/Node may retry the no-shebang file through /bin/sh (127) or the
+      // sandbox launcher may report its own failure (1); both are ordinary exits.
+      const foregroundExit = (foreground as { readonly exitCode: number }).exitCode
+      expect([1, 127]).toContain(foregroundExit)
       expect(foreground).toMatchObject({
-        exitCode: 127,
         signal: null,
         sandbox: { mode: 'read-only', denied: false, enforcement: 'full' },
       })
@@ -193,7 +196,7 @@ describe('partial Landlock runner-failure classification', () => {
       const background = (await start(bash, bash.resolve(request)))
       await background.done
       expect(background.status).toBe('completed')
-      expect(background.exitCode).toBe(127)
+      expect(background.exitCode).toBe(foregroundExit)
       expect(background.signal).toBeNull()
       expect(background.sandbox).toEqual({ mode: 'read-only', denied: false, enforcement: 'full' })
       const output = background.readOutput().delta

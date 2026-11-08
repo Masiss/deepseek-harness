@@ -72,12 +72,11 @@ function hostAddonBuilt(): boolean {
 }
 
 async function buildNativeSystem(): Promise<void> {
-  const pnpmEntry = process.env.npm_execpath
-  if (pnpmEntry === undefined || pnpmEntry === '') {
-    throw new Error(`desktop package: flock addon is not built; run ${BUILD_COMMAND_TEXT} or invoke this script through a pnpm package command`)
-  }
+  // Resolve pnpm from PATH rather than npm_execpath: the test runner may set it
+  // to npm, which has no `--dir` flag. Desktop packaging always provides pnpm.
+  const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
   for (const args of BUILD_COMMANDS) {
-    const child = spawn(process.execPath, [pnpmEntry, ...args], { cwd: REPOSITORY_ROOT, stdio: 'inherit' })
+    const child = spawn(pnpm, args, { cwd: REPOSITORY_ROOT, stdio: 'inherit' })
     const [code, signal] = await once(child, 'close') as [number | null, NodeJS.Signals | null]
     if (code !== 0) throw new Error(`desktop package: pnpm ${args.join(' ')} exited with ${String(code ?? signal)}`)
   }
