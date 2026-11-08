@@ -1191,7 +1191,7 @@ mod tests {
             density: UiDensity::Compact,
             session_panel_width: 320.0,
             show_workspace_explorer: false,
-            workspace_panel_width: 440.0,
+            workspace_panel_width: 350.0,
             restore_last_session: false,
             last_session_id: Some("session-42".to_owned()),
             ..UiPreferences::default()

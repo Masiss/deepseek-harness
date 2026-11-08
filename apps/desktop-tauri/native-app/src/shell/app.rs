@@ -80,7 +80,7 @@ fn host_start_status(elapsed: std::time::Duration) -> String {
 use super::terminal_state::{append_bounded_output, PreviewScratchDirectory, TerminalPanel};
 use super::theme::Theme;
 use super::ShellServices;
-use gpui::{App, AppContext, Context, Window, WindowAppearance};
+use gpui::{App, AppContext, Context, FocusHandle, Window, WindowAppearance};
 
 enum PluginAction {
     SetPlugin { id: String, enabled: bool },
@@ -477,6 +477,54 @@ pub(crate) enum PaletteEntry {
     File(String),
 }
 
+/// Chrome control that owns the overlay Escape closes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChromeTrigger {
+    Menu,
+    Search,
+    Workspace,
+    StatusTools,
+}
+
+/// Keyboard focus handles of the chrome controls that open an overlay.
+///
+/// Escape returns focus to the control that opened the overlay, so each one
+/// keeps a handle that survives across frames.
+pub(crate) struct ChromeFocus {
+    pub(crate) menu: FocusHandle,
+    pub(crate) search: FocusHandle,
+    pub(crate) workspace: FocusHandle,
+    pub(crate) status_tools: FocusHandle,
+}
+
+impl ChromeFocus {
+    /// The handle that takes focus back when its overlay closes.
+    ///
+    /// @param trigger - Control whose overlay just closed.
+    /// @returns The control's focus handle.
+    pub(crate) fn for_trigger(&self, trigger: ChromeTrigger) -> &FocusHandle {
+        match trigger {
+            ChromeTrigger::Menu => &self.menu,
+            ChromeTrigger::Search => &self.search,
+            ChromeTrigger::Workspace => &self.workspace,
+            ChromeTrigger::StatusTools => &self.status_tools,
+        }
+    }
+}
+
+/// One workspace the top bar's picker can switch to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SessionWorkspace {
+    /// Working directory the entry stands for.
+    pub(crate) cwd: String,
+    /// Newest Session of that directory, which selecting the entry opens.
+    pub(crate) session_id: String,
+    /// Sessions the Session list reports for that directory.
+    pub(crate) session_count: usize,
+    /// Whether the selected Session belongs to this workspace.
+    pub(crate) active: bool,
+}
+
 pub(crate) struct DesktopApp {
     pub(crate) host: Option<Host>,
     pub(crate) host_receiver: Option<mpsc::Receiver<Host>>,
@@ -532,6 +580,8 @@ pub(crate) struct DesktopApp {
     /// Session ids open as Agent buffers, in display order; the active buffer
     /// is {@link selected_session}.
     pub(crate) agent_tabs: Vec<String>,
+    /// Agent buffer under the pointer; only that buffer shows a close affordance.
+    pub(crate) hovered_buffer: Option<String>,
     pub(crate) page_has_more: bool,
     pub(crate) page_loading: bool,
     pub(crate) page_before_seq: Option<i64>,
@@ -558,6 +608,10 @@ pub(crate) struct DesktopApp {
     /// Last time a run-state poll refreshed the Session list.
     pub(crate) last_session_poll: std::time::Instant,
     pub(crate) focus_composer: bool,
+    /// Focus handles of the controls that open an overlay.
+    pub(crate) chrome_focus: ChromeFocus,
+    /// Control that takes keyboard focus back on the next frame.
+    pub(crate) pending_chrome_focus: Option<ChromeTrigger>,
     pub(crate) cancel_receiver: Option<mpsc::Receiver<Result<AcceptedResponse, Error>>>,
     pub(crate) dialog: Option<(DialogPurpose, mpsc::Receiver<Option<PathBuf>>)>,
     pub(crate) attachment: Option<FileUploadValue>,
@@ -637,6 +691,8 @@ pub(crate) struct DesktopApp {
     pub(crate) show_market: bool,
     pub(crate) show_goals: bool,
     pub(crate) top_menu_open: bool,
+    /// Whether the top bar's workspace picker is open.
+    pub(crate) workspace_picker_open: bool,
     pub(crate) goal: Option<GoalView>,
     pub(crate) goal_loading: bool,
     pub(crate) goal_mutation_loading: bool,
@@ -720,6 +776,8 @@ pub(crate) struct DesktopApp {
     pub(crate) git_refresh_probe_started_at: Option<std::time::Instant>,
     /// Whether the Session switcher popover is open.
     pub(crate) show_session_menu: bool,
+    /// Whether the status bar's tool popover is open.
+    pub(crate) status_menu_open: bool,
     /// The panel edge being dragged, while the pointer is down.
     pub(crate) panel_drag: Option<PanelDrag>,
     /// Last divider press, used to recognize the double-click reset gesture.
@@ -894,6 +952,19 @@ impl DesktopApp {
             None
         };
         let theme = Theme::new(&ui_preferences, appearance_is_dark(window.appearance()));
+        // Escape resolves to `Dismiss`; the listener is global so overlays close
+        // whichever node holds focus, including a palette search field.
+        let shell = cx.entity().downgrade();
+        App::on_action(cx, move |_: &super::Dismiss, cx: &mut App| {
+            let Some(shell) = shell.upgrade() else {
+                return;
+            };
+            shell.update(cx, |app, cx| {
+                if app.dismiss_overlay() {
+                    cx.notify();
+                }
+            });
+        });
         let task = cx.spawn_in(window, async move |weak, cx| {
             loop {
                 gpui::Timer::after(std::time::Duration::from_millis(40)).await;
@@ -965,6 +1036,7 @@ impl DesktopApp {
             sessions: Vec::new(),
             selected_session: None,
             agent_tabs: Vec::new(),
+            hovered_buffer: None,
             page_has_more: false,
             page_loading: false,
             page_before_seq: None,
@@ -983,6 +1055,13 @@ impl DesktopApp {
             session_state_changed_at: None,
             last_session_poll: std::time::Instant::now(),
             focus_composer: false,
+            chrome_focus: ChromeFocus {
+                menu: cx.focus_handle(),
+                search: cx.focus_handle(),
+                workspace: cx.focus_handle(),
+                status_tools: cx.focus_handle(),
+            },
+            pending_chrome_focus: None,
             cancel_receiver: None,
             dialog: None,
             attachment: None,
@@ -1048,6 +1127,7 @@ impl DesktopApp {
             show_market: false,
             show_goals: false,
             top_menu_open: false,
+            workspace_picker_open: false,
             goal: None,
             goal_loading: false,
             goal_mutation_loading: false,
@@ -1111,6 +1191,7 @@ impl DesktopApp {
             git_loading: false,
             git_receiver: None,
             show_session_menu: false,
+            status_menu_open: false,
             panel_drag: None,
             last_divider_click: None,
             show_about: false,
@@ -2645,6 +2726,75 @@ impl DesktopApp {
             .find(|summary| summary.session_id == session_id)
             .map(session_list::session_label)
             .unwrap_or_else(|| session_list::truncate(session_id, 18))
+    }
+
+    /// Workspaces the top bar's picker offers, most recently used first.
+    ///
+    /// Each entry stands for one working directory the Session list reports and
+    /// carries its newest Session, because picking a workspace switches the
+    /// selected Session. Directories stay separate even when they nest.
+    ///
+    /// @returns One entry per distinct Session working directory.
+    pub(crate) fn session_workspaces(&self) -> Vec<SessionWorkspace> {
+        let active_cwd = self
+            .selected_session
+            .as_ref()
+            .and_then(|id| {
+                self.sessions
+                    .iter()
+                    .find(|summary| &summary.session_id == id)
+            })
+            .and_then(|summary| summary.cwd.clone());
+        let mut entries: Vec<(i64, SessionWorkspace)> = Vec::new();
+        for summary in &self.sessions {
+            let Some(cwd) = summary
+                .cwd
+                .as_deref()
+                .map(str::trim)
+                .filter(|cwd| !cwd.is_empty())
+            else {
+                continue;
+            };
+            match entries.iter_mut().find(|(_, entry)| entry.cwd == cwd) {
+                Some((updated_at, entry)) => {
+                    entry.session_count += 1;
+                    if summary.updated_at > *updated_at {
+                        *updated_at = summary.updated_at;
+                        entry.session_id = summary.session_id.clone();
+                    }
+                }
+                None => entries.push((
+                    summary.updated_at,
+                    SessionWorkspace {
+                        cwd: cwd.to_owned(),
+                        session_id: summary.session_id.clone(),
+                        session_count: 1,
+                        active: active_cwd.as_deref() == Some(cwd),
+                    },
+                )),
+            }
+        }
+        entries.sort_by(|left, right| {
+            right
+                .0
+                .cmp(&left.0)
+                .then_with(|| left.1.cwd.cmp(&right.1.cwd))
+        });
+        entries.into_iter().map(|(_, entry)| entry).collect()
+    }
+
+    /// Switches to the newest Session of one workspace.
+    ///
+    /// @param cwd - Working directory the picker row stands for.
+    pub(crate) fn select_session_workspace(&mut self, cwd: &str) {
+        let session_id = self
+            .session_workspaces()
+            .into_iter()
+            .find(|entry| entry.cwd == cwd)
+            .map(|entry| entry.session_id);
+        if let Some(session_id) = session_id {
+            self.load_session(session_id);
+        }
     }
 
     fn reload_session_after_reconnect(&mut self, session_id: String) {
@@ -4671,6 +4821,8 @@ impl DesktopApp {
     pub(crate) fn run_command(&mut self, command: CommandId) {
         self.show_session_menu = false;
         self.top_menu_open = false;
+        self.workspace_picker_open = false;
+        self.status_menu_open = false;
         self.show_about = false;
         match command {
             CommandId::ToggleSettings => {
@@ -4764,17 +4916,28 @@ impl DesktopApp {
             self.update_prompt = None;
             return true;
         }
+        if self.status_menu_open {
+            self.status_menu_open = false;
+            self.pending_chrome_focus = Some(ChromeTrigger::StatusTools);
+            return true;
+        }
         if self.show_session_menu {
             self.show_session_menu = false;
             return true;
         }
+        if self.workspace_picker_open {
+            self.workspace_picker_open = false;
+            self.pending_chrome_focus = Some(ChromeTrigger::Workspace);
+            return true;
+        }
         if self.top_menu_open {
             self.top_menu_open = false;
+            self.pending_chrome_focus = Some(ChromeTrigger::Menu);
             return true;
         }
         if self.palette_open {
             self.close_palette();
-            self.focus_composer = true;
+            self.pending_chrome_focus = Some(ChromeTrigger::Search);
             return true;
         }
         if self.show_about {

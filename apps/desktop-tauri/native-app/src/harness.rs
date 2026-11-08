@@ -228,6 +228,39 @@ impl Harness {
         true
     }
 
+    /// Moves the pointer over the centre of one element.
+    ///
+    /// @param selector - Selector of the element to hover.
+    /// @returns Whether the element rendered and received the move.
+    pub fn hover(&mut self, selector: &'static str) -> bool {
+        let Some(bounds) = self.bounds(selector) else {
+            return false;
+        };
+        let centre = point(
+            bounds.origin.x + bounds.size.width / 2.0,
+            bounds.origin.y + bounds.size.height / 2.0,
+        );
+        self.visual.simulate_mouse_move(centre, None, Modifiers::none());
+        self.visual.run_until_parked();
+        true
+    }
+
+    /// Dispatches the shell's `Dismiss` action, the binding Escape resolves to.
+    ///
+    /// The harness opens the shell without the window keymap, so the key itself
+    /// cannot be simulated here; this drives the same action the key dispatches.
+    pub fn dismiss(&mut self) {
+        self.visual.dispatch_action(crate::shell::Dismiss);
+        self.visual.run_until_parked();
+    }
+
+    /// The focus handle the test window currently reports.
+    ///
+    /// @returns The focused handle, or `None` when nothing holds focus.
+    pub fn focused(&mut self) -> Option<gpui::FocusHandle> {
+        self.visual.update(|window, cx| window.focused(cx))
+    }
+
     /// Applies one IME composition update to a named text input, as the
     /// platform input method would through gpui's `InputHandler`.
     ///
@@ -342,6 +375,32 @@ mod tests {
             assert!(report.contains("shell-root"), "{name}: {report}");
             Harness::check_snapshot(name, &report);
         }
+    }
+
+    #[test]
+    fn shell_chrome_matches_the_v2_bar_and_column_metrics() {
+        let mut harness = Harness::open(1366., 768.);
+        let top = harness.bounds("top-bar").expect("top bar renders");
+        assert_eq!(f32::from(top.size.height), 30.);
+        // The buffer strip sits directly under the top bar at its own height.
+        let strip = harness
+            .bounds("agent-tab-strip")
+            .expect("agent strip renders");
+        assert_eq!(f32::from(strip.origin.y), 30.);
+        assert_eq!(f32::from(strip.size.height), 34.);
+        let explorer = harness.bounds("explorer-panel").expect("explorer docks");
+        assert_eq!(f32::from(explorer.size.width), 300.);
+        let changes = harness.bounds("changes-panel").expect("changes docks");
+        assert_eq!(f32::from(changes.size.width), 565.);
+        let agent = harness.bounds("agent-column").expect("agent column renders");
+        assert!(
+            f32::from(agent.size.width) >= 420.,
+            "conversation keeps its minimum, got {}",
+            f32::from(agent.size.width)
+        );
+        let bottom = harness.bounds("bottom-bar").expect("bottom bar renders");
+        assert_eq!(f32::from(bottom.size.height), 26.);
+        assert_eq!(f32::from(bottom.origin.y), 742.);
     }
 
     #[test]
@@ -525,6 +584,190 @@ mod surface_tests {
         let tabs = harness.with(|app, _| app.agent_tabs.clone());
         assert_eq!(tabs.len(), crate::shell::MAX_AGENT_TABS);
         assert_eq!(tabs.last().map(String::as_str), Some("cap-7"));
+    }
+
+    /// One Session summary the chrome tests can place in a workspace.
+    fn session_summary(
+        session_id: &str,
+        updated_at: i64,
+        cwd: &str,
+    ) -> dsh_client_core::session::SessionSummary {
+        dsh_client_core::session::SessionSummary {
+            agent_available: true,
+            format_status: None,
+            session_id: session_id.to_owned(),
+            updated_at,
+            running: false,
+            blank: false,
+            parent_session_id: None,
+            origin: None,
+            cwd: Some(cwd.to_owned()),
+            projections: None,
+        }
+    }
+
+    #[test]
+    fn top_bar_search_icon_opens_the_command_palette() {
+        let mut harness = Harness::open(1440., 900.);
+        assert!(harness.bounds("top-search").is_some());
+        assert!(harness.click("top-search"));
+        assert!(harness.with(|app, _| app.palette_open));
+        // The Session switcher keeps its own entry point at the Explorer foot.
+        assert!(!harness.with(|app, _| app.show_session_menu));
+    }
+
+    #[test]
+    fn workspace_picker_switches_the_selected_session_workspace() {
+        let mut harness = Harness::open_with(1440., 900., |app| {
+            app.sessions = vec![
+                session_summary("alpha-new", 30, "/work/alpha"),
+                session_summary("alpha-old", 10, "/work/alpha"),
+                session_summary("beta-new", 20, "/work/beta"),
+            ];
+            app.load_session("alpha-old".to_owned());
+        });
+        assert_eq!(
+            harness.with(|app, _| app.session_workspaces().len()),
+            2,
+            "one picker entry per working directory"
+        );
+        assert!(harness.click("top-workspace"));
+        assert!(harness.with(|app, _| app.workspace_picker_open));
+        assert!(harness.bounds("workspace-option-/work/beta").is_some());
+        assert!(harness.click("workspace-option-/work/beta"));
+        assert!(!harness.with(|app, _| app.workspace_picker_open));
+        assert_eq!(
+            harness.with(|app, _| app.selected_session.clone()).as_deref(),
+            Some("beta-new"),
+            "the picker opens the workspace's newest Session"
+        );
+    }
+
+    /// One chrome control, the overlay it opens, and the focus it gets back.
+    struct Overlay {
+        trigger: &'static str,
+        open: fn(&DesktopApp) -> bool,
+        focus: fn(&DesktopApp) -> gpui::FocusHandle,
+    }
+
+    #[test]
+    fn escape_closes_chrome_overlays_and_returns_focus_to_the_trigger() {
+        let mut harness = Harness::open_with(1440., 900., |app| {
+            app.sessions = vec![session_summary("alpha", 10, "/work/alpha")];
+            app.load_session("alpha".to_owned());
+        });
+        let overlays = [
+            Overlay {
+                trigger: "top-menu",
+                open: |app| app.top_menu_open,
+                focus: |app| app.chrome_focus.menu.clone(),
+            },
+            Overlay {
+                trigger: "top-workspace",
+                open: |app| app.workspace_picker_open,
+                focus: |app| app.chrome_focus.workspace.clone(),
+            },
+            Overlay {
+                trigger: "top-search",
+                open: |app| app.palette_open,
+                focus: |app| app.chrome_focus.search.clone(),
+            },
+            Overlay {
+                trigger: "bottom-tools",
+                open: |app| app.status_menu_open,
+                focus: |app| app.chrome_focus.status_tools.clone(),
+            },
+        ];
+        for overlay in overlays {
+            let trigger = overlay.trigger;
+            assert!(harness.click(trigger), "{trigger} renders");
+            assert!(
+                harness.with(|app, _| (overlay.open)(app)),
+                "{trigger} opens its overlay"
+            );
+            let expected = harness.with(|app, _| (overlay.focus)(app));
+            harness.dismiss();
+            assert!(
+                !harness.with(|app, _| (overlay.open)(app)),
+                "{trigger} closes on Escape"
+            );
+            assert_eq!(
+                harness.focused(),
+                Some(expected),
+                "{trigger} takes keyboard focus back"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_buffer_close_affordance_appears_only_on_hover() {
+        let mut harness = Harness::open_with(1440., 900., |app| {
+            app.load_session("buf-a".to_owned());
+            app.load_session("buf-b".to_owned());
+        });
+        // The strip always leads with the Agent buffer, even without Sessions.
+        assert!(harness.bounds("agent-tab-agent").is_some());
+        let strip = harness.bounds("agent-tab-strip").expect("strip renders");
+        assert_eq!(f32::from(strip.size.height), 34.);
+        assert!(harness.bounds("agent-tab-close").is_none());
+        assert!(harness.hover("agent-tab-buf-a"));
+        assert!(harness.bounds("agent-tab-close").is_some());
+        assert!(harness.click("agent-tab-close"));
+        assert_eq!(
+            harness.with(|app, _| app.agent_tabs.clone()),
+            ["buf-b"],
+            "the hovered buffer closes"
+        );
+    }
+
+    #[test]
+    fn status_bar_reaches_every_utility_panel_through_one_popover() {
+        let mut harness = Harness::open_with(1440., 900., |app| {
+            app.selected_session = Some("chrome-session".to_owned());
+        });
+        for selector in [
+            "bottom-git-branch",
+            "bottom-terminal",
+            "bottom-problems",
+            "bottom-tools",
+            "bottom-host-dot",
+        ] {
+            assert!(harness.bounds(selector).is_some(), "{selector} renders");
+        }
+        assert!(harness.click("bottom-tools"));
+        assert!(harness.with(|app, _| app.status_menu_open));
+        for selector in [
+            "status-tool-Jobs",
+            "status-tool-Schedules",
+            "status-tool-Deliverables",
+            "status-tool-Diagnostics",
+        ] {
+            assert!(harness.bounds(selector).is_some(), "{selector} is reachable");
+        }
+        assert!(harness.click("status-tool-Schedules"));
+        assert!(!harness.with(|app, _| app.status_menu_open));
+        assert_eq!(
+            harness.with(|app, _| app.bottom_tool),
+            Some(crate::shell::BottomTool::Schedules)
+        );
+    }
+
+    #[test]
+    fn explorer_dock_starts_with_the_tree_toolbar() {
+        let mut harness = Harness::open_with(1440., 900., |app| {
+            app.sessions = vec![session_summary("alpha", 10, "/work/alpha")];
+            app.load_session("alpha".to_owned());
+        });
+        let dock = harness.bounds("explorer-panel").expect("explorer docks");
+        let refresh = harness
+            .bounds("explorer-refresh")
+            .expect("refresh renders in the toolbar");
+        // No title row and no scope line above the filter row.
+        assert!(
+            f32::from(refresh.origin.y) - f32::from(dock.origin.y) <= 16.,
+            "explorer toolbar starts the dock, got {}",
+            f32::from(refresh.origin.y) - f32::from(dock.origin.y)
+        );
     }
 
     #[test]
